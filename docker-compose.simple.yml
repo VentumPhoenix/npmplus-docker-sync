@@ -1,0 +1,35 @@
+# Minimal setup WITHOUT a socket proxy.
+#
+# The Docker socket is mounted read-only, which is convenient but still grants
+# far-reaching access to the host (see SECURITY.md). Prefer docker-compose.yml
+# for anything beyond a lab machine.
+services:
+  npmplus-docker-sync:
+    image: ghcr.io/ventumphoenix/npmplus-docker-sync:latest
+    container_name: npmplus-docker-sync
+    restart: unless-stopped
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+      NPM_URL: http://npm:81
+      NPM_IDENTITY: ${NPM_IDENTITY}
+      NPM_SECRET: ${NPM_SECRET}
+      NPM_NETWORK: npm
+      LOG_LEVEL: info
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - npm
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # The socket is owned by root:docker, so the container needs the docker
+    # group id of the host (`getent group docker`).
+    user: "1000:1000"
+    group_add:
+      - "${DOCKER_GID:-988}"
+
+networks:
+  npm:
+    external: true

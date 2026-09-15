@@ -1,0 +1,94 @@
+# Recommended deployment: npmplus-docker-sync never touches the raw Docker socket.
+# A docker-socket-proxy filters the API and only exposes the read-only
+# endpoints this tool needs (containers + events).
+#
+#   docker compose up -d
+#
+services:
+  docker-socket-proxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
+    container_name: docker-socket-proxy
+    restart: unless-stopped
+    environment:
+      # Everything defaults to 0 (denied). Only enable what is needed:
+      CONTAINERS: 1 # GET /containers/json + /containers/{id}/json
+      EVENTS: 1     # GET /events
+      PING: 1       # GET /_ping (connection check)
+      VERSION: 1    # GET /version (API version negotiation)
+      POST: 0       # no write access at all
+      # Explicitly denied (defaults, listed for auditability):
+      AUTH: 0
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      DISTRIBUTION: 0
+      EXEC: 0
+      IMAGES: 0
+      INFO: 0
+      NETWORKS: 0
+      NODES: 0
+      PLUGINS: 0
+      SECRETS: 0
+      SERVICES: 0
+      SESSION: 0
+      SWARM: 0
+      SYSTEM: 0
+      TASKS: 0
+      VOLUMES: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - socket-proxy
+    read_only: true
+    tmpfs:
+      - /run
+    security_opt:
+      - no-new-privileges:true
+    # The proxy port is never published to the host.
+    expose:
+      - "2375"
+
+  npmplus-docker-sync:
+    image: ghcr.io/ventumphoenix/npmplus-docker-sync:latest
+    # build: .
+    container_name: npmplus-docker-sync
+    restart: unless-stopped
+    depends_on:
+      - docker-socket-proxy
+    environment:
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      NPM_URL: http://npm:81
+      NPM_IDENTITY: ${NPM_IDENTITY:?set NPM_IDENTITY in .env}
+      NPM_SECRET_FILE: /run/secrets/npm_password
+      # Upstreams use the container IP from this network (avoids DNS 502s).
+      NPM_NETWORK: npm
+      RESOLVE_CONTAINER_IP: "true"
+      # Managed resource types (default: all four).
+      SYNC_KINDS: proxy,redirect,stream,404
+      DEBOUNCE_INTERVAL: 3s
+      RESYNC_INTERVAL: 5m
+      DELETE_ORPHANS: "true"
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      HEALTH_ADDR: ":8080"
+    secrets:
+      - npm_password
+    networks:
+      - socket-proxy
+      - npm # the network your Nginx Proxy Manager lives in
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    user: "1000:1000"
+
+secrets:
+  npm_password:
+    file: ./secrets/npm_password.txt
+
+networks:
+  socket-proxy:
+    internal: true # no outbound access for the proxy network
+  npm:
+    external: true

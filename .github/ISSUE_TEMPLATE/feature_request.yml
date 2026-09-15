@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest an improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the use case rather than the implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: New labels, environment variables or behaviour you have in mind.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
