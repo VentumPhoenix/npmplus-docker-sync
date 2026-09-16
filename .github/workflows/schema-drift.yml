@@ -1,0 +1,56 @@
+name: API schema drift
+
+# The NPM and NPMplus request schemas are vendored into
+# internal/npm/testdata/schema and every payload is validated against them by
+# internal/npm/contract_test.go. Both projects change those schemas between
+# releases, and a change there breaks writing for everyone - so check weekly
+# instead of finding out from a user's 400.
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: Re-vendor and compare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Re-vendor the upstream schemas
+        run: python3 scripts/vendor-schemas.py
+
+      - name: Report drift
+        run: |
+          if git diff --quiet -- internal/npm/testdata/schema; then
+            echo "No schema changes upstream." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "### Upstream API schemas changed"
+            echo
+            echo "Run \`make schemas\` and check the contract test."
+            echo
+            echo '```diff'
+            git diff --stat -- internal/npm/testdata/schema
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          git diff -- internal/npm/testdata/schema
+
+      # Whether the drift actually breaks us is the interesting part: the
+      # contract test runs against the freshly downloaded schemas.
+      - name: Validate payloads against the current upstream schemas
+        run: go test ./internal/npm/ -run TestPayloads -v

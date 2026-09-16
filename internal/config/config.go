@@ -34,15 +34,21 @@ type Config struct {
 	NPMSecret             string
 	NPMTimeout            time.Duration
 	NPMInsecureSkipVerify bool
+	// NPMFlavour pins the API dialect instead of probing for it.
+	NPMFlavour npm.Flavour
 
 	// Docker endpoint. Either a unix socket or a TCP endpoint pointing at a
 	// docker-socket-proxy (recommended, see SECURITY.md).
 	DockerHost string
 
 	// Behaviour.
-	LabelPrefix      string
-	ResolveIP        bool
-	NPMNetwork       string
+	LabelPrefix string
+	ResolveIP   bool
+	NPMNetwork  string
+	// StrictNetwork skips a container that is not attached to NPMNetwork
+	// instead of falling back to an address NPM cannot route to. Only has an
+	// effect when NPMNetwork is set.
+	StrictNetwork    bool
 	Kinds            []npm.Kind
 	DebounceInterval time.Duration
 	DebounceMaxWait  time.Duration
@@ -56,6 +62,8 @@ type Config struct {
 	LogLevel   slog.Level
 	LogFormat  string
 	HealthAddr string
+	// LogPayloads mirrors full API request bodies into the debug log.
+	LogPayloads bool
 }
 
 // Getenv mirrors os.Getenv and is injected for testability.
@@ -111,6 +119,13 @@ func Load(getenv Getenv) (*Config, error) {
 	cfg.DryRun, err = boolean(getenv, false, "DRY_RUN")
 	collect(err)
 	cfg.ResolveIP, err = boolean(getenv, true, "RESOLVE_CONTAINER_IP")
+	collect(err)
+	cfg.StrictNetwork, err = boolean(getenv, true, "NPM_NETWORK_STRICT")
+	collect(err)
+	cfg.LogPayloads, err = boolean(getenv, false, "LOG_PAYLOADS", "NPM_DEBUG_PAYLOADS")
+	collect(err)
+
+	cfg.NPMFlavour, err = npm.ParseFlavour(str(getenv, "", "NPM_FLAVOUR", "NPM_FLAVOR"))
 	collect(err)
 
 	cfg.Kinds, err = kinds(str(getenv, "", "SYNC_KINDS", "RESOURCE_KINDS"))
@@ -198,8 +213,10 @@ func (c *Config) LogValue() slog.Value {
 		slog.String("docker_host", c.DockerHost),
 		slog.String("label_prefix", c.LabelPrefix),
 		slog.String("resource_kinds", kindList(c.Kinds)),
+		slog.String("npm_flavour", c.NPMFlavour.String()),
 		slog.Bool("resolve_container_ip", c.ResolveIP),
 		slog.String("npm_network", c.NPMNetwork),
+		slog.Bool("npm_network_strict", c.NPMNetwork != "" && c.StrictNetwork),
 		slog.Duration("debounce_interval", c.DebounceInterval),
 		slog.Duration("resync_interval", c.ResyncInterval),
 		slog.Bool("delete_orphans", c.DeleteOrphans),
@@ -296,16 +313,20 @@ func duration(getenv Getenv, fallback time.Duration, key string) (time.Duration,
 	return d, nil
 }
 
-func boolean(getenv Getenv, fallback bool, key string) (bool, error) {
-	raw := strings.TrimSpace(getenv(key))
-	if raw == "" {
-		return fallback, nil
+// boolean returns the value of the first key that is set.
+func boolean(getenv Getenv, fallback bool, keys ...string) (bool, error) {
+	for _, key := range keys {
+		raw := strings.TrimSpace(getenv(key))
+		if raw == "" {
+			continue
+		}
+		b, err := ParseBool(raw)
+		if err != nil {
+			return fallback, fmt.Errorf("%s: %w", key, err)
+		}
+		return b, nil
 	}
-	b, err := ParseBool(raw)
-	if err != nil {
-		return fallback, fmt.Errorf("%s: %w", key, err)
-	}
-	return b, nil
+	return fallback, nil
 }
 
 // ParseBool accepts the usual strconv values plus the human friendly

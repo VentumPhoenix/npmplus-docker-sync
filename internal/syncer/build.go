@@ -9,6 +9,7 @@ import (
 // stamping the ownership marker used for orphan detection.
 func BuildResource(t *docker.Target) npm.Resource {
 	meta := buildMeta(t)
+	ssl := normalizeSSL(t)
 
 	switch t.Kind {
 	case npm.KindProxy:
@@ -18,14 +19,17 @@ func BuildResource(t *docker.Target) npm.Resource {
 			ForwardHost:           t.ForwardHost,
 			ForwardPort:           t.ForwardPort,
 			CertificateID:         t.CertificateID,
-			SSLForced:             t.SSLForced,
-			HSTSEnabled:           t.HSTSEnabled,
-			HSTSSubdomains:        t.HSTSSubdomains,
+			SSLForced:             ssl.forced,
+			HSTSEnabled:           ssl.hsts,
+			HSTSSubdomains:        ssl.hstsSubdomains,
+			TrustForwardedProto:   t.TrustForwardedProto,
 			HTTP2Support:          t.HTTP2Support,
+			HTTP3Support:          t.HTTP3Support,
 			BlockExploits:         t.BlockExploits,
 			CachingEnabled:        t.Caching,
 			AllowWebsocketUpgrade: t.Websockets,
-			AccessListID:          t.AccessListID,
+			AccessListIDs:         t.AccessListIDs,
+			AccessListType:        t.AccessListType,
 			AdvancedConfig:        t.AdvancedConfig,
 			Enabled:               npm.Flag(t.Enabled),
 			Locations:             locations(t),
@@ -40,10 +44,11 @@ func BuildResource(t *docker.Target) npm.Resource {
 			ForwardHTTPCode:   t.ForwardHTTPCode,
 			PreservePath:      t.PreservePath,
 			CertificateID:     t.CertificateID,
-			SSLForced:         t.SSLForced,
-			HSTSEnabled:       t.HSTSEnabled,
-			HSTSSubdomains:    t.HSTSSubdomains,
+			SSLForced:         ssl.forced,
+			HSTSEnabled:       ssl.hsts,
+			HSTSSubdomains:    ssl.hstsSubdomains,
 			HTTP2Support:      t.HTTP2Support,
+			HTTP3Support:      t.HTTP3Support,
 			BlockExploits:     t.BlockExploits,
 			AdvancedConfig:    t.AdvancedConfig,
 			Enabled:           npm.Flag(t.Enabled),
@@ -52,9 +57,9 @@ func BuildResource(t *docker.Target) npm.Resource {
 
 	case npm.KindStream:
 		return &npm.Stream{
-			IncomingPort:   t.IncomingPort,
+			IncomingPort:   npm.PortOf(t.IncomingPort),
 			ForwardingHost: t.ForwardingHost,
-			ForwardingPort: t.ForwardingPort,
+			ForwardingPort: npm.PortOf(t.ForwardingPort),
 			TCPForwarding:  t.TCPForwarding,
 			UDPForwarding:  t.UDPForwarding,
 			CertificateID:  t.CertificateID,
@@ -66,10 +71,11 @@ func BuildResource(t *docker.Target) npm.Resource {
 		return &npm.DeadHost{
 			DomainNames:    npm.NormalizeDomains(t.DomainNames),
 			CertificateID:  t.CertificateID,
-			SSLForced:      t.SSLForced,
-			HSTSEnabled:    t.HSTSEnabled,
-			HSTSSubdomains: t.HSTSSubdomains,
+			SSLForced:      ssl.forced,
+			HSTSEnabled:    ssl.hsts,
+			HSTSSubdomains: ssl.hstsSubdomains,
 			HTTP2Support:   t.HTTP2Support,
+			HTTP3Support:   t.HTTP3Support,
 			AdvancedConfig: t.AdvancedConfig,
 			Enabled:        npm.Flag(t.Enabled),
 			Meta:           meta,
@@ -78,6 +84,41 @@ func BuildResource(t *docker.Target) npm.Resource {
 	default:
 		return nil
 	}
+}
+
+// sslSettings is the normalised TLS state of a target.
+type sslSettings struct {
+	forced         bool
+	hsts           bool
+	hstsSubdomains bool
+}
+
+// normalizeSSL applies the same cascade the server does before storing a host
+// (NPMplus: internalHost.cleanSslHstsData):
+//
+//	no certificate     -> ssl_forced      = false
+//	no ssl_forced      -> hsts_enabled    = false
+//	no hsts_enabled    -> hsts_subdomains = false
+//
+// Without this the fingerprint is taken over the raw label values while the
+// API stores the cleaned ones, the two never match, and every Docker event and
+// every resync issues another pointless update.
+func normalizeSSL(t *docker.Target) sslSettings {
+	s := sslSettings{
+		forced:         t.SSLForced,
+		hsts:           t.HSTSEnabled,
+		hstsSubdomains: t.HSTSSubdomains,
+	}
+	if t.CertificateID.IsZero() {
+		s.forced = false
+	}
+	if !s.forced {
+		s.hsts = false
+	}
+	if !s.hsts {
+		s.hstsSubdomains = false
+	}
+	return s
 }
 
 // locations returns the custom location blocks, never nil: NPM expects an

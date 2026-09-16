@@ -88,9 +88,12 @@ See [Upstream host resolution](#upstream-host-resolution) below.
 | `websockets` | `true` | Websocket upgrades. |
 | `block_exploits` | `true` | NPM's common-exploit rules. |
 | `caching` | `false` | Cache static assets. |
-| `access_list_id` | `0` | Id of an existing NPM access list. |
+| `trust_forwarded_proto` | `false` | Trust the client's `X-Forwarded-Proto`. |
+| `access_list_ids` | – | Ids of existing access lists, comma separated (aliases `access_list`, `access_lists`). NPMplus accepts several, upstream NPM exactly one. |
+| `access_list_id` | – | Shorthand for a single id. |
+| `access_list_type` | derived | `public` (no list) or `custom`; derived from the ids unless set. |
 | `advanced_config` | – | Raw nginx directives for this host. |
-| `enabled` | `true` | `false` creates the host in a disabled state. |
+| `enabled` | `true` | `false` creates the host and then disables it (see below). |
 
 ```yaml
 npm.proxy.advanced_config: |
@@ -207,6 +210,7 @@ npm.404.ssl.forced: "true"
 | `certificate_id` | – | Existing id, or `new` for Let's Encrypt (aliases `le`, `letsencrypt`). |
 | `ssl.forced` | `false` | HTTP → HTTPS redirect. Requires a certificate. |
 | `ssl.http2` | `false` | HTTP/2. |
+| `ssl.http3` | `false` | HTTP/3. **NPMplus only** — refused against upstream NPM. |
 | `ssl.hsts` | `false` | HSTS header. |
 | `ssl.hsts_subdomains` | `false` | `includeSubDomains`. |
 | `letsencrypt.email` | – | Required with `certificate_id=new`. |
@@ -215,6 +219,16 @@ npm.404.ssl.forced: "true"
 | `letsencrypt.dns_provider` | – | Required with `dns_challenge=true`. |
 | `letsencrypt.dns_credentials` | – | Provider credentials. |
 | `letsencrypt.propagation_seconds` | `0` | DNS propagation wait. |
+
+The server silently drops settings that cannot apply, and so does this tool
+before comparing state — otherwise the two would never agree and every event
+would trigger another update:
+
+```
+no certificate      -> ssl.forced         = false
+no ssl.forced       -> ssl.hsts           = false
+no ssl.hsts         -> ssl.hsts_subdomains = false
+```
 
 Using an existing certificate (its id is in the NPM URL when you edit it):
 
@@ -255,13 +269,59 @@ npm.letsencrypt.propagation_seconds: "60"
 > `docker inspect`. Prefer creating such certificates once in the NPM UI and
 > referencing them with `certificate_id`.
 
+## The `enabled` flag
+
+`enabled` is the one field that does **not** travel in the create/update body:
+both APIs reject the property in their schemas and expose dedicated endpoints
+instead (`POST <collection>/{id}/enable` and `/disable`). Every resource is
+therefore created in the enabled state and switched afterwards if the label
+says otherwise.
+
+The reconcile loop compares the label with the live state and calls the
+endpoint only when they differ, so:
+
+* `enabled=false` takes effect on the run after the resource is created,
+* toggling it in the NPM UI is corrected on the next reconcile,
+* and it never triggers a `PUT`, which is what used to make a disabled host
+  loop forever between "update" and "still not disabled".
+
+## Access lists
+
+NPMplus replaced NPM's single `access_list_id` with a list plus an explicit
+type. Both spellings are accepted and mapped to whatever the detected flavour
+wants:
+
+```yaml
+npm.proxy.access_list_ids: "2,5"      # NPMplus
+npm.proxy.access_list_id: "2"         # either; shorthand for access_list_ids
+npm.proxy.access_list_type: "public"  # drop the lists again
+```
+
+Custom locations carry their own access list on NPMplus, where the fields are
+mandatory. The default is `global`, which means "inherit the proxy host's":
+
+```yaml
+npm.proxy.location.0.path: "/admin"
+npm.proxy.location.0.access_list_ids: "4"    # -> type "custom"
+npm.proxy.location.1.path: "/public"
+npm.proxy.location.1.access_list_type: "public"
+```
+
+Passing more than one id to an upstream NPM server is refused before the
+request, with a message saying so.
+
 ## Upstream host resolution
 
 The upstream of proxy hosts and streams is resolved in this order:
 
 1. the explicit `forward_host` label,
-2. the container's IP in the network named by `NPM_NETWORK`,
-3. the container's IP in a network the sync container is attached to,
+2. with `NPM_NETWORK` set: the container's IP **in that network only**. A
+   container that is not attached to it is skipped with a warning naming the
+   networks it is on — an address from elsewhere, and the container name
+   alike, would be unreachable for NPM and yield a silent `502`.
+   `NPM_NETWORK_STRICT=false` restores the fall-through of earlier releases.
+3. without `NPM_NETWORK`: the container's IP in a network the sync container
+   is attached to,
 4. the container's IP in the first network (alphabetical order),
 5. the container name.
 
@@ -319,7 +379,7 @@ services:
       # admin UI behind an access list
       npm.1.proxy.host: "admin.app.example.com"
       npm.1.proxy.port: "9090"
-      npm.1.proxy.access_list_id: "2"
+      npm.1.proxy.access_list_ids: "2"
 
       # database stream
       npm.2.stream.incoming_port: "5432"

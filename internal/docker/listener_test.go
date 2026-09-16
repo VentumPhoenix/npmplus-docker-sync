@@ -409,7 +409,7 @@ func TestIPAddressSkipsInvalidAddresses(t *testing.T) {
 		{Name: "c", IPv6: "fd00::1"},
 		{Name: "d", IPv4: "10.0.0.4"},
 	}}
-	if got := c.IPAddress(nil); got != "10.0.0.4" {
+	if got := c.IPAddress(nil, false); got != "10.0.0.4" {
 		t.Errorf("IPAddress() = %q, want the only valid IPv4 address", got)
 	}
 }

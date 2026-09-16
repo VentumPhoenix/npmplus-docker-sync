@@ -290,3 +290,83 @@ func TestLoadIPResolutionDefaults(t *testing.T) {
 		t.Errorf("NPMNetwork = %q, want npm", cfg.NPMNetwork)
 	}
 }
+
+func TestLoadFlavour(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		values  map[string]string
+		want    npm.Flavour
+		wantErr bool
+	}{
+		{name: "defaults to auto detection", values: nil, want: npm.FlavourAuto},
+		{name: "british spelling", values: map[string]string{"NPM_FLAVOUR": "npmplus"}, want: npm.FlavourNPMplus},
+		{name: "american spelling", values: map[string]string{"NPM_FLAVOR": "npm"}, want: npm.FlavourNPM},
+		{name: "rejects an unknown value", values: map[string]string{"NPM_FLAVOUR": "traefik"}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load(env(minimalEnv(tt.values)))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Load() = nil error, want a rejection")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.NPMFlavour != tt.want {
+				t.Errorf("NPMFlavour = %q, want %q", cfg.NPMFlavour, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadNetworkStrictness(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(env(minimalEnv(map[string]string{"NPM_NETWORK": "npm-frontend"})))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.StrictNetwork {
+		t.Error("StrictNetwork = false; naming a network must make the choice strict by default")
+	}
+
+	cfg, err = Load(env(minimalEnv(map[string]string{
+		"NPM_NETWORK":        "npm-frontend",
+		"NPM_NETWORK_STRICT": "false",
+	})))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.StrictNetwork {
+		t.Error("StrictNetwork = true; NPM_NETWORK_STRICT=false must be honoured")
+	}
+}
+
+func TestLoadPayloadLogging(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{"LOG_PAYLOADS", "NPM_DEBUG_PAYLOADS"} {
+		cfg, err := Load(env(minimalEnv(map[string]string{key: "true"})))
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if !cfg.LogPayloads {
+			t.Errorf("%s=true did not enable payload logging", key)
+		}
+	}
+
+	cfg, err := Load(env(minimalEnv(nil)))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.LogPayloads {
+		t.Error("payload logging must be off by default: bodies can carry DNS credentials")
+	}
+}

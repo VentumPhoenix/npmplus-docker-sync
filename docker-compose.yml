@@ -63,13 +63,22 @@ services:
       NPM_URL: http://npm:81
       NPM_IDENTITY: ${NPM_IDENTITY:?set NPM_IDENTITY in .env}
       NPM_SECRET_FILE: /run/secrets/npm_password
+      # API dialect; "auto" probes the server once at startup. Pin it to
+      # npmplus or npm if detection ever guesses wrong.
+      NPM_FLAVOUR: "${NPM_FLAVOUR:-auto}"
       # Upstreams use the container IP from this network (avoids DNS 502s).
+      # Containers that are not attached to it are skipped with a warning
+      # rather than pointed at an address NPM cannot reach.
       NPM_NETWORK: npm
       RESOLVE_CONTAINER_IP: "true"
       # Managed resource types (default: all four).
       SYNC_KINDS: proxy,redirect,stream,404
       DEBOUNCE_INTERVAL: 3s
       RESYNC_INTERVAL: 5m
+      # CAUTION: a resource this tool once created keeps its ownership marker.
+      # Make sure every container whose hosts you want to keep still carries
+      # npm.enable=true - including the NPM/NPMplus container itself - or run
+      # once with DRY_RUN=true to see what would be removed.
       DELETE_ORPHANS: "true"
       LOG_LEVEL: info
       LOG_FORMAT: json

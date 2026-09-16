@@ -1,0 +1,113 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"additionalProperties": false,
+	"properties": {
+		"advanced_config": {
+			"example": "",
+			"type": "string"
+		},
+		"block_exploits": {
+			"description": "This is always disabled. Your value will be ignored",
+			"example": false,
+			"type": "boolean"
+		},
+		"certificate_id": {
+			"anyOf": [
+				{
+					"example": 5,
+					"minimum": 0,
+					"type": "integer"
+				},
+				{
+					"example": "new",
+					"pattern": "^new$",
+					"type": "string"
+				}
+			],
+			"description": "Certificate ID",
+			"example": 5
+		},
+		"domain_names": {
+			"description": "Domain Names array",
+			"example": [
+				"example.com",
+				"www.example.com"
+			],
+			"items": {
+				"minLength": 1,
+				"type": "string"
+			},
+			"maxItems": 99,
+			"minItems": 1,
+			"type": "array",
+			"uniqueItems": true
+		},
+		"forward_domain_name": {
+			"description": "Domain Name",
+			"example": "jc21.com",
+			"minLength": 1,
+			"type": "string"
+		},
+		"forward_http_code": {
+			"description": "Redirect HTTP Status Code",
+			"example": 302,
+			"maximum": 308,
+			"minimum": 300,
+			"type": "integer"
+		},
+		"forward_scheme": {
+			"enum": [
+				"auto",
+				"$scheme",
+				"http",
+				"https"
+			],
+			"example": "http",
+			"type": "string"
+		},
+		"hsts_enabled": {
+			"description": "Is HSTS Enabled",
+			"example": true,
+			"type": "boolean"
+		},
+		"hsts_subdomains": {
+			"description": "Is HSTS applicable to all subdomains",
+			"example": true,
+			"type": "boolean"
+		},
+		"http2_support": {
+			"description": "HTTP2 Protocol Support",
+			"example": true,
+			"type": "boolean"
+		},
+		"meta": {
+			"example": {
+				"nginx_err": null,
+				"nginx_online": true
+			},
+			"type": "object"
+		},
+		"npmplus_http3_support": {
+			"description": "HTTP3 Protocol Support",
+			"example": true,
+			"type": "boolean"
+		},
+		"preserve_path": {
+			"description": "Should the path be preserved",
+			"example": true,
+			"type": "boolean"
+		},
+		"ssl_forced": {
+			"description": "Is SSL Forced",
+			"example": true,
+			"type": "boolean"
+		}
+	},
+	"required": [
+		"domain_names",
+		"forward_scheme",
+		"forward_http_code",
+		"forward_domain_name"
+	],
+	"type": "object"
+}

@@ -33,6 +33,9 @@ func buildTarget(c Container, opts ParseOptions, key entryKey, f fieldSet) (*Tar
 	if t.HTTP2Support, err = f.boolean(fieldHTTP2, false); err != nil {
 		return nil, err
 	}
+	if t.HTTP3Support, err = f.boolean(fieldHTTP3, false); err != nil {
+		return nil, err
+	}
 	if t.HSTSEnabled, err = f.boolean(fieldHSTS, false); err != nil {
 		return nil, err
 	}
@@ -113,13 +116,66 @@ func buildProxy(t *Target, c Container, opts ParseOptions, f fieldSet) error {
 	if t.Caching, err = f.boolean(fieldCaching, false); err != nil {
 		return err
 	}
-	if t.AccessListID, err = f.integer(fieldAccessListID, 0); err != nil {
+	if t.TrustForwardedProto, err = f.boolean(fieldTrustProto, false); err != nil {
+		return err
+	}
+	if t.AccessListIDs, t.AccessListType, err = parseAccessList(f, fieldAccessListIDs, fieldAccessListID, fieldAccessListType, npm.AccessListPublic); err != nil {
 		return err
 	}
 	if t.Locations, err = parseLocations(t, f); err != nil {
 		return err
 	}
 	return nil
+}
+
+// parseAccessList reads the access list labels of a host or a location.
+//
+// NPMplus replaced NPM's single `access_list_id` with a list plus an explicit
+// type, so both spellings are accepted: `access_list_id=2` is shorthand for
+// `access_list_ids=2`. The type defaults to "custom" as soon as an id is
+// given, and to defaultType otherwise ("public" for a host, "global" - inherit
+// from the host - for a location).
+func parseAccessList(f fieldSet, idsField, idField, typeField, defaultType string) ([]int, string, error) {
+	var ids []int
+	for _, raw := range splitList(f.string(idsField)) {
+		id, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, "", fmt.Errorf("%s: %q is not a number", f.name(idsField), raw)
+		}
+		if id < 1 {
+			return nil, "", fmt.Errorf("%s: access list id %d must be positive", f.name(idsField), id)
+		}
+		ids = append(ids, id)
+	}
+	if legacy, err := f.integer(idField, 0); err != nil {
+		return nil, "", err
+	} else if legacy > 0 {
+		ids = append(ids, legacy)
+	}
+
+	listType := strings.ToLower(f.string(typeField))
+	switch listType {
+	case "":
+		if len(ids) > 0 {
+			listType = npm.AccessListCustom
+		} else {
+			listType = defaultType
+		}
+	case npm.AccessListPublic:
+		ids = nil
+	case npm.AccessListCustom:
+		if len(ids) == 0 {
+			return nil, "", fmt.Errorf("%s=%s requires %s", f.name(typeField), npm.AccessListCustom, f.name(idsField))
+		}
+	case npm.AccessListGlobal:
+		if defaultType != npm.AccessListGlobal {
+			return nil, "", fmt.Errorf("%s: %q is only valid for a location block", f.name(typeField), npm.AccessListGlobal)
+		}
+		ids = nil
+	default:
+		return nil, "", fmt.Errorf("%s: unknown access list type %q", f.name(typeField), listType)
+	}
+	return ids, listType, nil
 }
 
 // parseLocations reads custom location blocks written as
@@ -194,15 +250,37 @@ func parseLocations(t *Target, f fieldSet) ([]npm.Location, error) {
 			port = parsed
 		}
 
+		sub := fieldSet{
+			prefix: f.prefix, kind: f.kind, index: f.index,
+			values: values,
+			labels: locationLabels(f, n, values),
+		}
+		ids, listType, err := parseAccessList(sub, fieldAccessListIDs, fieldAccessListID, fieldAccessListType, npm.AccessListGlobal)
+		if err != nil {
+			return nil, err
+		}
+
 		locations = append(locations, npm.Location{
 			Path:           path,
 			ForwardScheme:  scheme,
 			ForwardHost:    host,
 			ForwardPort:    port,
 			AdvancedConfig: values["advanced_config"],
+			AccessListIDs:  ids,
+			AccessListType: listType,
 		})
 	}
 	return locations, nil
+}
+
+// locationLabels reconstructs the original label names of a location block so
+// errors point at the label the user actually wrote.
+func locationLabels(f fieldSet, n int, values map[string]string) map[string]string {
+	labels := make(map[string]string, len(values))
+	for field := range values {
+		labels[field] = fmt.Sprintf("%s%d.%s.%s.%d.%s", f.prefix, f.index, f.kind, fieldLocation, n, field)
+	}
+	return labels
 }
 
 func buildRedirect(t *Target, f fieldSet) error {
@@ -324,11 +402,29 @@ func resolveForwardHost(c Container, opts ParseOptions, f fieldSet) (string, err
 	if err != nil {
 		return "", err
 	}
-	host := c.ResolveHost(ParseOptions{ResolveIP: resolveIP, PreferNetworks: opts.PreferNetworks})
+	host := c.ResolveHost(ParseOptions{
+		ResolveIP:      resolveIP,
+		PreferNetworks: opts.PreferNetworks,
+		StrictNetworks: opts.StrictNetworks,
+	})
 	if host == "" {
+		if opts.StrictNetworks {
+			return "", fmt.Errorf("container is not attached to %s (attached to: %s); "+
+				"join that network or set %s explicitly",
+				strings.Join(opts.PreferNetworks, ", "),
+				joinOrNone(c.NetworkNames()),
+				f.name(fieldForwardHost))
+		}
 		return "", fmt.Errorf("cannot determine the upstream host: set %s", f.name(fieldForwardHost))
 	}
 	return host, nil
+}
+
+func joinOrNone(names []string) string {
+	if len(names) == 0 {
+		return "none"
+	}
+	return strings.Join(names, ", ")
 }
 
 // validateCertificate rejects combinations NPM would reject (or silently

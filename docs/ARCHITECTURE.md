@@ -114,14 +114,55 @@ exactly once — for proxy hosts, redirections, streams and 404 hosts alike.
 
 `container.Summary.NetworkSettings.Networks` already carries every endpoint's
 IP address, so resolving the upstream costs no extra API call. The order is:
-explicit label → `NPM_NETWORK` → a network this container shares with the
-target → first network alphabetically → container name.
+
+* explicit label, else
+* **`NPM_NETWORK` set** → the address on that network, and nothing else. A
+  container that is not attached to it is skipped with a warning. Guessing
+  here is worse than refusing: an address on a network NPM does not share
+  produces a proxy host that answers `502` and looks correct in the UI.
+* **`NPM_NETWORK` unset** → a network this container shares with the target →
+  first network alphabetically → container name.
 
 Preferring a shared network matters because reachability is what NPM needs: if
 this process can reach a container, NPM on the same network can too. The
 process finds its own networks by matching its hostname (the short container
-id) against the container list; when that fails — outside a container, or with
-a custom hostname — it silently falls back to the remaining rules.
+id) against the container list; the same lookup records its own container id,
+which is then used to drop this container's own events from the stream.
+When the lookup fails — outside a container, or with a custom hostname — it
+silently falls back to the remaining rules.
+
+## API flavours
+
+Nginx Proxy Manager and NPMplus expose the same endpoints but validate every
+write against their own JSON schema, each with `additionalProperties: false`.
+They have drifted far enough apart that one request body cannot satisfy both:
+NPMplus removed `enabled` and `access_list_id`, added
+`npmplus_access_list_ids`/`_type` (mandatory on custom locations too) and types
+the stream ports as strings.
+
+The client therefore keeps response models and request payloads apart. Each
+resource implements `Payload(Flavour) (any, error)`, returning a struct that
+mirrors exactly one request schema; `Client.Create`/`Update` send only that.
+A configuration the flavour cannot express is refused locally, with the feature
+named, instead of becoming an opaque `400`.
+
+The flavour is probed once after login (an existing proxy host's field names,
+falling back to the `version` object of `GET /api/`) and can be pinned with
+`NPM_FLAVOUR`.
+
+`internal/npm/contract_test.go` validates every payload against the real
+upstream schemas, vendored into `internal/npm/testdata/schema` by
+`scripts/vendor-schemas.py` (`make schemas`). Adding a field that a server
+would reject fails the build.
+
+## The enabled flag
+
+`enabled` is the one configuration field that is not part of any write payload:
+both APIs reserve it for `POST <collection>/{id}/enable` and `/disable`. It is
+consequently excluded from the fingerprint and reconciled on its own — compare
+desired against live, call the endpoint when they differ. Keeping it inside the
+hash while it could never be written was what turned a single
+`npm.proxy.enabled=false` into an endless update loop.
 
 ## Debouncing
 

@@ -23,6 +23,10 @@ type API interface {
 	Create(ctx context.Context, resource npm.Resource) (npm.Resource, error)
 	Update(ctx context.Context, id int, resource npm.Resource) (npm.Resource, error)
 	Delete(ctx context.Context, kind npm.Kind, id int) error
+	// SetEnabled toggles a resource through the dedicated /enable and
+	// /disable endpoints. Neither API accepts `enabled` in a create or
+	// update body.
+	SetEnabled(ctx context.Context, kind npm.Kind, id int, enabled bool) error
 }
 
 // TargetSource provides the desired state derived from Docker.
@@ -52,9 +56,10 @@ type Worker struct {
 	opts  Options
 	log   *slog.Logger
 
-	statusMu sync.RWMutex
-	lastRun  time.Time
-	lastErr  error
+	statusMu   sync.RWMutex
+	lastRun    time.Time
+	lastErr    error
+	lastFailed int
 }
 
 // NewWorker creates a worker.
@@ -74,28 +79,51 @@ func NewWorker(api API, src TargetSource, opts Options, log *slog.Logger) *Worke
 // Cache exposes the state cache (used by tests and the health endpoint).
 func (w *Worker) Cache() *Cache { return w.cache }
 
-// Status reports the outcome of the most recent reconcile run. It is used by
-// the readiness probe.
-func (w *Worker) Status() (lastRun time.Time, managed int, err error) {
-	w.statusMu.RLock()
-	defer w.statusMu.RUnlock()
-	return w.lastRun, w.cache.Len(), w.lastErr
+// Status reports the outcome of the most recent reconcile run.
+//
+// Err is reserved for failures that make the whole run meaningless (Docker or
+// the NPM API unreachable). A single rejected resource is counted in Failed
+// instead: the other hosts are still in sync, so the process is not unhealthy.
+type Status struct {
+	LastRun time.Time
+	Managed int
+	Failed  int
+	Err     error
 }
 
-func (w *Worker) setStatus(err error) {
+// Ready reports whether at least one reconcile run finished without an
+// infrastructure failure.
+func (s Status) Ready() bool { return !s.LastRun.IsZero() && s.Err == nil }
+
+// Status returns the outcome of the most recent reconcile run. It is used by
+// the readiness probe.
+func (w *Worker) Status() Status {
+	w.statusMu.RLock()
+	defer w.statusMu.RUnlock()
+	return Status{
+		LastRun: w.lastRun,
+		Managed: w.cache.Len(),
+		Failed:  w.lastFailed,
+		Err:     w.lastErr,
+	}
+}
+
+func (w *Worker) setStatus(err error, failed int) {
 	w.statusMu.Lock()
 	defer w.statusMu.Unlock()
-	w.lastRun, w.lastErr = time.Now(), err
+	w.lastRun, w.lastErr, w.lastFailed = time.Now(), err, failed
 }
 
 // Run processes reconcile triggers until ctx is cancelled. It performs an
 // initial reconciliation on startup, a periodic full resync, and a final
 // flush during graceful shutdown.
 func (w *Worker) Run(ctx context.Context, triggers <-chan []docker.Event) error {
-	if res, err := w.Reconcile(ctx); err != nil {
+	res, err := w.Reconcile(ctx)
+	if err != nil {
 		// A failing initial sync must not kill the process: NPM may still be
 		// starting up. The periodic resync retries.
-		w.log.Error("initial reconciliation failed", slog.String("error", err.Error()))
+		w.log.Error("initial reconciliation failed",
+			slog.Any("result", res), slog.String("error", err.Error()))
 	} else {
 		w.log.Info("initial reconciliation complete", slog.Any("result", res))
 	}
@@ -119,19 +147,27 @@ func (w *Worker) Run(ctx context.Context, triggers <-chan []docker.Event) error 
 			w.log.Debug("processing event batch",
 				slog.Int("events", len(batch)),
 				slog.String("containers", describe(batch)))
-			if res, err := w.Reconcile(ctx); err != nil {
-				w.log.Error("reconciliation failed", slog.String("error", err.Error()))
-			} else if res.Changed() {
-				w.log.Info("reconciliation complete", slog.Any("result", res))
-			}
+			res, err := w.Reconcile(ctx)
+			w.report("reconciliation", res, err)
 
 		case <-resync:
-			if res, err := w.Reconcile(ctx); err != nil {
-				w.log.Error("periodic resync failed", slog.String("error", err.Error()))
-			} else if res.Changed() {
-				w.log.Info("periodic resync applied changes", slog.Any("result", res))
-			}
+			res, err := w.Reconcile(ctx)
+			w.report("periodic resync", res, err)
 		}
+	}
+}
+
+// report logs the outcome of a run. A run that applied part of its changes and
+// rejected the rest is neither "complete" nor "failed", and the old wording
+// ("reconciliation failed") suggested nothing at all had happened - so the
+// result counters always come along.
+func (w *Worker) report(what string, res Result, err error) {
+	switch {
+	case err != nil:
+		w.log.Error(what+" finished with errors",
+			slog.Any("result", res), slog.String("error", err.Error()))
+	case res.Changed():
+		w.log.Info(what+" applied changes", slog.Any("result", res))
 	}
 }
 
@@ -202,7 +238,7 @@ func (w *Worker) reconcile(ctx context.Context, deleteOrphans bool) (Result, err
 
 	targets, err := w.src.Targets(ctx)
 	if err != nil {
-		w.setStatus(err)
+		w.setStatus(err, 0)
 		return res, err
 	}
 
@@ -211,22 +247,29 @@ func (w *Worker) reconcile(ctx context.Context, deleteOrphans bool) (Result, err
 		byKind[t.Kind] = append(byKind[t.Kind], t)
 	}
 
-	var errs []error
+	var fatal, partial []error
 	for _, kind := range w.opts.Kinds {
-		kindResult, err := w.reconcileKind(ctx, kind, byKind[kind], deleteOrphans)
+		kindResult, kindFatal, kindPartial := w.reconcileKind(ctx, kind, byKind[kind], deleteOrphans)
 		res.add(kindResult)
-		if err != nil {
-			errs = append(errs, err)
+		if kindFatal != nil {
+			fatal = append(fatal, kindFatal)
+		}
+		if kindPartial != nil {
+			partial = append(partial, kindPartial)
 		}
 	}
 
-	err = errors.Join(errs...)
-	w.setStatus(err)
-	return res, err
+	// Only an unreachable collection marks the run itself as broken; a
+	// resource NPM rejected is reported through Result.Failed so a single bad
+	// label set cannot flip the readiness probe for everything else.
+	w.setStatus(errors.Join(fatal...), res.Failed)
+	return res, errors.Join(append(fatal, partial...)...)
 }
 
-// reconcileKind reconciles a single NPM collection.
-func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*docker.Target, deleteOrphans bool) (Result, error) {
+// reconcileKind reconciles a single NPM collection. It returns the run result,
+// a fatal error (the collection could not be listed at all) and the joined
+// per-resource errors.
+func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*docker.Target, deleteOrphans bool) (Result, error, error) { //nolint:revive // three distinct outcomes
 	var res Result
 	log := w.log.With(slog.String("kind", string(kind)))
 
@@ -237,9 +280,9 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 			// of failing the whole run, and keep the cached state untouched.
 			log.Warn("collection is not available on this npm instance, skipping",
 				slog.String("path", kind.Path()))
-			return res, nil
+			return res, nil, nil
 		}
-		return res, fmt.Errorf("list %s: %w", kind.Label(), err)
+		return res, fmt.Errorf("list %s: %w", kind.Label(), err), nil
 	}
 
 	existing := indexResources(live)
@@ -291,39 +334,64 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 		// desired state can converge.
 		resource.AdoptServerState(current)
 		hash := resource.Fingerprint()
+		id := current.ResourceID()
 
-		if cached, ok := w.cache.Get(kind, key); ok && cached.ID == current.ResourceID() && cached.Hash == hash {
-			res.Unchanged++
-			next[key] = cached
-			continue
-		}
-		if current.Fingerprint() == hash {
-			res.Unchanged++
-			next[key] = entryFor(current.ResourceID(), hash, target)
-			continue
+		// The configuration is in sync when the live resource hashes the same
+		// or when we last wrote exactly this hash - the server normalises some
+		// fields on the way in, so an echo that differs is not a drift.
+		inSync := current.Fingerprint() == hash
+		if !inSync {
+			if cached, ok := w.cache.Get(kind, key); ok && cached.ID == id && cached.Hash == hash {
+				inSync = true
+			}
 		}
 
-		if w.opts.DryRun {
-			res.Updated++
-			log.Info("[dry-run] would update resource",
-				slog.String("key", key), slog.Int("id", current.ResourceID()),
+		enabled := current.IsEnabled()
+		changed := false
+
+		if !inSync {
+			if w.opts.DryRun {
+				log.Info("[dry-run] would update resource",
+					slog.String("key", key), slog.Int("id", id),
+					slog.String("config", resource.Describe()))
+				res.Updated++
+				continue
+			}
+			if _, err := w.api.Update(ctx, id, resource); err != nil {
+				res.Failed++
+				errs = append(errs, fmt.Errorf("update %s %s: %w", kind.Label(), key, err))
+				log.Error("failed to update resource", slog.String("key", key), slog.String("error", err.Error()))
+				continue
+			}
+			changed = true
+			log.Info("updated resource",
+				slog.String("key", key), slog.Int("id", id),
+				slog.String("container", target.ContainerName),
+				slog.Int("index", target.Index),
 				slog.String("config", resource.Describe()))
-			next[key] = entryFor(current.ResourceID(), hash, target)
-			continue
 		}
-		if _, err := w.api.Update(ctx, current.ResourceID(), resource); err != nil {
+
+		// The enabled flag lives outside the write payload, so it is
+		// reconciled on its own. Without this step `enabled: false` would be
+		// silently ignored forever.
+		toggled, err := w.applyEnabled(ctx, log, kind, key, id, resource.IsEnabled(), enabled)
+		if err != nil {
 			res.Failed++
-			errs = append(errs, fmt.Errorf("update %s %s: %w", kind.Label(), key, err))
-			log.Error("failed to update resource", slog.String("key", key), slog.String("error", err.Error()))
+			errs = append(errs, err)
 			continue
 		}
-		res.Updated++
-		next[key] = entryFor(current.ResourceID(), hash, target)
-		log.Info("updated resource",
-			slog.String("key", key), slog.Int("id", current.ResourceID()),
-			slog.String("container", target.ContainerName),
-			slog.Int("index", target.Index),
-			slog.String("config", resource.Describe()))
+		if toggled {
+			enabled = resource.IsEnabled()
+			changed = true
+		}
+
+		switch {
+		case changed:
+			res.Updated++
+		default:
+			res.Unchanged++
+		}
+		next[key] = Entry{ID: id, Hash: hash, Container: target.ContainerName, Index: target.Index, Enabled: enabled}
 	}
 
 	// Orphans: resources we created whose definition is gone. Resources
@@ -361,7 +429,33 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 	}
 
 	w.cache.ReplaceKind(kind, next)
-	return res, errors.Join(errs...)
+	return res, nil, errors.Join(errs...)
+}
+
+// applyEnabled brings the live enabled state in line with the desired one and
+// reports whether it had to act.
+func (w *Worker) applyEnabled(ctx context.Context, log *slog.Logger, kind npm.Kind, key string, id int, desired, live bool) (bool, error) {
+	if desired == live || id == 0 {
+		return false, nil
+	}
+	verb, state := "disable", "disabled"
+	if desired {
+		verb, state = "enable", "enabled"
+	}
+	if w.opts.DryRun {
+		log.Info("[dry-run] would toggle resource",
+			slog.String("key", key), slog.Int("id", id), slog.String("to", state))
+		return true, nil
+	}
+	if err := w.api.SetEnabled(ctx, kind, id, desired); err != nil {
+		log.Error("failed to toggle resource",
+			slog.String("key", key), slog.Int("id", id),
+			slog.String("to", state), slog.String("error", err.Error()))
+		return false, fmt.Errorf("%s %s %s: %w", verb, kind.Label(), key, err)
+	}
+	log.Info("toggled resource",
+		slog.String("key", key), slog.Int("id", id), slog.String("to", state))
+	return true, nil
 }
 
 // create adds a missing resource. It returns the cache entry to store, or nil
@@ -381,17 +475,31 @@ func (w *Worker) create(ctx context.Context, log *slog.Logger, target *docker.Ta
 		return nil, false, fmt.Errorf("create %s %s: %w", target.Kind.Label(), target.Key(), err)
 	}
 
-	entry := entryFor(created.ResourceID(), resource.Fingerprint(), target)
+	// Both flavours create a resource in the enabled state, so an explicit
+	// `enabled: false` needs a follow-up call.
+	id := created.ResourceID()
+	enabled := created.IsEnabled()
+	toggled, err := w.applyEnabled(ctx, log, target.Kind, target.Key(), id, resource.IsEnabled(), enabled)
+	if err != nil {
+		return nil, false, err
+	}
+	if toggled {
+		enabled = resource.IsEnabled()
+	}
+
+	entry := Entry{
+		ID:        id,
+		Hash:      resource.Fingerprint(),
+		Container: target.ContainerName,
+		Index:     target.Index,
+		Enabled:   enabled,
+	}
 	log.Info("created resource",
-		slog.String("key", target.Key()), slog.Int("id", created.ResourceID()),
+		slog.String("key", target.Key()), slog.Int("id", id),
 		slog.String("container", target.ContainerName),
 		slog.Int("index", target.Index),
 		slog.String("config", resource.Describe()))
 	return &entry, true, nil
-}
-
-func entryFor(id int, hash string, target *docker.Target) Entry {
-	return Entry{ID: id, Hash: hash, Container: target.ContainerName, Index: target.Index}
 }
 
 type conflict struct {

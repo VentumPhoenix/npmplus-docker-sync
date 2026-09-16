@@ -48,6 +48,10 @@ fmt: ## Format the code
 vet: ## Run go vet
 	go vet $(PKG)
 
+.PHONY: schemas
+schemas: ## Re-vendor the NPM/NPMplus request schemas used by the contract test
+	python3 scripts/vendor-schemas.py
+
 .PHONY: vuln
 vuln: ## Scan dependencies for known vulnerabilities
 	./scripts/govulncheck.sh

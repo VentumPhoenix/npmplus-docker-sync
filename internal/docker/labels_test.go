@@ -40,6 +40,7 @@ func TestParseProxy(t *testing.T) {
 				DomainNames:   []string{"whoami.example.com"},
 				ForwardScheme: "http", ForwardHost: "whoami", ForwardPort: 80,
 				Websockets: true, BlockExploits: true, Enabled: true,
+				AccessListType: npm.AccessListPublic,
 			}},
 		},
 		{
@@ -55,6 +56,7 @@ func TestParseProxy(t *testing.T) {
 				DomainNames:   []string{"app.example.com"},
 				ForwardScheme: "http", ForwardHost: "app", ForwardPort: 3000,
 				Websockets: true, BlockExploits: true, Enabled: true,
+				AccessListType: npm.AccessListPublic,
 			}},
 		},
 		{
@@ -70,6 +72,7 @@ func TestParseProxy(t *testing.T) {
 				DomainNames:   []string{"svc.example.com"},
 				ForwardScheme: "http", ForwardHost: "svc", ForwardPort: 8080,
 				Websockets: true, BlockExploits: true, Enabled: true,
+				AccessListType: npm.AccessListPublic,
 			}},
 		},
 		{
@@ -99,7 +102,7 @@ func TestParseProxy(t *testing.T) {
 				CertificateID: npm.CertificateRef(7),
 				SSLForced:     true, HTTP2Support: true, HSTSEnabled: true, HSTSSubdomains: true,
 				Websockets: false, BlockExploits: false, Caching: true,
-				AccessListID: 2, AdvancedConfig: "client_max_body_size 0;",
+				AccessListIDs: []int{2}, AccessListType: npm.AccessListCustom, AdvancedConfig: "client_max_body_size 0;",
 				Enabled: true,
 			}},
 		},
@@ -122,6 +125,7 @@ func TestParseProxy(t *testing.T) {
 				CertificateID: npm.NewCertificate(), SSLForced: true,
 				LetsEncryptEmail: "admin@example.com", LetsEncryptAgree: true,
 				Websockets: true, BlockExploits: true, Enabled: true,
+				AccessListType: npm.AccessListPublic,
 			}},
 		},
 		{name: "no labels at all", opts: opts("npm"), c: withLabels("db", nil)},

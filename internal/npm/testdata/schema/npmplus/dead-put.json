@@ -1,0 +1,72 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"additionalProperties": false,
+	"minProperties": 1,
+	"properties": {
+		"advanced_config": {
+			"example": "",
+			"type": "string"
+		},
+		"certificate_id": {
+			"anyOf": [
+				{
+					"example": 5,
+					"minimum": 0,
+					"type": "integer"
+				},
+				{
+					"example": "new",
+					"pattern": "^new$",
+					"type": "string"
+				}
+			],
+			"description": "Certificate ID",
+			"example": 5
+		},
+		"domain_names": {
+			"description": "Domain Names array",
+			"example": [
+				"example.com",
+				"www.example.com"
+			],
+			"items": {
+				"minLength": 1,
+				"type": "string"
+			},
+			"maxItems": 99,
+			"minItems": 1,
+			"type": "array",
+			"uniqueItems": true
+		},
+		"hsts_enabled": {
+			"description": "Is HSTS Enabled",
+			"example": true,
+			"type": "boolean"
+		},
+		"hsts_subdomains": {
+			"description": "Is HSTS applicable to all subdomains",
+			"example": true,
+			"type": "boolean"
+		},
+		"http2_support": {
+			"description": "HTTP2 Protocol Support",
+			"example": true,
+			"type": "boolean"
+		},
+		"meta": {
+			"example": {},
+			"type": "object"
+		},
+		"npmplus_http3_support": {
+			"description": "HTTP3 Protocol Support",
+			"example": true,
+			"type": "boolean"
+		},
+		"ssl_forced": {
+			"description": "Is SSL Forced",
+			"example": true,
+			"type": "boolean"
+		}
+	},
+	"type": "object"
+}

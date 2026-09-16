@@ -30,6 +30,7 @@ const (
 	fieldCertificateID  = "certificate_id"
 	fieldSSLForced      = "ssl.forced"
 	fieldHTTP2          = "ssl.http2"
+	fieldHTTP3          = "ssl.http3"
 	fieldHSTS           = "ssl.hsts"
 	fieldHSTSSubdomains = "ssl.hsts_subdomains"
 	fieldBlockExploits  = "block_exploits"
@@ -44,13 +45,16 @@ const (
 	fieldLEPropagation  = "letsencrypt.propagation_seconds"
 
 	// proxy fields
-	fieldPort         = "port"
-	fieldScheme       = "scheme"
-	fieldForwardHost  = "forward_host"
-	fieldWebsockets   = "websockets"
-	fieldCaching      = "caching"
-	fieldAccessListID = "access_list_id"
-	fieldLocation     = "location"
+	fieldPort           = "port"
+	fieldScheme         = "scheme"
+	fieldForwardHost    = "forward_host"
+	fieldWebsockets     = "websockets"
+	fieldCaching        = "caching"
+	fieldTrustProto     = "trust_forwarded_proto"
+	fieldAccessListID   = "access_list_id"
+	fieldAccessListIDs  = "access_list_ids"
+	fieldAccessListType = "access_list_type"
+	fieldLocation       = "location"
 
 	// redirection fields
 	fieldForwardDomain = "forward_domain"
@@ -75,6 +79,8 @@ var aliases = map[npm.Kind]map[string]string{
 		"forward_ip":   fieldForwardHost,
 		"upstream":     fieldForwardHost,
 		"forward_port": fieldPort,
+		"access_list":  fieldAccessListIDs,
+		"access_lists": fieldAccessListIDs,
 	},
 	npm.KindRedirect: {
 		"enable":              fieldEnabled,

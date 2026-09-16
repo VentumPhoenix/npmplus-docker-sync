@@ -2,7 +2,10 @@ module github.com/VentumPhoenix/npmplus-docker-sync
 
 go 1.26.0
 
-require github.com/docker/docker v28.5.2+incompatible
+require (
+	github.com/docker/docker v28.5.2+incompatible
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
+)
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
@@ -30,6 +33,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
 )

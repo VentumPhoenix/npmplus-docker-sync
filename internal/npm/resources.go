@@ -2,7 +2,7 @@ package npm
 
 import (
 	"fmt"
-	"strconv"
+	"sort"
 	"strings"
 )
 
@@ -74,8 +74,19 @@ type Resource interface {
 	ResourceKey() string
 	// ResourceMeta exposes the meta object carrying the ownership marker.
 	ResourceMeta() Meta
-	// Fingerprint hashes the configuration-relevant fields.
+	// Fingerprint hashes the configuration-relevant fields. It deliberately
+	// excludes the enabled flag, which is not part of the write payload and
+	// is reconciled through the /enable and /disable endpoints instead.
 	Fingerprint() string
+	// Payload returns the create/update request body for the given API
+	// flavour. It fails when the desired configuration uses a feature the
+	// flavour does not have.
+	Payload(flavour Flavour) (any, error)
+	// IsEnabled reports the desired (or, for a resource read back from the
+	// API, the live) enabled state.
+	IsEnabled() bool
+	// SetEnabled records the enabled state.
+	SetEnabled(enabled bool)
 	// AdoptServerState copies server-assigned values (such as an issued
 	// certificate id) from the live resource into the desired payload, so a
 	// converged resource does not produce an endless update loop.
@@ -88,12 +99,14 @@ type Resource interface {
 // Proxy hosts
 // ---------------------------------------------------------------------------
 
-// ProxyHost mirrors `/api/nginx/proxy-hosts`.
+// ProxyHost mirrors `/api/nginx/proxy-hosts` as the API *returns* it. Request
+// bodies are built by Payload; see payloads.go.
 type ProxyHost struct {
-	ID                    int           `json:"id,omitempty"`
-	CreatedOn             string        `json:"created_on,omitempty"`
-	ModifiedOn            string        `json:"modified_on,omitempty"`
-	OwnerUserID           int           `json:"owner_user_id,omitempty"`
+	ID          int    `json:"id,omitempty"`
+	CreatedOn   string `json:"created_on,omitempty"`
+	ModifiedOn  string `json:"modified_on,omitempty"`
+	OwnerUserID int    `json:"owner_user_id,omitempty"`
+
 	DomainNames           []string      `json:"domain_names"`
 	ForwardHost           string        `json:"forward_host"`
 	ForwardPort           int           `json:"forward_port"`
@@ -102,15 +115,25 @@ type ProxyHost struct {
 	SSLForced             bool          `json:"ssl_forced"`
 	HSTSEnabled           bool          `json:"hsts_enabled"`
 	HSTSSubdomains        bool          `json:"hsts_subdomains"`
+	TrustForwardedProto   bool          `json:"trust_forwarded_proto"`
 	HTTP2Support          bool          `json:"http2_support"`
 	BlockExploits         bool          `json:"block_exploits"`
 	CachingEnabled        bool          `json:"caching_enabled"`
 	AllowWebsocketUpgrade bool          `json:"allow_websocket_upgrade"`
-	AccessListID          int           `json:"access_list_id"`
 	AdvancedConfig        string        `json:"advanced_config"`
-	Enabled               Flag          `json:"enabled,omitempty"`
+	Enabled               Flag          `json:"enabled"`
 	Locations             []Location    `json:"locations"`
 	Meta                  Meta          `json:"meta"`
+
+	// HTTP3Support is an NPMplus extension (`npmplus_http3_support`).
+	HTTP3Support bool `json:"npmplus_http3_support"`
+
+	// Access lists: upstream NPM has a single `access_list_id`, NPMplus a
+	// list plus an explicit type. Both spellings are decoded so a host can be
+	// compared no matter which server returned it; accessLists() normalises.
+	AccessListID   int    `json:"access_list_id"`
+	AccessListIDs  []int  `json:"npmplus_access_list_ids"`
+	AccessListType string `json:"npmplus_access_list_type"`
 }
 
 // Kind implements Resource.
@@ -127,6 +150,32 @@ func (h *ProxyHost) ResourceKey() string { return primaryDomain(h.DomainNames) }
 
 // ResourceMeta implements Resource.
 func (h *ProxyHost) ResourceMeta() Meta { return h.Meta }
+
+// IsEnabled implements Resource.
+func (h *ProxyHost) IsEnabled() bool { return bool(h.Enabled) }
+
+// SetEnabled implements Resource.
+func (h *ProxyHost) SetEnabled(enabled bool) { h.Enabled = Flag(enabled) }
+
+// accessLists normalises the two spellings into the NPMplus shape: a sorted,
+// de-duplicated list of ids and the matching type.
+func (h *ProxyHost) accessLists() ([]int, string) {
+	ids := normalizeIDs(h.AccessListIDs)
+	if len(ids) == 0 && h.AccessListID > 0 {
+		ids = []int{h.AccessListID}
+	}
+	listType := h.AccessListType
+	switch {
+	case listType == "" && len(ids) > 0:
+		listType = AccessListCustom
+	case listType == "":
+		listType = AccessListPublic
+	case listType == AccessListPublic:
+		// "public" means "no access list", whatever ids may linger.
+		ids = nil
+	}
+	return ids, listType
+}
 
 // Describe implements Resource.
 func (h *ProxyHost) Describe() string {
@@ -150,48 +199,53 @@ func (h *ProxyHost) AdoptServerState(current Resource) {
 // Fingerprint implements Resource.
 func (h *ProxyHost) Fingerprint() string {
 	managedBy, container, index := ownership(h.Meta)
+	ids, listType := h.accessLists()
 	return fingerprint(struct {
-		Kind          string     `json:"kind"`
-		Domains       []string   `json:"domains"`
-		Scheme        string     `json:"scheme"`
-		Host          string     `json:"host"`
-		Port          int        `json:"port"`
-		Certificate   string     `json:"certificate"`
-		SSLForced     bool       `json:"ssl_forced"`
-		HSTS          bool       `json:"hsts"`
-		HSTSSub       bool       `json:"hsts_subdomains"`
-		HTTP2         bool       `json:"http2"`
-		BlockExploits bool       `json:"block_exploits"`
-		Caching       bool       `json:"caching"`
-		Websockets    bool       `json:"websockets"`
-		AccessList    int        `json:"access_list"`
-		Advanced      string     `json:"advanced"`
-		Enabled       bool       `json:"enabled"`
-		Locations     []Location `json:"locations"`
-		ManagedBy     string     `json:"managed_by"`
-		Container     string     `json:"container"`
-		Index         int        `json:"index"`
+		Kind           string     `json:"kind"`
+		Domains        []string   `json:"domains"`
+		Scheme         string     `json:"scheme"`
+		Host           string     `json:"host"`
+		Port           int        `json:"port"`
+		Certificate    string     `json:"certificate"`
+		SSLForced      bool       `json:"ssl_forced"`
+		HSTS           bool       `json:"hsts"`
+		HSTSSub        bool       `json:"hsts_subdomains"`
+		TrustProto     bool       `json:"trust_forwarded_proto"`
+		HTTP2          bool       `json:"http2"`
+		HTTP3          bool       `json:"http3"`
+		BlockExploits  bool       `json:"block_exploits"`
+		Caching        bool       `json:"caching"`
+		Websockets     bool       `json:"websockets"`
+		AccessLists    []int      `json:"access_lists"`
+		AccessListType string     `json:"access_list_type"`
+		Advanced       string     `json:"advanced"`
+		Locations      []Location `json:"locations"`
+		ManagedBy      string     `json:"managed_by"`
+		Container      string     `json:"container"`
+		Index          int        `json:"index"`
 	}{
-		Kind:          string(KindProxy),
-		Domains:       NormalizeDomains(h.DomainNames),
-		Scheme:        strings.ToLower(h.ForwardScheme),
-		Host:          strings.ToLower(h.ForwardHost),
-		Port:          h.ForwardPort,
-		Certificate:   h.CertificateID.String(),
-		SSLForced:     h.SSLForced,
-		HSTS:          h.HSTSEnabled,
-		HSTSSub:       h.HSTSSubdomains,
-		HTTP2:         h.HTTP2Support,
-		BlockExploits: h.BlockExploits,
-		Caching:       h.CachingEnabled,
-		Websockets:    h.AllowWebsocketUpgrade,
-		AccessList:    h.AccessListID,
-		Advanced:      strings.TrimSpace(h.AdvancedConfig),
-		Enabled:       bool(h.Enabled),
-		Locations:     h.Locations,
-		ManagedBy:     managedBy,
-		Container:     container,
-		Index:         index,
+		Kind:           string(KindProxy),
+		Domains:        NormalizeDomains(h.DomainNames),
+		Scheme:         strings.ToLower(h.ForwardScheme),
+		Host:           strings.ToLower(h.ForwardHost),
+		Port:           h.ForwardPort,
+		Certificate:    h.CertificateID.String(),
+		SSLForced:      h.SSLForced,
+		HSTS:           h.HSTSEnabled,
+		HSTSSub:        h.HSTSSubdomains,
+		TrustProto:     h.TrustForwardedProto,
+		HTTP2:          h.HTTP2Support,
+		HTTP3:          h.HTTP3Support,
+		BlockExploits:  h.BlockExploits,
+		Caching:        h.CachingEnabled,
+		Websockets:     h.AllowWebsocketUpgrade,
+		AccessLists:    idList(ids),
+		AccessListType: listType,
+		Advanced:       strings.TrimSpace(h.AdvancedConfig),
+		Locations:      canonicalLocations(h.Locations),
+		ManagedBy:      managedBy,
+		Container:      container,
+		Index:          index,
 	})
 }
 
@@ -201,10 +255,11 @@ func (h *ProxyHost) Fingerprint() string {
 
 // RedirectionHost mirrors `/api/nginx/redirection-hosts`.
 type RedirectionHost struct {
-	ID                int           `json:"id,omitempty"`
-	CreatedOn         string        `json:"created_on,omitempty"`
-	ModifiedOn        string        `json:"modified_on,omitempty"`
-	OwnerUserID       int           `json:"owner_user_id,omitempty"`
+	ID          int    `json:"id,omitempty"`
+	CreatedOn   string `json:"created_on,omitempty"`
+	ModifiedOn  string `json:"modified_on,omitempty"`
+	OwnerUserID int    `json:"owner_user_id,omitempty"`
+
 	DomainNames       []string      `json:"domain_names"`
 	ForwardScheme     string        `json:"forward_scheme"`
 	ForwardDomainName string        `json:"forward_domain_name"`
@@ -215,9 +270,10 @@ type RedirectionHost struct {
 	HSTSEnabled       bool          `json:"hsts_enabled"`
 	HSTSSubdomains    bool          `json:"hsts_subdomains"`
 	HTTP2Support      bool          `json:"http2_support"`
+	HTTP3Support      bool          `json:"npmplus_http3_support"`
 	BlockExploits     bool          `json:"block_exploits"`
 	AdvancedConfig    string        `json:"advanced_config"`
-	Enabled           Flag          `json:"enabled,omitempty"`
+	Enabled           Flag          `json:"enabled"`
 	Meta              Meta          `json:"meta"`
 }
 
@@ -235,6 +291,12 @@ func (h *RedirectionHost) ResourceKey() string { return primaryDomain(h.DomainNa
 
 // ResourceMeta implements Resource.
 func (h *RedirectionHost) ResourceMeta() Meta { return h.Meta }
+
+// IsEnabled implements Resource.
+func (h *RedirectionHost) IsEnabled() bool { return bool(h.Enabled) }
+
+// SetEnabled implements Resource.
+func (h *RedirectionHost) SetEnabled(enabled bool) { h.Enabled = Flag(enabled) }
 
 // Describe implements Resource.
 func (h *RedirectionHost) Describe() string {
@@ -267,9 +329,9 @@ func (h *RedirectionHost) Fingerprint() string {
 		HSTS          bool     `json:"hsts"`
 		HSTSSub       bool     `json:"hsts_subdomains"`
 		HTTP2         bool     `json:"http2"`
+		HTTP3         bool     `json:"http3"`
 		BlockExploits bool     `json:"block_exploits"`
 		Advanced      string   `json:"advanced"`
-		Enabled       bool     `json:"enabled"`
 		ManagedBy     string   `json:"managed_by"`
 		Container     string   `json:"container"`
 		Index         int      `json:"index"`
@@ -285,9 +347,9 @@ func (h *RedirectionHost) Fingerprint() string {
 		HSTS:          h.HSTSEnabled,
 		HSTSSub:       h.HSTSSubdomains,
 		HTTP2:         h.HTTP2Support,
+		HTTP3:         h.HTTP3Support,
 		BlockExploits: h.BlockExploits,
 		Advanced:      strings.TrimSpace(h.AdvancedConfig),
-		Enabled:       bool(h.Enabled),
 		ManagedBy:     managedBy,
 		Container:     container,
 		Index:         index,
@@ -301,17 +363,18 @@ func (h *RedirectionHost) Fingerprint() string {
 // Stream mirrors `/api/nginx/streams`. Streams have no domain names: their
 // identity is the incoming port.
 type Stream struct {
-	ID             int           `json:"id,omitempty"`
-	CreatedOn      string        `json:"created_on,omitempty"`
-	ModifiedOn     string        `json:"modified_on,omitempty"`
-	OwnerUserID    int           `json:"owner_user_id,omitempty"`
-	IncomingPort   int           `json:"incoming_port"`
+	ID          int    `json:"id,omitempty"`
+	CreatedOn   string `json:"created_on,omitempty"`
+	ModifiedOn  string `json:"modified_on,omitempty"`
+	OwnerUserID int    `json:"owner_user_id,omitempty"`
+
+	IncomingPort   Port          `json:"incoming_port"`
 	ForwardingHost string        `json:"forwarding_host"`
-	ForwardingPort int           `json:"forwarding_port"`
+	ForwardingPort Port          `json:"forwarding_port"`
 	TCPForwarding  bool          `json:"tcp_forwarding"`
 	UDPForwarding  bool          `json:"udp_forwarding"`
 	CertificateID  CertificateID `json:"certificate_id"`
-	Enabled        Flag          `json:"enabled,omitempty"`
+	Enabled        Flag          `json:"enabled"`
 	Meta           Meta          `json:"meta"`
 }
 
@@ -326,10 +389,16 @@ func (s *Stream) SetResourceID(id int) { s.ID = id }
 
 // ResourceKey implements Resource: NPM allows exactly one stream per
 // incoming port, which makes the port the natural identity.
-func (s *Stream) ResourceKey() string { return strconv.Itoa(s.IncomingPort) }
+func (s *Stream) ResourceKey() string { return s.IncomingPort.String() }
 
 // ResourceMeta implements Resource.
 func (s *Stream) ResourceMeta() Meta { return s.Meta }
+
+// IsEnabled implements Resource.
+func (s *Stream) IsEnabled() bool { return bool(s.Enabled) }
+
+// SetEnabled implements Resource.
+func (s *Stream) SetEnabled(enabled bool) { s.Enabled = Flag(enabled) }
 
 // Describe implements Resource.
 func (s *Stream) Describe() string {
@@ -340,7 +409,7 @@ func (s *Stream) Describe() string {
 	if s.UDPForwarding {
 		protocols = append(protocols, "udp")
 	}
-	return fmt.Sprintf(":%d → %s:%d (%s)",
+	return fmt.Sprintf(":%s → %s:%s (%s)",
 		s.IncomingPort, s.ForwardingHost, s.ForwardingPort, strings.Join(protocols, "+"))
 }
 
@@ -358,25 +427,23 @@ func (s *Stream) Fingerprint() string {
 	managedBy, container, index := ownership(s.Meta)
 	return fingerprint(struct {
 		Kind         string `json:"kind"`
-		IncomingPort int    `json:"incoming_port"`
+		IncomingPort string `json:"incoming_port"`
 		Host         string `json:"host"`
-		Port         int    `json:"port"`
+		Port         string `json:"port"`
 		TCP          bool   `json:"tcp"`
 		UDP          bool   `json:"udp"`
 		Certificate  string `json:"certificate"`
-		Enabled      bool   `json:"enabled"`
 		ManagedBy    string `json:"managed_by"`
 		Container    string `json:"container"`
 		Index        int    `json:"index"`
 	}{
 		Kind:         string(KindStream),
-		IncomingPort: s.IncomingPort,
+		IncomingPort: s.IncomingPort.String(),
 		Host:         strings.ToLower(s.ForwardingHost),
-		Port:         s.ForwardingPort,
+		Port:         s.ForwardingPort.String(),
 		TCP:          s.TCPForwarding,
 		UDP:          s.UDPForwarding,
 		Certificate:  s.CertificateID.String(),
-		Enabled:      bool(s.Enabled),
 		ManagedBy:    managedBy,
 		Container:    container,
 		Index:        index,
@@ -389,18 +456,20 @@ func (s *Stream) Fingerprint() string {
 
 // DeadHost mirrors `/api/nginx/dead-hosts`, the "404 host" in the NPM UI.
 type DeadHost struct {
-	ID             int           `json:"id,omitempty"`
-	CreatedOn      string        `json:"created_on,omitempty"`
-	ModifiedOn     string        `json:"modified_on,omitempty"`
-	OwnerUserID    int           `json:"owner_user_id,omitempty"`
+	ID          int    `json:"id,omitempty"`
+	CreatedOn   string `json:"created_on,omitempty"`
+	ModifiedOn  string `json:"modified_on,omitempty"`
+	OwnerUserID int    `json:"owner_user_id,omitempty"`
+
 	DomainNames    []string      `json:"domain_names"`
 	CertificateID  CertificateID `json:"certificate_id"`
 	SSLForced      bool          `json:"ssl_forced"`
 	HSTSEnabled    bool          `json:"hsts_enabled"`
 	HSTSSubdomains bool          `json:"hsts_subdomains"`
 	HTTP2Support   bool          `json:"http2_support"`
+	HTTP3Support   bool          `json:"npmplus_http3_support"`
 	AdvancedConfig string        `json:"advanced_config"`
-	Enabled        Flag          `json:"enabled,omitempty"`
+	Enabled        Flag          `json:"enabled"`
 	Meta           Meta          `json:"meta"`
 }
 
@@ -418,6 +487,12 @@ func (h *DeadHost) ResourceKey() string { return primaryDomain(h.DomainNames) }
 
 // ResourceMeta implements Resource.
 func (h *DeadHost) ResourceMeta() Meta { return h.Meta }
+
+// IsEnabled implements Resource.
+func (h *DeadHost) IsEnabled() bool { return bool(h.Enabled) }
+
+// SetEnabled implements Resource.
+func (h *DeadHost) SetEnabled(enabled bool) { h.Enabled = Flag(enabled) }
 
 // Describe implements Resource.
 func (h *DeadHost) Describe() string {
@@ -444,8 +519,8 @@ func (h *DeadHost) Fingerprint() string {
 		HSTS        bool     `json:"hsts"`
 		HSTSSub     bool     `json:"hsts_subdomains"`
 		HTTP2       bool     `json:"http2"`
+		HTTP3       bool     `json:"http3"`
 		Advanced    string   `json:"advanced"`
-		Enabled     bool     `json:"enabled"`
 		ManagedBy   string   `json:"managed_by"`
 		Container   string   `json:"container"`
 		Index       int      `json:"index"`
@@ -457,8 +532,8 @@ func (h *DeadHost) Fingerprint() string {
 		HSTS:        h.HSTSEnabled,
 		HSTSSub:     h.HSTSSubdomains,
 		HTTP2:       h.HTTP2Support,
+		HTTP3:       h.HTTP3Support,
 		Advanced:    strings.TrimSpace(h.AdvancedConfig),
-		Enabled:     bool(h.Enabled),
 		ManagedBy:   managedBy,
 		Container:   container,
 		Index:       index,
@@ -485,6 +560,57 @@ func adoptCertificate(desired *CertificateID, live CertificateID) {
 	if desired.New && live.ID > 0 {
 		*desired = live
 	}
+}
+
+// normalizeIDs sorts and de-duplicates access list ids and drops the
+// placeholder 0, so two orderings of the same set hash identically.
+func normalizeIDs(ids []int) []int {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[int]struct{}, len(ids))
+	out := make([]int, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	sort.Ints(out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// canonicalLocations normalises location blocks for the fingerprint so the hash
+// does not depend on how the server filled in the optional fields. NPMplus
+// drops the id list of any location that is not "custom"
+// (internalProxyHostAccessList.cleanAccessListTypes), so this does too -
+// otherwise a location carrying both would never converge.
+func canonicalLocations(locations []Location) []Location {
+	out := make([]Location, 0, len(locations))
+	for _, l := range locations {
+		listType := l.accessListType()
+		var ids []int
+		if listType == AccessListCustom {
+			ids = normalizeIDs(l.AccessListIDs)
+		}
+		out = append(out, Location{
+			Path:           strings.TrimSpace(l.Path),
+			AdvancedConfig: strings.TrimSpace(l.AdvancedConfig),
+			ForwardScheme:  strings.ToLower(l.ForwardScheme),
+			ForwardHost:    strings.ToLower(l.ForwardHost),
+			ForwardPort:    l.ForwardPort,
+			AccessListIDs:  ids,
+			AccessListType: listType,
+		})
+	}
+	return out
 }
 
 // Compile-time proof that every resource satisfies the interface.
