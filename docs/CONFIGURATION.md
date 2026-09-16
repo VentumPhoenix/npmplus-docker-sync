@@ -26,6 +26,25 @@ Authentication mode is detected automatically:
 Sessions are refreshed five minutes before the reported expiry, and any `401`
 or `403` triggers one transparent re-login plus retry.
 
+## API flavour
+
+| Variable | Default | Description |
+|---|---|---|
+| `NPM_FLAVOUR` | `auto` | `auto`, `npmplus` or `npm` (alias `NPM_FLAVOR`). |
+
+Nginx Proxy Manager and NPMplus share their endpoints but validate request
+bodies against different JSON schemas, both with `additionalProperties: false`.
+A body built for the wrong one is rejected in full:
+
+```
+400 data must NOT have additional properties
+```
+
+With `auto` the flavour is probed once after login: an existing proxy host is
+inspected for `npmplus_access_list_ids` (NPMplus) or `access_list_id`
+(upstream NPM), and if the collection is empty the `version` object of
+`GET /api/` decides. Pin it explicitly if the probe ever guesses wrong.
+
 ## Connecting to Docker
 
 | Variable | Default | Description |
@@ -33,7 +52,8 @@ or `403` triggers one transparent re-login plus retry.
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | `unix://`, `tcp://`, `npipe://` or `ssh://`. |
 | `DOCKER_CERT_PATH` | — | TLS material for a remote daemon (standard Docker variable). |
 | `DOCKER_TLS_VERIFY` | — | Standard Docker variable. |
-| `NPM_NETWORK` | — | Docker network preferred when resolving upstream IPs (alias `NPM_DOCKER_NETWORK`). |
+| `NPM_NETWORK` | — | The Docker network upstream IPs are taken from (alias `NPM_DOCKER_NETWORK`). |
+| `NPM_NETWORK_STRICT` | `true` | With `NPM_NETWORK` set, skip a container that is not attached to it instead of falling back to another network. |
 | `RESOLVE_CONTAINER_IP` | `true` | Use container IPs instead of names as upstream hosts. |
 
 Use `tcp://docker-socket-proxy:2375` with a filtered socket proxy — see
@@ -89,10 +109,26 @@ restart of the stack. Deletion resumes on the next start, or at the next
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 | `LOG_FORMAT` | `text` | `text` (human) or `json` (`log/slog`). |
 | `HEALTH_ADDR` | — | e.g. `:8080` to expose `/healthz` and `/readyz`. |
+| `LOG_PAYLOADS` | `false` | Mirror full API request bodies into the debug log (alias `NPM_DEBUG_PAYLOADS`). |
 
-`/readyz` returns `503` until the first successful reconcile and whenever the
-most recent one failed, and its body reports how many resources are managed
-across all kinds. That makes it a good compose/Kubernetes probe.
+`/readyz` returns `503` until the first reconcile and whenever Docker or the
+NPM API is unreachable. A resource the API *rejected* does not make the process
+unready — the other hosts are still in sync and a restart would not help — so
+those are reported as a counter in the body instead:
+
+```
+ok: 12 managed hosts, 1 failed, last sync 2026-09-16T13:26:35Z
+```
+
+That makes it a good compose/Kubernetes probe: it flips only when a dependency
+is actually gone.
+
+At `LOG_LEVEL=debug` every request is logged with its top-level field names,
+and a rejected one additionally with the status and the API's message — which
+is what an `additionalProperties: false` rejection otherwise withholds.
+`LOG_PAYLOADS=true` adds the complete body; values of credential-looking keys
+(`*credential*`, `*secret*`, `*password*`, `*token*`, `*api_key*`) are replaced
+with `***`, but host names and raw nginx config are not, so it stays opt-in.
 
 The runtime image is `FROM scratch` and contains no shell, `curl` or `wget`, so
 the binary ships its own probe as a subcommand:

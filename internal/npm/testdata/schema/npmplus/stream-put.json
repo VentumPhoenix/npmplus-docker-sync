@@ -1,0 +1,65 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"additionalProperties": false,
+	"minProperties": 1,
+	"properties": {
+		"certificate_id": {
+			"description": "Certificate ID",
+			"example": 5,
+			"minimum": 0,
+			"type": "integer"
+		},
+		"forwarding_host": {
+			"example": "127.0.0.1",
+			"minLength": 1,
+			"type": "string"
+		},
+		"forwarding_port": {
+			"example": 80,
+			"maxLength": 12,
+			"pattern": "^([0-9]{0,5}|\\$server_port)$",
+			"type": "string"
+		},
+		"incoming_port": {
+			"example": 9090,
+			"maxLength": 11,
+			"pattern": "^([0-9]{1,5}$|[0-9]{1,5}-[0-9]{1,5}$)",
+			"type": "string"
+		},
+		"meta": {
+			"example": {},
+			"type": "object"
+		},
+		"npmplus_advanced_config": {
+			"example": "",
+			"type": "string"
+		},
+		"npmplus_description": {
+			"example": "MariaDB database connection",
+			"maxLength": 255,
+			"type": "string"
+		},
+		"npmplus_proxy_protocol_forwarding": {
+			"enum": [
+				0,
+				1,
+				2
+			],
+			"example": 0,
+			"type": "integer"
+		},
+		"npmplus_proxy_tls": {
+			"example": false,
+			"type": "boolean"
+		},
+		"tcp_forwarding": {
+			"example": true,
+			"type": "boolean"
+		},
+		"udp_forwarding": {
+			"example": false,
+			"type": "boolean"
+		}
+	},
+	"type": "object"
+}

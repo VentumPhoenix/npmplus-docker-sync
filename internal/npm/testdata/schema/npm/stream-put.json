@@ -1,0 +1,67 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"additionalProperties": false,
+	"minProperties": 1,
+	"properties": {
+		"certificate_id": {
+			"anyOf": [
+				{
+					"example": 5,
+					"minimum": 0,
+					"type": "integer"
+				},
+				{
+					"example": "new",
+					"pattern": "^new$",
+					"type": "string"
+				}
+			],
+			"description": "Certificate ID",
+			"example": 5
+		},
+		"forwarding_host": {
+			"anyOf": [
+				{
+					"description": "Domain Name",
+					"example": "example.com",
+					"pattern": "^(?:[^.*]+\\.?)+[^.]$",
+					"type": "string"
+				},
+				{
+					"format": "^[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}$",
+					"type": "string"
+				},
+				{
+					"format": "ipv6",
+					"type": "string"
+				}
+			],
+			"example": "example.com"
+		},
+		"forwarding_port": {
+			"example": 80,
+			"maximum": 65535,
+			"minimum": 1,
+			"type": "integer"
+		},
+		"incoming_port": {
+			"example": 9090,
+			"maximum": 65535,
+			"minimum": 1,
+			"type": "integer"
+		},
+		"meta": {
+			"example": {},
+			"type": "object"
+		},
+		"tcp_forwarding": {
+			"example": true,
+			"type": "boolean"
+		},
+		"udp_forwarding": {
+			"example": false,
+			"type": "boolean"
+		}
+	},
+	"type": "object"
+}

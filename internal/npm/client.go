@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +59,10 @@ const refreshWindow = 5 * time.Minute
 // maxErrorBody caps how much of an error response body is kept for logging.
 const maxErrorBody = 4 << 10
 
+// drainLimit caps how much of a response body is read before closing it, so
+// the connection can be reused without an unbounded read.
+const drainLimit = 64 << 10
+
 // Client talks to the NPM/NPMplus REST API. It is safe for concurrent use.
 type Client struct {
 	baseURL   *url.URL
@@ -68,10 +73,15 @@ type Client struct {
 	log       *slog.Logger
 	now       func() time.Time
 
+	// logPayloads mirrors full request bodies into the debug log. Off by
+	// default: the meta object can carry DNS provider credentials.
+	logPayloads bool
+
 	mu      sync.RWMutex
 	mode    AuthMode
 	token   string
 	expires time.Time
+	flavour Flavour
 
 	loginMu sync.Mutex // serialises (re-)logins
 }
@@ -121,6 +131,13 @@ func WithLogger(l *slog.Logger) Option {
 // WithUserAgent overrides the User-Agent header.
 func WithUserAgent(ua string) Option {
 	return func(c *Client) { c.userAgent = ua }
+}
+
+// WithPayloadLogging mirrors complete request bodies into the debug log.
+// Values of credential-looking meta keys are redacted, but the bodies still
+// contain host names and advanced nginx config, so this stays opt-in.
+func WithPayloadLogging(enabled bool) Option {
+	return func(c *Client) { c.logPayloads = enabled }
 }
 
 // WithClock injects a time source (tests).
@@ -207,11 +224,14 @@ func (c *Client) login(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("npm: login request: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	defer drainAndClose(resp.Body)
+	defer func() {
+		// Draining before closing lets the connection go back to the pool.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, drainLimit))
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return c.statusError(resp, "login")
+		return c.statusError(resp, http.MethodPost, "/api/tokens")
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -394,13 +414,20 @@ func (c *Client) List(ctx context.Context, kind Kind) ([]Resource, error) {
 }
 
 // Create adds a resource and returns the version NPM stored.
+//
+// Only the flavour specific request payload is sent, never the response model:
+// both APIs reject unknown properties outright.
 func (c *Client) Create(ctx context.Context, resource Resource) (Resource, error) {
 	kind := resource.Kind()
 	created := newResource(kind)
 	if created == nil {
 		return nil, fmt.Errorf("npm: unknown resource kind %q", kind)
 	}
-	if err := c.do(ctx, http.MethodPost, kind.Path(), resource, created); err != nil {
+	payload, err := c.payloadFor(resource)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.do(ctx, http.MethodPost, kind.Path(), payload, created); err != nil {
 		return nil, err
 	}
 	return created, nil
@@ -413,11 +440,60 @@ func (c *Client) Update(ctx context.Context, id int, resource Resource) (Resourc
 	if updated == nil {
 		return nil, fmt.Errorf("npm: unknown resource kind %q", kind)
 	}
+	payload, err := c.payloadFor(resource)
+	if err != nil {
+		return nil, err
+	}
 	path := fmt.Sprintf("%s/%d", kind.Path(), id)
-	if err := c.do(ctx, http.MethodPut, path, resource, updated); err != nil {
+	if err := c.do(ctx, http.MethodPut, path, payload, updated); err != nil {
 		return nil, err
 	}
 	return updated, nil
+}
+
+// payloadFor renders the request body for the flavour in use, defaulting to
+// NPMplus when detection has not run.
+func (c *Client) payloadFor(resource Resource) (any, error) {
+	flavour := c.Flavour()
+	if flavour == FlavourAuto {
+		flavour = FlavourNPMplus
+	}
+	payload, err := resource.Payload(flavour)
+	if err != nil {
+		return nil, fmt.Errorf("npm: build %s payload for %s: %w", resource.Kind().Label(), flavour, err)
+	}
+	return payload, nil
+}
+
+// SetEnabled switches a resource on or off. Both flavours refuse `enabled` in
+// a create/update body and expose dedicated endpoints instead, which answer
+// 400 "Host is already enabled" when the state already matches - that is
+// treated as success.
+func (c *Client) SetEnabled(ctx context.Context, kind Kind, id int, enabled bool) error {
+	if !kind.Valid() {
+		return fmt.Errorf("npm: unknown resource kind %q", kind)
+	}
+	action := "disable"
+	if enabled {
+		action = "enable"
+	}
+	path := fmt.Sprintf("%s/%d/%s", kind.Path(), id, action)
+	err := c.do(ctx, http.MethodPost, path, nil, nil)
+	if err != nil && isAlreadyInState(err) {
+		return nil
+	}
+	return err
+}
+
+// isAlreadyInState recognises the 400 both flavours answer when the resource
+// is already in the requested state.
+func isAlreadyInState(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest {
+		return false
+	}
+	msg := strings.ToLower(apiErr.Message)
+	return strings.Contains(msg, "already enabled") || strings.Contains(msg, "already disabled")
 }
 
 // Delete removes a resource of the given kind.
@@ -533,57 +609,76 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 			return fmt.Errorf("npm: encode request body: %w", err)
 		}
 	}
+	c.logRequest(method, path, payload)
 
 	for attempt := 0; attempt < 2; attempt++ {
-		var body io.Reader
-		if payload != nil {
-			body = bytes.NewReader(payload)
-		}
-		req, err := c.newRequest(ctx, method, path, body)
-		if err != nil {
+		staleSession, err := c.attempt(ctx, method, path, payload, out)
+		if !staleSession {
 			return err
 		}
-		c.applyAuth(req)
-
-		resp, err := c.hc.Do(req)
-		if err != nil {
-			return fmt.Errorf("npm: %s %s: %w", method, path, err)
-		}
-		defer func() { _ = resp.Body.Close() }()
-
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			drainAndClose(resp.Body)
-			if attempt == 1 {
-				return &APIError{Status: resp.StatusCode, Method: method, Path: path, Message: "unauthorized"}
-			}
-			c.invalidate()
-			c.loginMu.Lock()
-			err := c.login(ctx)
-			c.loginMu.Unlock()
-			if err != nil {
-				return err
-			}
-			continue
-		}
-
-		if resp.StatusCode < 200 || resp.StatusCode > 299 {
-			err := c.statusError(resp, method+" "+path)
-			drainAndClose(resp.Body)
+		if attempt == 1 {
 			return err
 		}
-
-		if out == nil {
-			drainAndClose(resp.Body)
-			return nil
+		// The session expired or was revoked (NPM restarts invalidate them):
+		// log in once more and replay the request.
+		c.invalidate()
+		c.loginMu.Lock()
+		loginErr := c.login(ctx)
+		c.loginMu.Unlock()
+		if loginErr != nil {
+			return loginErr
 		}
-		decodeErr := json.NewDecoder(resp.Body).Decode(out)
-		drainAndClose(resp.Body)
-		if decodeErr != nil {
-			return fmt.Errorf("npm: decode %s %s response: %w", method, path, decodeErr)
-		}
-		return nil
 	}
 	return fmt.Errorf("npm: %s %s: authentication retry exhausted", method, path)
+}
+
+// attempt performs exactly one request and owns its response body. It reports
+// whether the failure was a stale session, which is the only case do() retries.
+func (c *Client) attempt(ctx context.Context, method, path string, payload []byte, out any) (staleSession bool, err error) {
+	var body io.Reader
+	if payload != nil {
+		body = bytes.NewReader(payload)
+	}
+	req, err := c.newRequest(ctx, method, path, body)
+	if err != nil {
+		return false, err
+	}
+	c.applyAuth(req)
+
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("npm: %s %s: %w", method, path, err)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, drainLimit))
+		_ = resp.Body.Close()
+	}()
+
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
+		return true, &APIError{Status: resp.StatusCode, Method: method, Path: path, Message: "unauthorized"}
+
+	case resp.StatusCode < 200 || resp.StatusCode > 299:
+		apiErr := c.statusError(resp, method, path)
+		// A schema rejection names neither the offending property nor the body
+		// that caused it, so pair the two up while we still have both.
+		c.log.Debug("npm api rejected a request",
+			slog.String("method", method),
+			slog.String("path", path),
+			slog.Int("status", resp.StatusCode),
+			slog.String("flavour", c.Flavour().String()),
+			slog.String("request_fields", strings.Join(payloadKeys(payload), ",")),
+			slog.String("error", apiErr.Error()))
+		return false, apiErr
+	}
+
+	if out == nil {
+		return false, nil
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return false, fmt.Errorf("npm: decode %s %s response: %w", method, path, err)
+	}
+	return false, nil
 }
 
 func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
@@ -618,14 +713,99 @@ func (c *Client) invalidate() {
 	c.mu.Unlock()
 }
 
-func (c *Client) statusError(resp *http.Response, op string) error {
+func (c *Client) statusError(resp *http.Response, method, path string) error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-	msg := strings.TrimSpace(string(raw))
+	body := strings.TrimSpace(string(raw))
+	msg := body
 	var envelope apiError
 	if json.Unmarshal(raw, &envelope) == nil && envelope.Error.Message != "" {
 		msg = envelope.Error.Message
 	}
-	return &APIError{Status: resp.StatusCode, Method: op, Message: msg}
+	return &APIError{Status: resp.StatusCode, Method: method, Path: path, Message: msg, Body: body}
+}
+
+// logRequest records what is about to be sent. The field names alone are
+// enough to spot a schema mismatch, and unlike the values they cannot leak a
+// credential, so they are logged unconditionally at debug level.
+func (c *Client) logRequest(method, path string, payload []byte) {
+	if len(payload) == 0 || !c.log.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	attrs := []any{
+		slog.String("method", method),
+		slog.String("path", path),
+		slog.String("flavour", c.Flavour().String()),
+		slog.Int("bytes", len(payload)),
+		slog.String("fields", strings.Join(payloadKeys(payload), ",")),
+	}
+	if c.logPayloads {
+		attrs = append(attrs, slog.String("body", string(redactPayload(payload))))
+	}
+	c.log.Debug("npm api request", attrs...)
+}
+
+// payloadKeys lists the top level properties of a JSON request body, sorted.
+// This is exactly the information an `additionalProperties: false` rejection
+// withholds.
+func payloadKeys(payload []byte) []string {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(payload, &fields) != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// secretish matches meta keys whose value must never reach a log sink; the
+// Let's Encrypt DNS challenge stores provider API tokens in `meta`.
+func secretish(key string) bool {
+	key = strings.ToLower(key)
+	for _, needle := range []string{"credential", "secret", "password", "token", "api_key", "apikey"} {
+		if strings.Contains(key, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactPayload replaces credential-looking values anywhere in the body.
+func redactPayload(payload []byte) []byte {
+	var decoded any
+	if json.Unmarshal(payload, &decoded) != nil {
+		return []byte(`"<unparseable>"`)
+	}
+	redacted, err := json.Marshal(redactValue(decoded))
+	if err != nil {
+		return []byte(`"<unmarshalable>"`)
+	}
+	return redacted
+}
+
+func redactValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, nested := range typed {
+			if secretish(key) {
+				out[key] = "***"
+				continue
+			}
+			out[key] = redactValue(nested)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, nested := range typed {
+			out = append(out, redactValue(nested))
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 // APIError is returned for non-2xx API responses.
@@ -634,6 +814,9 @@ type APIError struct {
 	Method  string
 	Path    string
 	Message string
+	// Body is the raw response body (truncated), kept for diagnostics when
+	// the API returns something other than its usual error envelope.
+	Body string
 }
 
 // Error implements error.
@@ -649,12 +832,4 @@ func (e *APIError) Error() string {
 func IsNotFound(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound
-}
-
-func drainAndClose(body io.ReadCloser) {
-	if body == nil {
-		return
-	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(body, 64<<10))
-	_ = body.Close()
 }

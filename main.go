@@ -87,9 +87,6 @@ func run() error {
 		Prefix:    cfg.LabelPrefix,
 		ResolveIP: cfg.ResolveIP,
 	}
-	if cfg.NPMNetwork != "" {
-		parseOpts.PreferNetworks = append(parseOpts.PreferNetworks, cfg.NPMNetwork)
-	}
 
 	listener := docker.NewListener(dockerClient, parseOpts, log.With(slog.String("component", "docker")))
 	if err := listener.Ping(ctx); err != nil {
@@ -97,27 +94,46 @@ func run() error {
 	}
 	log.Info("connected to docker", slog.String("host", cfg.DockerHost))
 
-	// Upstream IPs are preferred from networks this container shares with the
-	// target, because those are the ones NPM can reach too.
-	if cfg.ResolveIP {
-		parseOpts.PreferNetworks = append(parseOpts.PreferNetworks, listener.DiscoverOwnNetworks(ctx)...)
-		listener = docker.NewListener(dockerClient, parseOpts, log.With(slog.String("component", "docker")))
-		log.Debug("upstream host resolution",
-			slog.Bool("resolve_ip", cfg.ResolveIP),
-			slog.String("preferred_networks", strings.Join(parseOpts.PreferNetworks, ",")))
+	// Which network an upstream address is taken from decides whether NPM can
+	// reach it at all. When the operator named one, that is the only valid
+	// answer: anything else is an address on a network NPM does not share, and
+	// a proxy host pointing there is worse than none. Without NPM_NETWORK the
+	// networks this container is on are the best available guess.
+	ownNetworks := listener.DiscoverOwnNetworks(ctx) // also learns our container id
+	switch {
+	case cfg.NPMNetwork != "":
+		parseOpts.PreferNetworks = []string{cfg.NPMNetwork}
+		parseOpts.StrictNetworks = cfg.StrictNetwork
+	default:
+		parseOpts.PreferNetworks = docker.DedupeNetworks(ownNetworks)
 	}
+	selfID := listener.SelfID()
+	listener = docker.NewListener(dockerClient, parseOpts, log.With(slog.String("component", "docker")))
+	listener.SetSelfID(selfID)
+	log.Debug("upstream host resolution",
+		slog.Bool("resolve_ip", cfg.ResolveIP),
+		slog.Bool("strict_networks", parseOpts.StrictNetworks),
+		slog.String("preferred_networks", strings.Join(parseOpts.PreferNetworks, ",")))
 
 	npmClient, err := npm.New(cfg.NPMURL, cfg.NPMIdentity, cfg.NPMSecret,
 		npm.WithTimeout(cfg.NPMTimeout),
 		npm.WithInsecureSkipVerify(cfg.NPMInsecureSkipVerify),
 		npm.WithUserAgent("npmplus-docker-sync/"+version),
 		npm.WithLogger(log.With(slog.String("component", "npm"))),
+		npm.WithFlavour(cfg.NPMFlavour),
+		npm.WithPayloadLogging(cfg.LogPayloads),
 	)
 	if err != nil {
 		return err
 	}
 	if err := loginWithRetry(ctx, npmClient, log); err != nil {
 		return err
+	}
+	// NPM and NPMplus disagree about which properties a write payload may
+	// carry, and both reject the other dialect outright, so settle this before
+	// the first reconcile rather than on every failing request.
+	if _, err := npmClient.DetectFlavour(ctx); err != nil {
+		return fmt.Errorf("cannot determine the npm api flavour (pin it with NPM_FLAVOUR): %w", err)
 	}
 
 	worker := syncer.NewWorker(npmClient, listener, syncer.Options{
@@ -220,18 +236,23 @@ func startHealthServer(cfg *config.Config, worker *syncer.Worker, log *slog.Logg
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok\n"))
 	})
+	// Readiness tracks the dependencies, not the workload: a single resource
+	// NPM rejected (a typo in one label, say) leaves every other host in sync,
+	// and restarting the container would not fix it. Those are reported as a
+	// counter in the body instead.
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		lastRun, managed, err := worker.Status()
+		status := worker.Status()
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		switch {
-		case lastRun.IsZero():
+		case status.LastRun.IsZero():
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte("no reconciliation yet\n"))
-		case err != nil:
+		case status.Err != nil:
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = fmt.Fprintf(w, "last reconciliation failed: %v\n", err)
+			_, _ = fmt.Fprintf(w, "docker or the npm api is unreachable: %v\n", status.Err)
 		default:
-			_, _ = fmt.Fprintf(w, "ok: %d managed hosts, last sync %s\n", managed, lastRun.UTC().Format(time.RFC3339))
+			_, _ = fmt.Fprintf(w, "ok: %d managed hosts, %d failed, last sync %s\n",
+				status.Managed, status.Failed, status.LastRun.UTC().Format(time.RFC3339))
 		}
 	})
 
@@ -322,11 +343,13 @@ Required environment:
   NPM_SECRET      admin password (or NPM_SECRET_FILE for Docker secrets)
 
 Optional environment:
+  NPM_FLAVOUR            api dialect: auto (default), npmplus or npm
   DOCKER_HOST            unix:///var/run/docker.sock (default) or tcp://docker-socket-proxy:2375
   LABEL_PREFIX           label namespace (default "npm")
   SYNC_KINDS             resource types to manage (default proxy,redirect,stream,404)
   RESOLVE_CONTAINER_IP   use the container IP as upstream host (default true)
-  NPM_NETWORK            docker network to prefer when resolving that IP
+  NPM_NETWORK            the docker network that IP is taken from
+  NPM_NETWORK_STRICT     skip containers that are not on NPM_NETWORK (default true)
   DEBOUNCE_INTERVAL      quiet period after an event burst (default 3s)
   DEBOUNCE_MAX_WAIT      hard cap for a burst (default 30s)
   RESYNC_INTERVAL        periodic full reconcile (default 5m, 0 disables)
@@ -336,6 +359,7 @@ Optional environment:
   HEALTH_ADDR            expose /healthz and /readyz, e.g. :8080
   LOG_LEVEL              debug|info|warn|error (default info)
   LOG_FORMAT             text|json (default text)
+  LOG_PAYLOADS           log full API request bodies at debug level (default false)
 
 See https://github.com/VentumPhoenix/npmplus-docker-sync for the full documentation.
 `)

@@ -38,7 +38,8 @@ services:
       # 1: an admin UI on another port, behind an access list
       npm.1.proxy.host: "admin.demo.example.com"
       npm.1.proxy.port: "8080"
-      # npm.1.proxy.access_list_id: "2"
+      # npm.1.proxy.access_list_ids: "2"       # NPMplus accepts "2,5"
+      # npm.1.proxy.access_list_id: "2"        # single-id shorthand
 
       # 2: a TCP stream (NPM must publish this port itself)
       npm.2.stream.incoming_port: "5432"
@@ -51,6 +52,17 @@ services:
 
       # 4: park an unused domain on the 404 page
       npm.4.404.host: "parked.example.com"
+
+  # The proxy manager itself needs labels too: once this tool has created a
+  # host for it, removing the labels makes that host an orphan, and
+  # DELETE_ORPHANS=true would take down the admin UI with it.
+  #
+  # npmplus:
+  #   image: ghcr.io/zoeyvid/npmplus:<pin-a-version>   # not :latest
+  #   labels:
+  #     npm.enable: "true"
+  #     npm.proxy.host: "npm.example.com"
+  #     npm.proxy.port: "81"
 
 networks:
   npm:

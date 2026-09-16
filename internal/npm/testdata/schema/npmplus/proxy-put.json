@@ -1,0 +1,387 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"additionalProperties": false,
+	"minProperties": 1,
+	"properties": {
+		"advanced_config": {
+			"example": "",
+			"type": "string"
+		},
+		"allow_websocket_upgrade": {
+			"description": "This is always enabled. Your value will be ignored",
+			"example": true,
+			"type": "boolean"
+		},
+		"block_exploits": {
+			"description": "This is always disabled. Your value will be ignored",
+			"example": false,
+			"type": "boolean"
+		},
+		"caching_enabled": {
+			"description": "This is always disabled. Your value will be ignored",
+			"example": false,
+			"type": "boolean"
+		},
+		"certificate_id": {
+			"anyOf": [
+				{
+					"example": 5,
+					"minimum": 0,
+					"type": "integer"
+				},
+				{
+					"example": "new",
+					"pattern": "^new$",
+					"type": "string"
+				}
+			],
+			"description": "Certificate ID",
+			"example": 5
+		},
+		"domain_names": {
+			"description": "Domain Names array",
+			"example": [
+				"example.com",
+				"www.example.com"
+			],
+			"items": {
+				"minLength": 1,
+				"type": "string"
+			},
+			"maxItems": 99,
+			"minItems": 1,
+			"type": "array",
+			"uniqueItems": true
+		},
+		"forward_host": {
+			"example": "127.0.0.1",
+			"type": "string"
+		},
+		"forward_port": {
+			"example": 8080,
+			"maximum": 65535,
+			"minimum": 1,
+			"type": [
+				"integer",
+				"null"
+			]
+		},
+		"forward_scheme": {
+			"enum": [
+				"http",
+				"https",
+				"path",
+				"empty",
+				"grpc",
+				"grpcs"
+			],
+			"example": "http",
+			"type": "string"
+		},
+		"hsts_enabled": {
+			"description": "Is HSTS Enabled",
+			"example": true,
+			"type": "boolean"
+		},
+		"hsts_subdomains": {
+			"description": "Is HSTS applicable to all subdomains",
+			"example": true,
+			"type": "boolean"
+		},
+		"http2_support": {
+			"description": "HTTP2 Protocol Support",
+			"example": true,
+			"type": "boolean"
+		},
+		"locations": {
+			"example": [
+				{
+					"forward_host": "example.com",
+					"forward_port": 80,
+					"forward_scheme": "http",
+					"npmplus_access_list_ids": [
+						1,
+						2
+					],
+					"npmplus_access_list_type": "custom",
+					"path": "/app"
+				}
+			],
+			"items": {
+				"additionalProperties": false,
+				"properties": {
+					"advanced_config": {
+						"type": "string"
+					},
+					"allow_websocket_upgrade": {
+						"description": "This is always enabled. Your value will be ignored",
+						"example": true,
+						"type": "boolean"
+					},
+					"block_exploits": {
+						"description": "This is always disabled. Your value will be ignored",
+						"example": false,
+						"type": "boolean"
+					},
+					"caching_enabled": {
+						"description": "This is always disabled. Your value will be ignored",
+						"example": false,
+						"type": "boolean"
+					},
+					"forward_host": {
+						"example": "127.0.0.1",
+						"type": "string"
+					},
+					"forward_port": {
+						"example": 8080,
+						"maximum": 65535,
+						"minimum": 1,
+						"type": [
+							"integer",
+							"null"
+						]
+					},
+					"forward_scheme": {
+						"enum": [
+							"http",
+							"https",
+							"path",
+							"empty",
+							"grpc",
+							"grpcs"
+						],
+						"example": "http",
+						"type": "string"
+					},
+					"id": {
+						"type": [
+							"integer",
+							"null"
+						]
+					},
+					"location_type": {
+						"enum": [
+							"",
+							"@",
+							"= ",
+							"~ ",
+							"~* ",
+							"^~ "
+						],
+						"type": "string"
+					},
+					"npmplus_access_list_ids": {
+						"items": {
+							"minimum": 1,
+							"type": "integer"
+						},
+						"type": "array"
+					},
+					"npmplus_access_list_type": {
+						"enum": [
+							"global",
+							"public",
+							"custom"
+						],
+						"type": "string"
+					},
+					"npmplus_auth_request": {
+						"enum": [
+							"none",
+							"anubis",
+							"tinyauth",
+							"oauth2proxy",
+							"voidauth",
+							"authelia",
+							"authentik",
+							"authentik-send-basic-auth"
+						],
+						"example": "none",
+						"type": "string"
+					},
+					"npmplus_auth_request_upstream": {
+						"example": "",
+						"type": "string"
+					},
+					"npmplus_crowdsec_appsec": {
+						"description": "Disable Crowdsec Appsec",
+						"example": false,
+						"type": "boolean"
+					},
+					"npmplus_disable_uri_sanitisation": {
+						"description": "This just exists so that old custom locations don't break",
+						"example": false,
+						"type": "boolean"
+					},
+					"npmplus_enabled": {
+						"description": "Is Enabled",
+						"example": false,
+						"type": "boolean"
+					},
+					"npmplus_fancyindex": {
+						"description": "Enable fancyindex",
+						"example": false,
+						"type": "boolean"
+					},
+					"npmplus_fancyindex_upstream_compression": {
+						"description": "This just exists so that old custom locations don't break",
+						"example": false,
+						"type": "boolean"
+					},
+					"npmplus_location_config": {
+						"type": "string"
+					},
+					"npmplus_noindex": {
+						"description": "Send noindex header and block some user agents",
+						"example": false,
+						"type": "boolean"
+					},
+					"npmplus_proxy_request_buffering": {
+						"description": "Disable Request Buffering",
+						"example": false,
+						"type": "boolean"
+					},
+					"npmplus_proxy_response_buffering": {
+						"description": "Disable Response Buffering",
+						"example": false,
+						"type": "boolean"
+					},
+					"npmplus_spoof_host_header": {
+						"description": "This just exists so that old custom locations don't break",
+						"example": false,
+						"type": "boolean"
+					},
+					"npmplus_upstream_compression": {
+						"description": "Enable compression by upstream",
+						"example": false,
+						"type": "boolean"
+					},
+					"npmplus_x_frame_options": {
+						"enum": [
+							"DENY",
+							"SAMEORIGIN",
+							"upstream",
+							"none"
+						],
+						"example": "DENY",
+						"type": "string"
+					},
+					"path": {
+						"minLength": 1,
+						"type": "string"
+					}
+				},
+				"required": [
+					"forward_scheme",
+					"forward_host",
+					"forward_port",
+					"path",
+					"npmplus_access_list_ids",
+					"npmplus_access_list_type"
+				],
+				"type": "object"
+			},
+			"minItems": 0,
+			"type": "array"
+		},
+		"meta": {
+			"example": {
+				"nginx_err": null,
+				"nginx_online": true
+			},
+			"type": "object"
+		},
+		"npmplus_access_list_ids": {
+			"items": {
+				"minimum": 1,
+				"type": "integer"
+			},
+			"type": "array"
+		},
+		"npmplus_access_list_type": {
+			"enum": [
+				"public",
+				"custom"
+			],
+			"type": "string"
+		},
+		"npmplus_auth_request": {
+			"enum": [
+				"none",
+				"anubis",
+				"tinyauth",
+				"oauth2proxy",
+				"voidauth",
+				"authelia",
+				"authentik",
+				"authentik-send-basic-auth"
+			],
+			"example": "none",
+			"type": "string"
+		},
+		"npmplus_auth_request_upstream": {
+			"example": "",
+			"type": "string"
+		},
+		"npmplus_crowdsec_appsec": {
+			"description": "Disable Crowdsec Appsec",
+			"example": false,
+			"type": "boolean"
+		},
+		"npmplus_fancyindex": {
+			"description": "Enable fancyindex",
+			"example": false,
+			"type": "boolean"
+		},
+		"npmplus_http3_support": {
+			"description": "HTTP3 Protocol Support",
+			"example": true,
+			"type": "boolean"
+		},
+		"npmplus_location_config": {
+			"example": "",
+			"type": "string"
+		},
+		"npmplus_noindex": {
+			"description": "Send noindex header and block some user agents",
+			"example": false,
+			"type": "boolean"
+		},
+		"npmplus_proxy_request_buffering": {
+			"description": "Disable Request Buffering",
+			"example": false,
+			"type": "boolean"
+		},
+		"npmplus_proxy_response_buffering": {
+			"description": "Disable Response Buffering",
+			"example": false,
+			"type": "boolean"
+		},
+		"npmplus_upstream_compression": {
+			"description": "Enable compression by upstream",
+			"example": false,
+			"type": "boolean"
+		},
+		"npmplus_x_frame_options": {
+			"enum": [
+				"DENY",
+				"SAMEORIGIN",
+				"upstream",
+				"none"
+			],
+			"example": "DENY",
+			"type": "string"
+		},
+		"ssl_forced": {
+			"description": "Is SSL Forced",
+			"example": true,
+			"type": "boolean"
+		},
+		"trust_forwarded_proto": {
+			"description": "Trust the forwarded headers",
+			"example": false,
+			"type": "boolean"
+		}
+	},
+	"type": "object"
+}

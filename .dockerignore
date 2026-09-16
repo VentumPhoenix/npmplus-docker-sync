@@ -4,6 +4,7 @@
 .goreleaser.yaml
 .govulncheck-allow
 scripts/
+**/testdata/
 *.md
 !README.md
 docs/

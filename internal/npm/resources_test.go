@@ -51,7 +51,7 @@ func TestResourceKeys(t *testing.T) {
 		},
 		{
 			name:     "stream uses the incoming port",
-			resource: &Stream{IncomingPort: 5432},
+			resource: &Stream{IncomingPort: PortOf(5432)},
 			want:     "5432",
 		},
 		{
@@ -124,7 +124,7 @@ func TestFingerprintDetectsChanges(t *testing.T) {
 	}
 	stream := func() *Stream {
 		return &Stream{
-			IncomingPort: 5432, ForwardingHost: "db", ForwardingPort: 5432, TCPForwarding: true,
+			IncomingPort: PortOf(5432), ForwardingHost: "db", ForwardingPort: PortOf(5432), TCPForwarding: true,
 			Meta: Meta{MetaManagedBy: ManagedByValue},
 		}
 	}
@@ -143,14 +143,14 @@ func TestFingerprintDetectsChanges(t *testing.T) {
 		{"proxy domains", proxy(), func() Resource { r := proxy(); r.DomainNames = []string{"other.example.com"}; return r }},
 		{"proxy certificate", proxy(), func() Resource { r := proxy(); r.CertificateID = CertificateRef(2); return r }},
 		{"proxy websockets", proxy(), func() Resource { r := proxy(); r.AllowWebsocketUpgrade = false; return r }},
-		{"proxy access list", proxy(), func() Resource { r := proxy(); r.AccessListID = 3; return r }},
+		{"proxy access list", proxy(), func() Resource { r := proxy(); r.AccessListIDs = []int{3}; return r }},
 		{"proxy advanced config", proxy(), func() Resource { r := proxy(); r.AdvancedConfig = "add_header X-Test 1;"; return r }},
 		{"proxy container marker", proxy(), func() Resource { r := proxy(); r.Meta[MetaContainer] = "renamed"; return r }},
 		{"proxy label index", proxy(), func() Resource { r := proxy(); r.Meta[MetaIndex] = 2; return r }},
 		{"redirect target", redirect(), func() Resource { r := redirect(); r.ForwardDomainName = "other.example.com"; return r }},
 		{"redirect code", redirect(), func() Resource { r := redirect(); r.ForwardHTTPCode = 302; return r }},
 		{"redirect preserve path", redirect(), func() Resource { r := redirect(); r.PreservePath = false; return r }},
-		{"stream incoming port", stream(), func() Resource { r := stream(); r.IncomingPort = 5433; return r }},
+		{"stream incoming port", stream(), func() Resource { r := stream(); r.IncomingPort = PortOf(5433); return r }},
 		{"stream upstream", stream(), func() Resource { r := stream(); r.ForwardingHost = "10.0.0.2"; return r }},
 		{"stream udp", stream(), func() Resource { r := stream(); r.UDPForwarding = true; return r }},
 		{"dead domains", dead(), func() Resource { r := dead(); r.DomainNames = []string{"other.example.com"}; return r }},
@@ -239,7 +239,7 @@ func TestResourceJSONShape(t *testing.T) {
 		},
 		{
 			name:     "stream",
-			resource: &Stream{IncomingPort: 5432, ForwardingHost: "db", ForwardingPort: 5432, TCPForwarding: true},
+			resource: &Stream{IncomingPort: PortOf(5432), ForwardingHost: "db", ForwardingPort: PortOf(5432), TCPForwarding: true},
 			contains: []string{`"incoming_port":5432`, `"forwarding_host":"db"`, `"tcp_forwarding":true`, `"udp_forwarding":false`},
 		},
 		{
@@ -283,7 +283,7 @@ func TestDescribe(t *testing.T) {
 	}{
 		{&ProxyHost{DomainNames: []string{"app.example.com"}, ForwardScheme: "http", ForwardHost: "app", ForwardPort: 80}, "app.example.com → http://app:80"},
 		{&RedirectionHost{DomainNames: []string{"old.example.com"}, ForwardScheme: "auto", ForwardDomainName: "new.example.com", ForwardHTTPCode: 301}, "old.example.com ⇒ auto://new.example.com (301)"},
-		{&Stream{IncomingPort: 5432, ForwardingHost: "db", ForwardingPort: 5432, TCPForwarding: true, UDPForwarding: true}, ":5432 → db:5432 (tcp+udp)"},
+		{&Stream{IncomingPort: PortOf(5432), ForwardingHost: "db", ForwardingPort: PortOf(5432), TCPForwarding: true, UDPForwarding: true}, ":5432 → db:5432 (tcp+udp)"},
 		{&DeadHost{DomainNames: []string{"parked.example.com"}}, "parked.example.com → 404"},
 	}
 	for _, tc := range tests {

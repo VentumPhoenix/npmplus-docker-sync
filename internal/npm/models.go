@@ -63,13 +63,39 @@ func (m Meta) Container() string {
 	return v
 }
 
+// Access list types. NPMplus replaced NPM's single `access_list_id` with a
+// list of ids plus an explicit type; "public" means no access list at all and
+// "global" (locations only) means "inherit from the proxy host".
+const (
+	AccessListPublic = "public"
+	AccessListCustom = "custom"
+	AccessListGlobal = "global"
+)
+
 // Location is an optional custom location block of a proxy host.
+//
+// The npmplus_* fields are mandatory on NPMplus and unknown to upstream NPM;
+// the per-flavour payload structs decide which of them are sent.
 type Location struct {
 	Path           string `json:"path"`
 	AdvancedConfig string `json:"advanced_config"`
 	ForwardScheme  string `json:"forward_scheme"`
 	ForwardHost    string `json:"forward_host"`
 	ForwardPort    int    `json:"forward_port"`
+	AccessListIDs  []int  `json:"npmplus_access_list_ids,omitempty"`
+	AccessListType string `json:"npmplus_access_list_type,omitempty"`
+}
+
+// accessListType returns the location's access list type, defaulting to
+// "global" (inherit the proxy host's setting).
+func (l Location) accessListType() string {
+	if l.AccessListType != "" {
+		return l.AccessListType
+	}
+	if len(l.AccessListIDs) > 0 {
+		return AccessListCustom
+	}
+	return AccessListGlobal
 }
 
 // Certificate mirrors the `/api/nginx/certificates` resource.
@@ -289,4 +315,77 @@ func ownership(m Meta) (managedBy, container string, index int) {
 		index = int(v)
 	}
 	return managedBy, container, index
+}
+
+// ---------------------------------------------------------------------------
+// Ports
+// ---------------------------------------------------------------------------
+
+// Port models the polymorphic port fields of the stream resource. Upstream NPM
+// types `incoming_port` and `forwarding_port` as integers, NPMplus types them
+// as strings and additionally accepts a range ("8080-8090") for the incoming
+// port and "$server_port" for the forwarded one.
+//
+// The raw text is preserved so a foreign stream that uses one of the NPMplus
+// forms still round-trips and keeps a stable identity.
+type Port struct{ raw string }
+
+// PortOf returns a Port for a plain port number. The zero value means unset.
+func PortOf(n int) Port {
+	if n == 0 {
+		return Port{}
+	}
+	return Port{raw: strconv.Itoa(n)}
+}
+
+// PortText returns a Port for one of the textual forms NPMplus allows.
+func PortText(s string) Port { return Port{raw: strings.TrimSpace(s)} }
+
+// String returns the port in its textual form ("" when unset).
+func (p Port) String() string { return p.raw }
+
+// Int returns the numeric value, or 0 for an unset or non-numeric port such as
+// a range or "$server_port".
+func (p Port) Int() int {
+	n, err := strconv.Atoi(p.raw)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// IsZero reports whether no port is set.
+func (p Port) IsZero() bool { return p.raw == "" }
+
+// MarshalJSON emits a number for numeric ports and a string otherwise, which
+// matches what both flavours return. Request bodies do not use this: the
+// per-flavour payload structs pick the type the server's schema demands.
+func (p Port) MarshalJSON() ([]byte, error) {
+	if n := p.Int(); n > 0 {
+		return json.Marshal(n)
+	}
+	return json.Marshal(p.raw)
+}
+
+// UnmarshalJSON accepts both the integer (NPM) and the string (NPMplus) form.
+func (p *Port) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || string(data) == "null" {
+		*p = Port{}
+		return nil
+	}
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return fmt.Errorf("port: %w", err)
+		}
+		*p = Port{raw: strings.TrimSpace(s)}
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(data, &n); err != nil {
+		return fmt.Errorf("port: %w", err)
+	}
+	*p = Port{raw: n.String()}
+	return nil
 }

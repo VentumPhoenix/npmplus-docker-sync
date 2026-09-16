@@ -1,0 +1,181 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"additionalProperties": false,
+	"minProperties": 1,
+	"properties": {
+		"access_list_id": {
+			"description": "Access List ID",
+			"example": 3,
+			"minimum": 0,
+			"type": "integer"
+		},
+		"advanced_config": {
+			"example": "",
+			"type": "string"
+		},
+		"allow_websocket_upgrade": {
+			"description": "Allow Websocket Upgrade for all paths",
+			"example": true,
+			"type": "boolean"
+		},
+		"block_exploits": {
+			"description": "Should we block common exploits",
+			"example": false,
+			"type": "boolean"
+		},
+		"caching_enabled": {
+			"description": "Should we cache assets",
+			"example": true,
+			"type": "boolean"
+		},
+		"certificate_id": {
+			"anyOf": [
+				{
+					"example": 5,
+					"minimum": 0,
+					"type": "integer"
+				},
+				{
+					"example": "new",
+					"pattern": "^new$",
+					"type": "string"
+				}
+			],
+			"description": "Certificate ID",
+			"example": 5
+		},
+		"domain_names": {
+			"description": "Domain Names separated by a comma",
+			"example": [
+				"example.com",
+				"www.example.com"
+			],
+			"items": {
+				"pattern": "^[^&| @!#%^();:/\\\\}{=+?<>,~`'\"]+$",
+				"type": "string"
+			},
+			"maxItems": 100,
+			"minItems": 1,
+			"type": "array",
+			"uniqueItems": true
+		},
+		"enabled": {
+			"description": "Is Enabled",
+			"example": false,
+			"type": "boolean"
+		},
+		"forward_host": {
+			"example": "127.0.0.1",
+			"maxLength": 255,
+			"minLength": 1,
+			"type": "string"
+		},
+		"forward_port": {
+			"example": 8080,
+			"maximum": 65535,
+			"minimum": 1,
+			"type": "integer"
+		},
+		"forward_scheme": {
+			"enum": [
+				"http",
+				"https"
+			],
+			"example": "http",
+			"type": "string"
+		},
+		"hsts_enabled": {
+			"description": "Is HSTS Enabled",
+			"example": true,
+			"type": "boolean"
+		},
+		"hsts_subdomains": {
+			"description": "Is HSTS applicable to all subdomains",
+			"example": true,
+			"type": "boolean"
+		},
+		"http2_support": {
+			"description": "HTTP2 Protocol Support",
+			"example": true,
+			"type": "boolean"
+		},
+		"locations": {
+			"example": [
+				{
+					"forward_host": "example.com",
+					"forward_port": 80,
+					"forward_scheme": "http",
+					"path": "/app"
+				}
+			],
+			"items": {
+				"additionalProperties": false,
+				"properties": {
+					"advanced_config": {
+						"type": "string"
+					},
+					"forward_host": {
+						"example": "127.0.0.1",
+						"maxLength": 255,
+						"minLength": 1,
+						"type": "string"
+					},
+					"forward_path": {
+						"type": "string"
+					},
+					"forward_port": {
+						"example": 8080,
+						"maximum": 65535,
+						"minimum": 1,
+						"type": "integer"
+					},
+					"forward_scheme": {
+						"enum": [
+							"http",
+							"https"
+						],
+						"example": "http",
+						"type": "string"
+					},
+					"id": {
+						"type": [
+							"integer",
+							"null"
+						]
+					},
+					"path": {
+						"minLength": 1,
+						"type": "string"
+					}
+				},
+				"required": [
+					"forward_scheme",
+					"forward_host",
+					"forward_port",
+					"path"
+				],
+				"type": "object"
+			},
+			"minItems": 0,
+			"type": "array"
+		},
+		"meta": {
+			"example": {
+				"nginx_err": null,
+				"nginx_online": true
+			},
+			"type": "object"
+		},
+		"ssl_forced": {
+			"description": "Is SSL Forced",
+			"example": true,
+			"type": "boolean"
+		},
+		"trust_forwarded_proto": {
+			"description": "Trust the forwarded headers",
+			"example": false,
+			"type": "boolean"
+		}
+	},
+	"type": "object"
+}

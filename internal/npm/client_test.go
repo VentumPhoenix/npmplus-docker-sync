@@ -429,7 +429,7 @@ func TestClientListsEveryCollection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListStreams() error = %v", err)
 	}
-	if !streams[0].CertificateID.IsZero() || streams[0].IncomingPort != 5432 {
+	if !streams[0].CertificateID.IsZero() || streams[0].IncomingPort.Int() != 5432 {
 		t.Errorf("stream = %+v", streams[0])
 	}
 	deadHosts, err := client.ListDeadHosts(ctx)
@@ -454,7 +454,7 @@ func TestClientCreateUpdateDeleteAllKinds(t *testing.T) {
 	resources := []Resource{
 		&ProxyHost{DomainNames: []string{"new.example.com"}, ForwardHost: "app", ForwardPort: 80, ForwardScheme: "http"},
 		&RedirectionHost{DomainNames: []string{"old.example.com"}, ForwardDomainName: "new.example.com", ForwardHTTPCode: 301, ForwardScheme: "auto"},
-		&Stream{IncomingPort: 5432, ForwardingHost: "db", ForwardingPort: 5432, TCPForwarding: true},
+		&Stream{IncomingPort: PortOf(5432), ForwardingHost: "db", ForwardingPort: PortOf(5432), TCPForwarding: true},
 		&DeadHost{DomainNames: []string{"parked.example.com"}},
 	}
 

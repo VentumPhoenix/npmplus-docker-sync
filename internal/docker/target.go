@@ -37,6 +37,12 @@ type ParseOptions struct {
 	// PreferNetworks lists network names to try first when resolving the IP,
 	// typically the network NPM itself is attached to.
 	PreferNetworks []string
+	// StrictNetworks restricts IP resolution to PreferNetworks. Without it a
+	// container that is not attached to any of them falls back to an address
+	// from some other network - which NPM usually cannot reach, producing a
+	// proxy host that resolves to a dead upstream. Set whenever the operator
+	// named the network explicitly (NPM_NETWORK).
+	StrictNetworks bool
 }
 
 // Target is one desired NPM resource derived from a container. A single
@@ -55,18 +61,21 @@ type Target struct {
 	HTTP2Support   bool
 	HSTSEnabled    bool
 	HSTSSubdomains bool
+	HTTP3Support   bool
 	BlockExploits  bool
 	AdvancedConfig string
 	Enabled        bool
 
 	// Proxy hosts.
-	ForwardScheme string
-	ForwardHost   string
-	ForwardPort   int
-	Websockets    bool
-	Caching       bool
-	AccessListID  int
-	Locations     []npm.Location
+	ForwardScheme       string
+	ForwardHost         string
+	ForwardPort         int
+	Websockets          bool
+	Caching             bool
+	TrustForwardedProto bool
+	AccessListIDs       []int
+	AccessListType      string
+	Locations           []npm.Location
 
 	// Redirection hosts.
 	ForwardDomainName string
@@ -120,18 +129,28 @@ func (t *Target) Describe() string {
 // `proxy_pass`, where a bare IPv6 address would be invalid.
 func (c Container) ResolveHost(opts ParseOptions) string {
 	if !opts.ResolveIP {
+		if opts.StrictNetworks && !c.OnAnyNetwork(opts.PreferNetworks) {
+			return ""
+		}
 		return c.Name
 	}
-	if ip := c.IPAddress(opts.PreferNetworks); ip != "" {
+	if ip := c.IPAddress(opts.PreferNetworks, opts.StrictNetworks); ip != "" {
 		return ip
+	}
+	if opts.StrictNetworks {
+		// Falling back to the container name would be just as unreachable for
+		// NPM as an address from a network it does not share.
+		return ""
 	}
 	return c.Name
 }
 
 // IPAddress returns the container's IPv4 address, preferring the given
-// networks (in order) over the remaining ones, which are considered in a
-// stable alphabetical order.
-func (c Container) IPAddress(preferred []string) string {
+// networks (in order). Without strict mode the remaining networks are used as
+// a fallback, in a stable alphabetical order; with strict mode an empty string
+// is returned instead, because an address NPM cannot route to is worse than no
+// proxy host at all.
+func (c Container) IPAddress(preferred []string, strict bool) string {
 	byName := make(map[string]Network, len(c.Networks))
 	for _, n := range c.Networks {
 		byName[n.Name] = n
@@ -140,6 +159,9 @@ func (c Container) IPAddress(preferred []string) string {
 		if n, ok := byName[name]; ok && isIPv4(n.IPv4) {
 			return n.IPv4
 		}
+	}
+	if strict {
+		return ""
 	}
 
 	names := make([]string, 0, len(byName))
@@ -153,6 +175,43 @@ func (c Container) IPAddress(preferred []string) string {
 		}
 	}
 	return ""
+}
+
+// OnAnyNetwork reports whether the container is attached to one of the given
+// networks.
+func (c Container) OnAnyNetwork(names []string) bool {
+	if len(names) == 0 {
+		return true
+	}
+	for _, n := range c.Networks {
+		for _, want := range names {
+			if n.Name == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// DedupeNetworks removes duplicates while keeping the first occurrence, so a
+// preference list assembled from several sources stays readable in logs.
+func DedupeNetworks(names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(names))
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
 }
 
 // NetworkNames returns the names of all networks the container is attached to.

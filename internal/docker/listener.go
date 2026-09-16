@@ -38,6 +38,11 @@ type Listener struct {
 	api  APIClient
 	log  *slog.Logger
 	opts ParseOptions
+	// selfID is this process's own container id, learned by
+	// DiscoverOwnNetworks. Its events are dropped: nothing this container does
+	// to itself can change what any other container wants from NPM, and its
+	// own health flapping would otherwise trigger a reconcile every time.
+	selfID string
 }
 
 // NewClient builds a Docker SDK client for the given host. Both
@@ -71,6 +76,13 @@ func NewListener(api APIClient, opts ParseOptions, log *slog.Logger) *Listener {
 	}
 	return &Listener{api: api, log: log, opts: opts}
 }
+
+// SelfID returns the container id this process runs in, if it is known.
+func (l *Listener) SelfID() string { return l.selfID }
+
+// SetSelfID records the own container id so its events can be ignored. It is
+// set automatically by DiscoverOwnNetworks.
+func (l *Listener) SetSelfID(id string) { l.selfID = id }
 
 // Options returns the parse options in use.
 func (l *Listener) Options() ParseOptions { return l.opts }
@@ -137,6 +149,7 @@ func (l *Listener) DiscoverOwnNetworks(ctx context.Context) []string {
 		if !strings.HasPrefix(c.ID, hostname) && c.Name != hostname {
 			continue
 		}
+		l.selfID = c.ID
 		names := c.NetworkNames()
 		if len(names) > 0 {
 			l.log.Debug("resolved own container networks",
@@ -173,6 +186,9 @@ func (l *Listener) Watch(ctx context.Context, trigger chan<- Event) error {
 					break stream
 				}
 				backoff = reconnectMin
+				if l.selfID != "" && msg.Actor.ID == l.selfID {
+					continue
+				}
 				ev := Event{
 					ContainerID: msg.Actor.ID,
 					Name:        strings.TrimPrefix(msg.Actor.Attributes["name"], "/"),
@@ -226,7 +242,10 @@ type Event struct {
 func EventFilters() filters.Args {
 	f := filters.NewArgs()
 	f.Add("type", string(events.ContainerEventType))
-	for _, action := range []string{"start", "die", "stop", "destroy", "rename", "update", "health_status"} {
+	// health_status is deliberately absent: a container's health does not
+	// change its labels or its IP address, so reacting to it only produces
+	// reconcile churn (and, for this container itself, a feedback loop).
+	for _, action := range []string{"start", "die", "stop", "destroy", "rename", "update"} {
 		f.Add("event", action)
 	}
 	return f

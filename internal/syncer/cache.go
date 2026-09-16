@@ -16,6 +16,10 @@ type Entry struct {
 	Container string
 	// Index is the label index inside that container.
 	Index int
+	// Enabled is the enabled state last observed for the resource. It is
+	// tracked separately from Hash because it is not part of the write
+	// payload: both APIs toggle it through /enable and /disable.
+	Enabled bool
 }
 
 // Cache is the in-memory state cache guarding the API against redundant

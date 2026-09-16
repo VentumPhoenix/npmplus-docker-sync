@@ -1,0 +1,102 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"additionalProperties": false,
+	"minProperties": 1,
+	"properties": {
+		"advanced_config": {
+			"example": "",
+			"type": "string"
+		},
+		"block_exploits": {
+			"description": "Should we block common exploits",
+			"example": false,
+			"type": "boolean"
+		},
+		"certificate_id": {
+			"anyOf": [
+				{
+					"example": 5,
+					"minimum": 0,
+					"type": "integer"
+				},
+				{
+					"example": "new",
+					"pattern": "^new$",
+					"type": "string"
+				}
+			],
+			"description": "Certificate ID",
+			"example": 5
+		},
+		"domain_names": {
+			"description": "Domain Names separated by a comma",
+			"example": [
+				"example.com",
+				"www.example.com"
+			],
+			"items": {
+				"pattern": "^[^&| @!#%^();:/\\\\}{=+?<>,~`'\"]+$",
+				"type": "string"
+			},
+			"maxItems": 100,
+			"minItems": 1,
+			"type": "array",
+			"uniqueItems": true
+		},
+		"forward_domain_name": {
+			"description": "Domain Name",
+			"example": "jc21.com",
+			"pattern": "^(?:[^.*]+\\.?)+[^.]$",
+			"type": "string"
+		},
+		"forward_http_code": {
+			"description": "Redirect HTTP Status Code",
+			"example": 302,
+			"maximum": 308,
+			"minimum": 300,
+			"type": "integer"
+		},
+		"forward_scheme": {
+			"enum": [
+				"auto",
+				"http",
+				"https"
+			],
+			"example": "http",
+			"type": "string"
+		},
+		"hsts_enabled": {
+			"description": "Is HSTS Enabled",
+			"example": true,
+			"type": "boolean"
+		},
+		"hsts_subdomains": {
+			"description": "Is HSTS applicable to all subdomains",
+			"example": true,
+			"type": "boolean"
+		},
+		"http2_support": {
+			"description": "HTTP2 Protocol Support",
+			"example": true,
+			"type": "boolean"
+		},
+		"meta": {
+			"example": {
+				"nginx_err": null,
+				"nginx_online": true
+			},
+			"type": "object"
+		},
+		"preserve_path": {
+			"description": "Should the path be preserved",
+			"example": true,
+			"type": "boolean"
+		},
+		"ssl_forced": {
+			"description": "Is SSL Forced",
+			"example": true,
+			"type": "boolean"
+		}
+	},
+	"type": "object"
+}

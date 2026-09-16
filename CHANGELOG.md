@@ -7,6 +7,135 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta.2] - 2026-09-16
+
+**Writing to NPMplus works again.** Every create and update failed in
+`v1.0.0-beta.1` with `400 data must NOT have additional properties`, for all
+four resource types, because the response model was marshalled straight back as
+the request body.
+
+### Fixed
+
+- **Create and update no longer send fields the API rejects.** Both NPM and
+  NPMplus validate every write against a JSON schema with
+  `additionalProperties: false`. The old client sent its response struct as the
+  request body, which carried read-only fields (`id`, `created_on`, ...), the
+  write-protected `enabled` flag and, on NPMplus, the removed
+  `access_list_id` - so nothing could ever be written. Request payloads are now
+  separate types, one per resource kind and API flavour
+  (`Resource.Payload(Flavour)`), each mirroring exactly one request schema.
+- **`enabled` is actually applied.** Neither API accepts the property in a
+  write body; both expose `POST <collection>/{id}/enable` and `/disable`
+  instead. The worker now compares the desired state against the live one and
+  calls those endpoints, for all four kinds. Previously `npm.<kind>.enabled=false`
+  was silently ignored while still being part of the fingerprint, which - once
+  writing worked - would have produced an endless update loop.
+- **Custom locations satisfy the NPMplus schema.** `npmplus_access_list_ids`
+  and `npmplus_access_list_type` are mandatory on every location block there;
+  without them the first host using `location.<n>.*` labels was rejected. The
+  type defaults to `global` (inherit the proxy host's access list).
+- **TLS settings are normalised like the server does.** NPMplus clears
+  `ssl_forced` without a certificate, `hsts_enabled` without `ssl_forced` and
+  `hsts_subdomains` without HSTS (`internalHost.cleanSslHstsData`). The
+  fingerprint was taken over the raw label values, so a half-configured host
+  could never match what the server stored: the in-memory cache papered over it
+  within a process lifetime, but every restart rewrote each affected resource
+  once, forever. The same cascade is now applied before hashing. The same goes
+  for access lists, where NPMplus drops the ids of any location that is not
+  `custom`.
+- **Upstream IPs no longer come from an unreachable network.** With
+  `NPM_NETWORK` set, the address is taken from that network only; a container
+  that is not attached to it is skipped with a warning naming the networks it
+  *is* on, instead of falling through to an alphabetically chosen address NPM
+  cannot route to. `NPM_NETWORK_STRICT=false` restores the old behaviour. The
+  preferred-network list is also de-duplicated (it used to log
+  `npm-frontend,npm-frontend,socket-proxy`).
+- **A single rejected resource no longer makes the process unready.**
+  `/readyz` now answers `503` only before the first run and while Docker or the
+  NPM API is unreachable; resources the API refused are reported as a counter
+  in the body (`ok: 12 managed hosts, 1 failed, ...`). A broken label set on one
+  container used to flip the container to `unhealthy`.
+- **Dry-run updates are reported on every run.** The dry-run path primed the
+  state cache with a write that never happened, so `would update` appeared once
+  and then vanished. It now leaves the cache alone, like the create path
+  already did.
+- **This container's own Docker events are ignored**, and `health_status` is no
+  longer subscribed to at all. A container's health does not change its labels
+  or its IP, and this container's own health flapping triggered a reconcile
+  every time.
+- `defer resp.Body.Close()` inside the retry loop of `Client.do` is gone; each
+  attempt closes its own body. The login path no longer closed the body twice.
+- `APIError.Path` is populated (the path used to be folded into `Method`).
+
+### Added
+
+- **API flavour detection.** NPM and NPMplus have incompatible request schemas,
+  so the dialect is probed once after login - from an existing proxy host's
+  field names, falling back to the `version` object of `GET /api/` - and
+  logged. Pin it with `NPM_FLAVOUR=npmplus|npm` (alias `NPM_FLAVOR`) if the
+  probe guesses wrong. A configuration the flavour cannot express (HTTP/3 on
+  upstream NPM, several access lists on upstream NPM, `certificate_id=new` on
+  an NPMplus stream) is refused locally with a message naming the feature,
+  rather than as an opaque 400.
+- **Diagnostics for schema rejections.** At `LOG_LEVEL=debug` every request is
+  logged with its top-level field names, and a rejected one additionally with
+  the status and the API's message - exactly what an
+  `additionalProperties: false` error withholds. `LOG_PAYLOADS=true` (alias
+  `NPM_DEBUG_PAYLOADS`) adds the full body; values of credential-looking keys
+  are redacted, because the `meta` object can carry DNS provider tokens.
+- `access_list_ids` / `access_list_type` labels for proxy hosts and custom
+  locations, mapping to NPMplus' `npmplus_access_list_ids` /
+  `npmplus_access_list_type` or NPM's single `access_list_id`. The old
+  `access_list_id` label keeps working as the single-id shorthand.
+- `ssl.http3` (NPMplus' `npmplus_http3_support`) and `trust_forwarded_proto`
+  labels.
+- `NPM_NETWORK_STRICT` (default `true`).
+
+### Changed
+
+- Stream ports are modelled as `npm.Port`, which decodes both the integer form
+  (NPM) and the string form (NPMplus, including `"8080-8090"` ranges and
+  `"$server_port"`), and encodes whichever the target flavour requires.
+- `Worker.Status()` returns a `Status` struct separating infrastructure
+  failures from per-resource ones.
+- Log wording: a partially applied run is now `reconciliation finished with
+  errors` with the result counters attached, instead of
+  `reconciliation failed`, which suggested nothing had happened.
+
+### Tests
+
+- `internal/npm/contract_test.go` marshals a fully populated payload for every
+  resource kind and validates it against the **real** NPM and NPMplus request
+  schemas (16 combinations), vendored into `internal/npm/testdata/schema` by
+  `scripts/vendor-schemas.py` (`make schemas`). Re-adding `enabled` to a
+  payload fails the build with the same complaint the server made. A weekly
+  `schema-drift` workflow re-vendors the schemas and re-runs the test, so an
+  upstream schema change surfaces before a user hits it.
+- Coverage for the enable/disable reconciliation (including that it converges
+  and never issues a `PUT`), the TLS cascade, dry-run cache behaviour, the
+  strict network selection, access list labels, flavour detection and the
+  fatal/partial error split.
+
+### Upgrading from v1.0.0-beta.1
+
+No configuration change is required. Two behaviours differ in practice:
+
+- With `NPM_NETWORK` set, containers outside that network are now skipped
+  instead of getting an unreachable upstream. The warning names the networks
+  they are on; attach them, set `forward_host`, or set
+  `NPM_NETWORK_STRICT=false`.
+- `npm.<kind>.enabled=false` now takes effect. Hosts you had labelled that way
+  and that are currently enabled in NPM will be disabled on the next reconcile.
+
+> [!CAUTION]
+> Before enabling `DELETE_ORPHANS`, make sure every container whose hosts
+> should survive still carries `npm.enable=true` - **including the NPM/NPMplus
+> container itself**. A resource this tool created keeps its ownership marker
+> for good, so once its labels are gone it is an orphan. `DRY_RUN=true` lists
+> what would be removed.
+
+## [1.0.0-beta.1] - 2026-09-16
+
 ### Added
 
 - `npmplus-docker-sync healthcheck` subcommand that probes `HEALTH_ADDR/readyz`;
@@ -139,6 +268,8 @@ Upstreams also change from container names to container IPs in 2.0. Set
 - Multi-stage `scratch` image running as `1000:1000`, published for
   linux/amd64, arm64 and arm/v7.
 
-[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.2...HEAD
+[1.0.0-beta.2]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.1...v1.0.0-beta.2
+[1.0.0-beta.1]: https://github.com/VentumPhoenix/npmplus-docker-sync/releases/tag/v1.0.0-beta.1
 [2.0.0]: https://github.com/VentumPhoenix/npmplus-docker-sync/releases/tag/v2.0.0
 [1.0.0]: https://github.com/VentumPhoenix/npmplus-docker-sync/releases/tag/v1.0.0
