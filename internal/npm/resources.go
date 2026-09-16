@@ -74,6 +74,9 @@ type Resource interface {
 	ResourceKey() string
 	// ResourceMeta exposes the meta object carrying the ownership marker.
 	ResourceMeta() Meta
+	// ResourceCertificate reports the attached certificate, which the
+	// automatic selection uses to stay on a certificate that still fits.
+	ResourceCertificate() CertificateID
 	// Fingerprint hashes the configuration-relevant fields. It deliberately
 	// excludes the enabled flag, which is not part of the write payload and
 	// is reconciled through the /enable and /disable endpoints instead.
@@ -128,12 +131,29 @@ type ProxyHost struct {
 	// HTTP3Support is an NPMplus extension (`npmplus_http3_support`).
 	HTTP3Support bool `json:"npmplus_http3_support"`
 
+	// NPMplus extensions. The three Disable* switches are inverted in the
+	// API (`npmplus_crowdsec_appsec: true` turns the AppSec component off),
+	// which is why the model spells them out that way.
+	NoIndex                  bool   `json:"npmplus_noindex"`
+	DisableCrowdsecAppsec    bool   `json:"npmplus_crowdsec_appsec"`
+	DisableRequestBuffering  bool   `json:"npmplus_proxy_request_buffering"`
+	DisableResponseBuffering bool   `json:"npmplus_proxy_response_buffering"`
+	UpstreamCompression      bool   `json:"npmplus_upstream_compression"`
+	FancyIndex               bool   `json:"npmplus_fancyindex"`
+	XFrameOptions            string `json:"npmplus_x_frame_options"`
+	AuthRequest              string `json:"npmplus_auth_request"`
+	AuthRequestUpstream      string `json:"npmplus_auth_request_upstream"`
+	LocationConfig           string `json:"npmplus_location_config"`
+
 	// Access lists: upstream NPM has a single `access_list_id`, NPMplus a
 	// list plus an explicit type. Both spellings are decoded so a host can be
 	// compared no matter which server returned it; accessLists() normalises.
 	AccessListID   int    `json:"access_list_id"`
 	AccessListIDs  []int  `json:"npmplus_access_list_ids"`
 	AccessListType string `json:"npmplus_access_list_type"`
+	// AccessListNames are names that still have to be resolved into ids.
+	// They never reach the API.
+	AccessListNames []string `json:"-"`
 }
 
 // Kind implements Resource.
@@ -148,8 +168,14 @@ func (h *ProxyHost) SetResourceID(id int) { h.ID = id }
 // ResourceKey implements Resource.
 func (h *ProxyHost) ResourceKey() string { return primaryDomain(h.DomainNames) }
 
+// Domains returns the normalised domain names of the host.
+func (h *ProxyHost) Domains() []string { return NormalizeDomains(h.DomainNames) }
+
 // ResourceMeta implements Resource.
 func (h *ProxyHost) ResourceMeta() Meta { return h.Meta }
+
+// ResourceCertificate implements Resource.
+func (h *ProxyHost) ResourceCertificate() CertificateID { return h.CertificateID }
 
 // IsEnabled implements Resource.
 func (h *ProxyHost) IsEnabled() bool { return bool(h.Enabled) }
@@ -191,6 +217,15 @@ func (h *ProxyHost) AdoptServerState(current Resource) {
 		return
 	}
 	adoptCertificate(&h.CertificateID, live.CertificateID)
+	h.Meta = AdoptMeta(h.Meta, live.Meta)
+	// An unset x-frame-options keeps whatever NPMplus defaults to, so the
+	// live value is adopted instead of being reported as a drift forever.
+	if h.XFrameOptions == "" {
+		h.XFrameOptions = live.XFrameOptions
+	}
+	if h.AuthRequest == "" {
+		h.AuthRequest = live.AuthRequest
+	}
 	if len(h.Locations) == 0 {
 		h.Locations = []Location{}
 	}
@@ -220,9 +255,21 @@ func (h *ProxyHost) Fingerprint() string {
 		AccessListType string     `json:"access_list_type"`
 		Advanced       string     `json:"advanced"`
 		Locations      []Location `json:"locations"`
-		ManagedBy      string     `json:"managed_by"`
-		Container      string     `json:"container"`
-		Index          int        `json:"index"`
+
+		NoIndex             bool   `json:"noindex"`
+		CrowdsecOff         bool   `json:"crowdsec_appsec_off"`
+		RequestBufferingOff bool   `json:"request_buffering_off"`
+		ResponseBufferOff   bool   `json:"response_buffering_off"`
+		UpstreamCompression bool   `json:"upstream_compression"`
+		FancyIndex          bool   `json:"fancyindex"`
+		XFrameOptions       string `json:"x_frame_options"`
+		AuthRequest         string `json:"auth_request"`
+		AuthRequestUpstream string `json:"auth_request_upstream"`
+		LocationConfig      string `json:"location_config"`
+
+		ManagedBy string `json:"managed_by"`
+		Container string `json:"container"`
+		Index     int    `json:"index"`
 	}{
 		Kind:           string(KindProxy),
 		Domains:        NormalizeDomains(h.DomainNames),
@@ -243,9 +290,21 @@ func (h *ProxyHost) Fingerprint() string {
 		AccessListType: listType,
 		Advanced:       strings.TrimSpace(h.AdvancedConfig),
 		Locations:      canonicalLocations(h.Locations),
-		ManagedBy:      managedBy,
-		Container:      container,
-		Index:          index,
+
+		NoIndex:             h.NoIndex,
+		CrowdsecOff:         h.DisableCrowdsecAppsec,
+		RequestBufferingOff: h.DisableRequestBuffering,
+		ResponseBufferOff:   h.DisableResponseBuffering,
+		UpstreamCompression: h.UpstreamCompression,
+		FancyIndex:          h.FancyIndex,
+		XFrameOptions:       strings.TrimSpace(h.XFrameOptions),
+		AuthRequest:         strings.TrimSpace(h.AuthRequest),
+		AuthRequestUpstream: strings.TrimSpace(h.AuthRequestUpstream),
+		LocationConfig:      strings.TrimSpace(h.LocationConfig),
+
+		ManagedBy: managedBy,
+		Container: container,
+		Index:     index,
 	})
 }
 
@@ -289,8 +348,14 @@ func (h *RedirectionHost) SetResourceID(id int) { h.ID = id }
 // ResourceKey implements Resource.
 func (h *RedirectionHost) ResourceKey() string { return primaryDomain(h.DomainNames) }
 
+// Domains returns the normalised domain names of the host.
+func (h *RedirectionHost) Domains() []string { return NormalizeDomains(h.DomainNames) }
+
 // ResourceMeta implements Resource.
 func (h *RedirectionHost) ResourceMeta() Meta { return h.Meta }
+
+// ResourceCertificate implements Resource.
+func (h *RedirectionHost) ResourceCertificate() CertificateID { return h.CertificateID }
 
 // IsEnabled implements Resource.
 func (h *RedirectionHost) IsEnabled() bool { return bool(h.Enabled) }
@@ -312,6 +377,7 @@ func (h *RedirectionHost) AdoptServerState(current Resource) {
 		return
 	}
 	adoptCertificate(&h.CertificateID, live.CertificateID)
+	h.Meta = AdoptMeta(h.Meta, live.Meta)
 }
 
 // Fingerprint implements Resource.
@@ -376,6 +442,12 @@ type Stream struct {
 	CertificateID  CertificateID `json:"certificate_id"`
 	Enabled        Flag          `json:"enabled"`
 	Meta           Meta          `json:"meta"`
+
+	// NPMplus extensions.
+	ProxyProtocol  int    `json:"npmplus_proxy_protocol_forwarding"`
+	ProxyTLS       bool   `json:"npmplus_proxy_tls"`
+	AdvancedConfig string `json:"npmplus_advanced_config"`
+	Description    string `json:"npmplus_description"`
 }
 
 // Kind implements Resource.
@@ -393,6 +465,9 @@ func (s *Stream) ResourceKey() string { return s.IncomingPort.String() }
 
 // ResourceMeta implements Resource.
 func (s *Stream) ResourceMeta() Meta { return s.Meta }
+
+// ResourceCertificate implements Resource.
+func (s *Stream) ResourceCertificate() CertificateID { return s.CertificateID }
 
 // IsEnabled implements Resource.
 func (s *Stream) IsEnabled() bool { return bool(s.Enabled) }
@@ -420,33 +495,42 @@ func (s *Stream) AdoptServerState(current Resource) {
 		return
 	}
 	adoptCertificate(&s.CertificateID, live.CertificateID)
+	s.Meta = AdoptMeta(s.Meta, live.Meta)
 }
 
 // Fingerprint implements Resource.
 func (s *Stream) Fingerprint() string {
 	managedBy, container, index := ownership(s.Meta)
 	return fingerprint(struct {
-		Kind         string `json:"kind"`
-		IncomingPort string `json:"incoming_port"`
-		Host         string `json:"host"`
-		Port         string `json:"port"`
-		TCP          bool   `json:"tcp"`
-		UDP          bool   `json:"udp"`
-		Certificate  string `json:"certificate"`
-		ManagedBy    string `json:"managed_by"`
-		Container    string `json:"container"`
-		Index        int    `json:"index"`
+		Kind          string `json:"kind"`
+		IncomingPort  string `json:"incoming_port"`
+		Host          string `json:"host"`
+		Port          string `json:"port"`
+		TCP           bool   `json:"tcp"`
+		UDP           bool   `json:"udp"`
+		Certificate   string `json:"certificate"`
+		ProxyProtocol int    `json:"proxy_protocol"`
+		ProxyTLS      bool   `json:"proxy_tls"`
+		Advanced      string `json:"advanced"`
+		Description   string `json:"description"`
+		ManagedBy     string `json:"managed_by"`
+		Container     string `json:"container"`
+		Index         int    `json:"index"`
 	}{
-		Kind:         string(KindStream),
-		IncomingPort: s.IncomingPort.String(),
-		Host:         strings.ToLower(s.ForwardingHost),
-		Port:         s.ForwardingPort.String(),
-		TCP:          s.TCPForwarding,
-		UDP:          s.UDPForwarding,
-		Certificate:  s.CertificateID.String(),
-		ManagedBy:    managedBy,
-		Container:    container,
-		Index:        index,
+		Kind:          string(KindStream),
+		IncomingPort:  s.IncomingPort.String(),
+		Host:          strings.ToLower(s.ForwardingHost),
+		Port:          s.ForwardingPort.String(),
+		TCP:           s.TCPForwarding,
+		UDP:           s.UDPForwarding,
+		Certificate:   s.CertificateID.String(),
+		ProxyProtocol: s.ProxyProtocol,
+		ProxyTLS:      s.ProxyTLS,
+		Advanced:      strings.TrimSpace(s.AdvancedConfig),
+		Description:   strings.TrimSpace(s.Description),
+		ManagedBy:     managedBy,
+		Container:     container,
+		Index:         index,
 	})
 }
 
@@ -485,8 +569,14 @@ func (h *DeadHost) SetResourceID(id int) { h.ID = id }
 // ResourceKey implements Resource.
 func (h *DeadHost) ResourceKey() string { return primaryDomain(h.DomainNames) }
 
+// Domains returns the normalised domain names of the host.
+func (h *DeadHost) Domains() []string { return NormalizeDomains(h.DomainNames) }
+
 // ResourceMeta implements Resource.
 func (h *DeadHost) ResourceMeta() Meta { return h.Meta }
+
+// ResourceCertificate implements Resource.
+func (h *DeadHost) ResourceCertificate() CertificateID { return h.CertificateID }
 
 // IsEnabled implements Resource.
 func (h *DeadHost) IsEnabled() bool { return bool(h.Enabled) }
@@ -506,6 +596,7 @@ func (h *DeadHost) AdoptServerState(current Resource) {
 		return
 	}
 	adoptCertificate(&h.CertificateID, live.CertificateID)
+	h.Meta = AdoptMeta(h.Meta, live.Meta)
 }
 
 // Fingerprint implements Resource.
@@ -600,14 +691,27 @@ func canonicalLocations(locations []Location) []Location {
 		if listType == AccessListCustom {
 			ids = normalizeIDs(l.AccessListIDs)
 		}
+		enabled := l.IsEnabled()
 		out = append(out, Location{
-			Path:           strings.TrimSpace(l.Path),
-			AdvancedConfig: strings.TrimSpace(l.AdvancedConfig),
-			ForwardScheme:  strings.ToLower(l.ForwardScheme),
-			ForwardHost:    strings.ToLower(l.ForwardHost),
-			ForwardPort:    l.ForwardPort,
-			AccessListIDs:  ids,
-			AccessListType: listType,
+			Path:                     strings.TrimSpace(l.Path),
+			LocationType:             l.LocationType,
+			AdvancedConfig:           strings.TrimSpace(l.AdvancedConfig),
+			LocationConfig:           strings.TrimSpace(l.LocationConfig),
+			ForwardScheme:            strings.ToLower(l.ForwardScheme),
+			ForwardHost:              strings.ToLower(l.ForwardHost),
+			ForwardPort:              l.ForwardPort,
+			AccessListIDs:            ids,
+			AccessListType:           listType,
+			Enabled:                  &enabled,
+			NoIndex:                  l.NoIndex,
+			DisableCrowdsecAppsec:    l.DisableCrowdsecAppsec,
+			DisableRequestBuffering:  l.DisableRequestBuffering,
+			DisableResponseBuffering: l.DisableResponseBuffering,
+			UpstreamCompression:      l.UpstreamCompression,
+			FancyIndex:               l.FancyIndex,
+			XFrameOptions:            strings.TrimSpace(l.XFrameOptions),
+			AuthRequest:              strings.TrimSpace(l.AuthRequest),
+			AuthRequestUpstream:      strings.TrimSpace(l.AuthRequestUpstream),
 		})
 	}
 	return out

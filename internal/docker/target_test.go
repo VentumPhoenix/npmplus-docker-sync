@@ -58,24 +58,24 @@ func TestStrictNetworkErrorNamesTheNetworks(t *testing.T) {
 	c := Container{
 		ID: "lonely-id", Name: "lonely",
 		Labels: map[string]string{
-			"npm.enable":     "true",
-			"npm.proxy.host": "lonely.example.com",
-			"npm.proxy.port": "80",
+			"npm.enable":        "true",
+			"npm.proxy.domains": "lonely.example.com",
+			"npm.proxy.port":    "80",
 		},
 		Networks: []Network{{Name: "some-other-net", IPv4: "172.31.0.4"}},
 	}
 
-	targets, errs := Parse(c, ParseOptions{
-		Prefix: "npm", ResolveIP: true,
+	res := Parse(c, ParseOptions{
+		Prefix: "npm", ResolveIP: true, ExposedByDefault: true,
 		PreferNetworks: []string{"npm-frontend"}, StrictNetworks: true,
 	})
-	if len(targets) != 0 {
-		t.Fatalf("Parse() returned %d targets, want none", len(targets))
+	if len(res.Targets) != 0 {
+		t.Fatalf("Parse() returned %d targets, want none", len(res.Targets))
 	}
-	if len(errs) != 1 {
-		t.Fatalf("Parse() errors = %v, want exactly one", errs)
+	if len(res.Errors) != 1 {
+		t.Fatalf("Parse() errors = %v, want exactly one", res.Errors)
 	}
-	msg := errs[0].Error()
+	msg := res.Errors[0].Error()
 	for _, want := range []string{"npm-frontend", "some-other-net", "forward_host"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error %q does not mention %q", msg, want)
@@ -92,22 +92,22 @@ func TestExplicitForwardHostBeatsStrictNetworks(t *testing.T) {
 		ID: "lonely-id", Name: "lonely",
 		Labels: map[string]string{
 			"npm.enable":             "true",
-			"npm.proxy.host":         "lonely.example.com",
+			"npm.proxy.domains":      "lonely.example.com",
 			"npm.proxy.port":         "80",
 			"npm.proxy.forward_host": "10.1.2.3",
 		},
 		Networks: []Network{{Name: "some-other-net", IPv4: "172.31.0.4"}},
 	}
 
-	targets, errs := Parse(c, ParseOptions{
-		Prefix: "npm", ResolveIP: true,
+	res := Parse(c, ParseOptions{
+		Prefix: "npm", ResolveIP: true, ExposedByDefault: true,
 		PreferNetworks: []string{"npm-frontend"}, StrictNetworks: true,
 	})
-	if len(errs) != 0 {
-		t.Fatalf("Parse() errors = %v, want none", errs)
+	if len(res.Errors) != 0 {
+		t.Fatalf("Parse() errors = %v, want none", res.Errors)
 	}
-	if len(targets) != 1 || targets[0].ForwardHost != "10.1.2.3" {
-		t.Fatalf("Parse() = %+v, want the explicit upstream", targets)
+	if len(res.Targets) != 1 || res.Targets[0].ForwardHost != "10.1.2.3" {
+		t.Fatalf("Parse() = %+v, want the explicit upstream", res.Targets)
 	}
 }
 
@@ -164,21 +164,21 @@ func TestAccessListLabels(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			labels := map[string]string{
-				"npm.enable":     "true",
-				"npm.proxy.host": "app.example.com",
-				"npm.proxy.port": "80",
+				"npm.enable":        "true",
+				"npm.proxy.domains": "app.example.com",
+				"npm.proxy.port":    "80",
 			}
 			for k, v := range tt.labels {
 				labels[k] = v
 			}
-			targets, errs := Parse(Container{ID: "app-id", Name: "app", Labels: labels}, ParseOptions{Prefix: "npm"})
-			if len(errs) != 0 {
-				t.Fatalf("Parse() errors = %v", errs)
+			res := Parse(Container{ID: "app-id", Name: "app", Labels: labels}, ParseOptions{Prefix: "npm", ExposedByDefault: true})
+			if len(res.Errors) != 0 {
+				t.Fatalf("Parse() errors = %v", res.Errors)
 			}
-			if len(targets) != 1 {
-				t.Fatalf("Parse() = %d targets, want 1", len(targets))
+			if len(res.Targets) != 1 {
+				t.Fatalf("Parse() = %d targets, want 1", len(res.Targets))
 			}
-			got := targets[0]
+			got := res.Targets[0]
 			if got.AccessListType != tt.wantType {
 				t.Errorf("AccessListType = %q, want %q", got.AccessListType, tt.wantType)
 			}
@@ -199,21 +199,21 @@ func TestAccessListLabels(t *testing.T) {
 func TestLocationAccessListDefaultsToGlobal(t *testing.T) {
 	t.Parallel()
 
-	targets, errs := Parse(Container{
+	res := Parse(Container{
 		ID: "app-id", Name: "app",
 		Labels: map[string]string{
 			"npm.enable":                           "true",
-			"npm.proxy.host":                       "app.example.com",
+			"npm.proxy.domains":                    "app.example.com",
 			"npm.proxy.port":                       "80",
 			"npm.proxy.location.0.path":            "/api",
 			"npm.proxy.location.1.path":            "/admin",
 			"npm.proxy.location.1.access_list_ids": "4",
 		},
-	}, ParseOptions{Prefix: "npm"})
-	if len(errs) != 0 {
-		t.Fatalf("Parse() errors = %v", errs)
+	}, ParseOptions{Prefix: "npm", ExposedByDefault: true})
+	if len(res.Errors) != 0 {
+		t.Fatalf("Parse() errors = %v", res.Errors)
 	}
-	locations := targets[0].Locations
+	locations := res.Targets[0].Locations
 	if len(locations) != 2 {
 		t.Fatalf("locations = %d, want 2", len(locations))
 	}

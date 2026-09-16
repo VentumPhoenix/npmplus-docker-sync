@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/VentumPhoenix/npmplus-docker-sync/internal/certs"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/docker"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/npm"
 )
@@ -27,6 +28,13 @@ type API interface {
 	// /disable endpoints. Neither API accepts `enabled` in a create or
 	// update body.
 	SetEnabled(ctx context.Context, kind npm.Kind, id int, enabled bool) error
+	// ListCertificates backs the automatic certificate selection.
+	ListCertificates(ctx context.Context) ([]npm.Certificate, error)
+	// ListAccessLists resolves access lists referenced by name.
+	ListAccessLists(ctx context.Context) ([]npm.AccessList, error)
+	// Flavour reports the API dialect, which decides whether NPMplus-only
+	// settings can be sent at all.
+	Flavour() npm.Flavour
 }
 
 // TargetSource provides the desired state derived from Docker.
@@ -44,6 +52,19 @@ type Options struct {
 	// Kinds limits reconciliation to a subset of resource types. Empty means
 	// all four.
 	Kinds []npm.Kind
+	// CertificatePartial decides what happens when no single certificate
+	// covers every domain of a host.
+	CertificatePartial certs.Partial
+	// CertificateAutoCreate requests a Let's Encrypt certificate when the
+	// automatic selection finds nothing.
+	CertificateAutoCreate bool
+	// MigrateFromRedth takes over hosts created by Redth/npm-docker-sync and
+	// re-stamps them as ours.
+	MigrateFromRedth bool
+	// CertificatePoll is how often the certificate list is checked for
+	// changes; a change triggers a reconcile so a certificate created in the
+	// UI reaches its hosts without a restart. 0 disables the poll.
+	CertificatePoll time.Duration
 }
 
 // Worker owns every write to the NPM API. Exactly one goroutine runs the
@@ -60,6 +81,16 @@ type Worker struct {
 	lastRun    time.Time
 	lastErr    error
 	lastFailed int
+
+	// refMu guards everything that is remembered between runs: the
+	// certificate and access list lookups, the per-resource backoff and the
+	// "said it once" warnings.
+	refMu        sync.RWMutex
+	certificates []npm.Certificate
+	certHash     string
+	accessLists  map[string]int
+	failures     map[string]failure
+	warned       map[string]struct{}
 }
 
 // NewWorker creates a worker.
@@ -73,7 +104,15 @@ func NewWorker(api API, src TargetSource, opts Options, log *slog.Logger) *Worke
 	if len(opts.Kinds) == 0 {
 		opts.Kinds = npm.Kinds
 	}
-	return &Worker{api: api, src: src, cache: NewCache(), opts: opts, log: log}
+	if opts.CertificatePartial == "" {
+		opts.CertificatePartial = certs.PartialPrimary
+	}
+	return &Worker{
+		api: api, src: src, cache: NewCache(), opts: opts, log: log,
+		accessLists: map[string]int{},
+		failures:    map[string]failure{},
+		warned:      map[string]struct{}{},
+	}
 }
 
 // Cache exposes the state cache (used by tests and the health endpoint).
@@ -135,6 +174,15 @@ func (w *Worker) Run(ctx context.Context, triggers <-chan []docker.Event) error 
 		resync = ticker.C
 	}
 
+	// Certificates are not a Docker event: a certificate issued or imported
+	// in the NPM UI would otherwise only be picked up by the next resync.
+	var certPoll <-chan time.Time
+	if w.opts.CertificatePoll > 0 {
+		ticker := time.NewTicker(w.opts.CertificatePoll)
+		defer ticker.Stop()
+		certPoll = ticker.C
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -153,6 +201,14 @@ func (w *Worker) Run(ctx context.Context, triggers <-chan []docker.Event) error 
 		case <-resync:
 			res, err := w.Reconcile(ctx)
 			w.report("periodic resync", res, err)
+
+		case <-certPoll:
+			if !w.PollCertificates(ctx) {
+				continue
+			}
+			w.log.Info("certificate list changed, reconciling")
+			res, err := w.Reconcile(ctx)
+			w.report("certificate resync", res, err)
 		}
 	}
 }
@@ -242,6 +298,12 @@ func (w *Worker) reconcile(ctx context.Context, deleteOrphans bool) (Result, err
 		return res, err
 	}
 
+	// The certificate list is fetched once per run: the automatic selection
+	// of every host reads from the same snapshot, so one run cannot hand two
+	// hosts contradictory answers.
+	w.loadCertificates(ctx)
+	w.loadAccessLists(ctx, needsAccessListNames(targets))
+
 	byKind := make(map[npm.Kind][]*docker.Target, len(w.opts.Kinds))
 	for _, t := range targets {
 		byKind[t.Kind] = append(byKind[t.Kind], t)
@@ -286,6 +348,7 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 	}
 
 	existing := indexResources(live)
+	byDomain := indexDomains(live)
 	desired, conflicts := indexTargets(targets)
 	for _, c := range conflicts {
 		res.Skipped++
@@ -297,25 +360,95 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 
 	var errs []error
 	next := make(map[string]Entry, len(desired))
+	now := time.Now()
 
 	for _, key := range sortedKeys(desired) {
 		target := desired[key]
-		resource := BuildResource(target)
+		current, found := existing[key]
+
+		// A resource created by another tool is never touched, whoever the
+		// other tool is; only hand-made ones can be adopted.
+		if found {
+			skip, reason := w.ownership(current)
+			if skip {
+				res.Skipped++
+				log.Warn("resource is not ours, skipping",
+					slog.String("key", key), slog.Int("id", current.ResourceID()),
+					slog.String("reason", reason))
+				continue
+			}
+			if reason != "" {
+				log.Info("adopting resource", slog.String("key", key),
+					slog.Int("id", current.ResourceID()), slog.String("from", reason))
+			}
+		}
+
+		// A domain another host already serves would make NPM reject the
+		// write with "domain already in use"; say so in our own words and
+		// leave the foreign host alone.
+		if owner, domain := foreignDomain(byDomain, target, current, w.owns); owner != nil {
+			res.Skipped++
+			log.Warn("domain already used by another host, skipping",
+				slog.String("key", key), slog.String("domain", domain),
+				slog.Int("conflicting_id", owner.ResourceID()),
+				slog.String("owner", ownerName(owner)))
+			continue
+		}
+
+		if err := w.resolveAccessLists(target); err != nil {
+			res.Failed++
+			errs = append(errs, fmt.Errorf("%s: %w", target.Describe(), err))
+			log.Error("cannot resolve access lists, skipping",
+				slog.String("key", key), slog.String("error", err.Error()))
+			continue
+		}
+
+		var liveResource npm.Resource
+		if found {
+			liveResource = current
+		}
+		certificate, err := w.resolveCertificate(log, target, liveResource)
+		if err != nil {
+			res.Failed++
+			errs = append(errs, err)
+			log.Error("cannot resolve the certificate, skipping",
+				slog.String("key", key), slog.String("error", err.Error()))
+			continue
+		}
+
+		resource := BuildResource(target, certificate)
 		if resource == nil {
 			res.Failed++
 			errs = append(errs, fmt.Errorf("%s: unsupported resource kind %q", target.Describe(), target.Kind))
 			continue
 		}
+		if found {
+			// Carry over values NPM assigned (issued certificates, the meta
+			// of a migrated host, ...) so the desired state can converge.
+			resource.AdoptServerState(current)
+		}
+		hash := resource.Fingerprint()
+		w.warnUnsupported(log, key, resource)
 
-		current, found := existing[key]
+		// A resource the API keeps rejecting is retried with a growing delay
+		// instead of on every event.
+		if waiting, retryIn := w.deferred(kind, key, hash, now); waiting {
+			res.Skipped++
+			log.Debug("resource is in backoff after a failure, skipping",
+				slog.String("key", key), slog.Duration("retry_in", retryIn))
+			continue
+		}
+
 		if !found {
 			entry, created, err := w.create(ctx, log, target, resource)
 			switch {
 			case err != nil:
 				res.Failed++
 				errs = append(errs, err)
+				w.backOff(log, kind, key, hash, now)
 			case created:
 				res.Created++
+				w.noteSuccess(kind, key)
 				if entry != nil {
 					next[key] = *entry
 				}
@@ -323,17 +456,6 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 			continue
 		}
 
-		if !npm.IsManaged(current.ResourceMeta()) && !w.opts.AdoptExisting {
-			res.Skipped++
-			log.Warn("resource exists but is not managed by this tool, skipping",
-				slog.String("key", key), slog.Int("id", current.ResourceID()))
-			continue
-		}
-
-		// Carry over values NPM assigned (issued certificates, ...) so the
-		// desired state can converge.
-		resource.AdoptServerState(current)
-		hash := resource.Fingerprint()
 		id := current.ResourceID()
 
 		// The configuration is in sync when the live resource hashes the same
@@ -361,6 +483,7 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 				res.Failed++
 				errs = append(errs, fmt.Errorf("update %s %s: %w", kind.Label(), key, err))
 				log.Error("failed to update resource", slog.String("key", key), slog.String("error", err.Error()))
+				w.backOff(log, kind, key, hash, now)
 				continue
 			}
 			changed = true
@@ -385,6 +508,7 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 			changed = true
 		}
 
+		w.noteSuccess(kind, key)
 		switch {
 		case changed:
 			res.Updated++
@@ -401,7 +525,7 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 		if _, wanted := desired[key]; wanted {
 			continue
 		}
-		if !npm.IsManaged(resource.ResourceMeta()) {
+		if !w.owns(resource) {
 			continue
 		}
 		if !deleteOrphans {
@@ -430,6 +554,87 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 
 	w.cache.ReplaceKind(kind, next)
 	return res, nil, errors.Join(errs...)
+}
+
+// owns reports whether a live resource carries our ownership marker - or, with
+// MIGRATE_FROM_REDTH, the marker of Redth/npm-docker-sync.
+func (w *Worker) owns(r npm.Resource) bool {
+	meta := r.ResourceMeta()
+	if npm.IsManaged(meta) {
+		return true
+	}
+	return w.opts.MigrateFromRedth && npm.IsRedth(meta)
+}
+
+// ownership decides what to do with an existing resource: skip it (with a
+// reason), adopt it (with the previous owner) or just use it.
+func (w *Worker) ownership(r npm.Resource) (skip bool, reason string) {
+	meta := r.ResourceMeta()
+	switch {
+	case npm.IsManaged(meta):
+		return false, ""
+	case npm.IsRedth(meta):
+		if w.opts.MigrateFromRedth {
+			return false, npm.RedthManagedByValue
+		}
+		return true, "managed by " + npm.RedthManagedByValue + " (set MIGRATE_FROM_REDTH=true to take it over)"
+	case npm.Owner(meta) != "":
+		return true, "managed by " + npm.Owner(meta)
+	case !w.opts.AdoptExisting:
+		return true, "created by hand (ADOPT_EXISTING=false)"
+	default:
+		return false, "an unmanaged host"
+	}
+}
+
+// backOff records a failure and logs the delay before the next attempt.
+func (w *Worker) backOff(log *slog.Logger, kind npm.Kind, key, hash string, now time.Time) {
+	delay := w.noteFailure(kind, key, hash, now)
+	log.Debug("backing off after a failure",
+		slog.String("key", key), slog.Duration("retry_in", delay))
+}
+
+// ownerName renders the ownership marker of a foreign resource.
+func ownerName(r npm.Resource) string {
+	if owner := npm.Owner(r.ResourceMeta()); owner != "" {
+		return owner
+	}
+	return "unmanaged"
+}
+
+// foreignDomain returns the resource that already serves one of the target's
+// domains, if it is not ours and not the resource we are about to update.
+func foreignDomain(byDomain map[string]npm.Resource, t *docker.Target, current npm.Resource, owned func(npm.Resource) bool) (npm.Resource, string) {
+	for _, domain := range t.Domains() {
+		other, ok := byDomain[domain]
+		if !ok || owned(other) {
+			continue
+		}
+		if current != nil && other.ResourceID() == current.ResourceID() {
+			continue
+		}
+		return other, domain
+	}
+	return nil, ""
+}
+
+// indexDomains maps every domain of every live resource to its owner, so an
+// overlap with a foreign host is caught before the API rejects the write.
+func indexDomains(resources []npm.Resource) map[string]npm.Resource {
+	out := make(map[string]npm.Resource, len(resources))
+	for _, r := range resources {
+		host, ok := r.(interface{ Domains() []string })
+		if !ok {
+			continue
+		}
+		for _, domain := range host.Domains() {
+			if existing, dup := out[domain]; dup && npm.IsManaged(existing.ResourceMeta()) {
+				continue
+			}
+			out[domain] = r
+		}
+	}
+	return out
 }
 
 // applyEnabled brings the live enabled state in line with the desired one and

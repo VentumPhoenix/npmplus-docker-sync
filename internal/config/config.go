@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/VentumPhoenix/npmplus-docker-sync/internal/certs"
+	"github.com/VentumPhoenix/npmplus-docker-sync/internal/fields"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/npm"
 )
 
@@ -24,6 +26,10 @@ const (
 	DefaultDebounceMaxWait  = 30 * time.Second
 	DefaultResyncInterval   = 5 * time.Minute
 	DefaultHTTPTimeout      = 30 * time.Second
+	// DefaultCertificatePoll is how often the certificate list is checked for
+	// changes, so a certificate created in the UI reaches its hosts without a
+	// restart.
+	DefaultCertificatePoll = time.Minute
 )
 
 // Config is the fully resolved runtime configuration.
@@ -48,7 +54,29 @@ type Config struct {
 	// StrictNetwork skips a container that is not attached to NPMNetwork
 	// instead of falling back to an address NPM cannot route to. Only has an
 	// effect when NPMNetwork is set.
-	StrictNetwork    bool
+	StrictNetwork bool
+	// NPMContainer is the name of the NPM/NPMplus container. When set, its
+	// networks are used for upstream resolution (Redth: NPM_CONTAINER_NAME).
+	NPMContainer string
+	// ExposedByDefault manages every container carrying labels of the
+	// namespace, without requiring npm.enable=true.
+	ExposedByDefault bool
+	// StrictLabels skips a resource whose labels contain an unknown field.
+	StrictLabels bool
+	// PortPreference orders the exposed ports when a container has several.
+	PortPreference []int
+	// Defaults are the effective per-field defaults from the environment.
+	Defaults *fields.Defaults
+	// CertificatePartial decides what happens when no certificate covers
+	// every domain of a host.
+	CertificatePartial certs.Partial
+	// CertificateAutoCreate requests a Let's Encrypt certificate when the
+	// automatic selection finds nothing.
+	CertificateAutoCreate bool
+	// CertificatePoll is how often the certificate list is polled.
+	CertificatePoll time.Duration
+	// MigrateFromRedth takes over hosts created by Redth/npm-docker-sync.
+	MigrateFromRedth bool
 	Kinds            []npm.Kind
 	DebounceInterval time.Duration
 	DebounceMaxWait  time.Duration
@@ -64,26 +92,56 @@ type Config struct {
 	HealthAddr string
 	// LogPayloads mirrors full API request bodies into the debug log.
 	LogPayloads bool
+
+	// Warnings are non-fatal configuration problems, reported once at start.
+	Warnings []string
+	// Notices record which alias spelling of a variable was used, so a
+	// configuration copied from another project is traceable in the log.
+	Notices []string
 }
 
 // Getenv mirrors os.Getenv and is injected for testability.
 type Getenv func(string) string
 
-// Load reads the configuration using the supplied lookup function. Pass
-// os.Getenv in production code.
-func Load(getenv Getenv) (*Config, error) {
+// Load reads the configuration using the supplied lookup function and the
+// process environment. Pass os.Getenv and os.Environ() in production code;
+// environ is only read to warn about misspelled NPM_<KIND>_<FIELD> variables.
+func Load(getenv Getenv, environ []string) (*Config, error) {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
+	// Every variable may also be supplied as <NAME>_FILE, which is how
+	// Docker and Podman secrets are mounted.
+	getenv = fileAware(getenv)
+
+	var notices []string
+	// alias resolves the first variable that is set and records when it was
+	// not the canonical one.
+	alias := func(fallback string, keys ...string) string {
+		for i, key := range keys {
+			v := strings.TrimSpace(getenv(key))
+			if v == "" {
+				continue
+			}
+			if i > 0 {
+				notices = append(notices,
+					fmt.Sprintf("%s is an accepted alias for %s", key, keys[0]))
+			}
+			return v
+		}
+		return fallback
+	}
 
 	cfg := &Config{
-		NPMURL:      strings.TrimRight(str(getenv, "", "NPM_URL", "NPM_BASE_URL"), "/"),
-		NPMIdentity: str(getenv, "", "NPM_IDENTITY", "NPM_EMAIL", "NPM_USER"),
+		NPMURL:      strings.TrimRight(alias("", "NPM_URL", "NPM_BASE_URL"), "/"),
+		NPMIdentity: alias("", "NPM_IDENTITY", "NPM_EMAIL", "NPM_USER"),
 		DockerHost:  str(getenv, DefaultDockerHost, "DOCKER_HOST"),
 		LabelPrefix: strings.TrimSuffix(str(getenv, DefaultLabelPrefix, "LABEL_PREFIX"), "."),
-		NPMNetwork:  str(getenv, "", "NPM_NETWORK", "NPM_DOCKER_NETWORK"),
+		NPMNetwork:  alias("", "NPM_NETWORK", "NPM_DOCKER_NETWORK"),
 		LogFormat:   strings.ToLower(str(getenv, "text", "LOG_FORMAT")),
 		HealthAddr:  str(getenv, "", "HEALTH_ADDR"),
+		// Redth spells it NPM_CONTAINER_NAME.
+		NPMContainer: alias("", "NPM_CONTAINER", "NPM_CONTAINER_NAME"),
 	}
 
 	secret, err := secretValue(getenv, "NPM_SECRET", "NPM_PASSWORD")
@@ -91,6 +149,9 @@ func Load(getenv Getenv) (*Config, error) {
 		return nil, err
 	}
 	cfg.NPMSecret = secret
+	if secret != "" && strings.TrimSpace(getenv("NPM_SECRET")) == "" && strings.TrimSpace(getenv("NPM_SECRET_FILE")) == "" {
+		notices = append(notices, "NPM_PASSWORD is an accepted alias for NPM_SECRET")
+	}
 
 	var errs []error
 	collect := func(err error) {
@@ -134,6 +195,31 @@ func Load(getenv Getenv) (*Config, error) {
 	cfg.LogLevel, err = logLevel(str(getenv, "info", "LOG_LEVEL"))
 	collect(err)
 
+	cfg.ExposedByDefault, err = boolean(getenv, true, "NPM_EXPOSED_BY_DEFAULT", "EXPOSED_BY_DEFAULT")
+	collect(err)
+	cfg.StrictLabels, err = boolean(getenv, false, "STRICT_LABELS", "NPM_STRICT_LABELS")
+	collect(err)
+	cfg.MigrateFromRedth, err = boolean(getenv, false, "MIGRATE_FROM_REDTH")
+	collect(err)
+	cfg.CertificateAutoCreate, err = boolean(getenv, false, "NPM_CERTIFICATE_AUTO_CREATE")
+	collect(err)
+	cfg.CertificatePoll, err = duration(getenv, DefaultCertificatePoll, "CERTIFICATE_POLL_INTERVAL")
+	collect(err)
+	cfg.CertificatePartial, err = certificatePartial(getenv)
+	collect(err)
+	cfg.PortPreference, err = portPreference(str(getenv, "", "NPM_PORT_PREFERENCE"))
+	collect(err)
+
+	// The per-field defaults (NPM_PROXY_*, NPM_DEFAULT_*) are resolved from
+	// the same table the labels are parsed with, so the two cannot drift.
+	defaults, warnings, defaultsErr := fields.LoadDefaults(getenv, environ)
+	cfg.Defaults = defaults
+	collect(defaultsErr)
+	for _, name := range warnings {
+		cfg.Warnings = append(cfg.Warnings, fmt.Sprintf("%s does not name a known field and is ignored", name))
+	}
+
+	cfg.Notices = notices
 	collect(cfg.validate())
 
 	if len(errs) > 0 {
@@ -219,6 +305,12 @@ func (c *Config) LogValue() slog.Value {
 		slog.Bool("npm_network_strict", c.NPMNetwork != "" && c.StrictNetwork),
 		slog.Duration("debounce_interval", c.DebounceInterval),
 		slog.Duration("resync_interval", c.ResyncInterval),
+		slog.Bool("exposed_by_default", c.ExposedByDefault),
+		slog.Bool("strict_labels", c.StrictLabels),
+		slog.String("certificate_partial", string(c.CertificatePartial)),
+		slog.Bool("certificate_auto_create", c.CertificateAutoCreate),
+		slog.Duration("certificate_poll", c.CertificatePoll),
+		slog.Bool("migrate_from_redth", c.MigrateFromRedth),
 		slog.Bool("delete_orphans", c.DeleteOrphans),
 		slog.Bool("adopt_existing", c.AdoptExisting),
 		slog.Bool("dry_run", c.DryRun),
@@ -331,15 +423,53 @@ func boolean(getenv Getenv, fallback bool, keys ...string) (bool, error) {
 
 // ParseBool accepts the usual strconv values plus the human friendly
 // yes/no/on/off spellings commonly used in Docker labels.
-func ParseBool(raw string) (bool, error) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "1", "t", "true", "y", "yes", "on", "enable", "enabled":
-		return true, nil
-	case "0", "f", "false", "n", "no", "off", "disable", "disabled":
-		return false, nil
-	default:
-		return false, fmt.Errorf("invalid boolean %q", raw)
+func ParseBool(raw string) (bool, error) { return fields.ParseBool(raw) }
+
+// fileAware wraps a lookup so that <NAME>_FILE is read from disk when it is
+// set. Docker and Podman secrets are mounted as files, and a password that
+// never enters the environment cannot leak through `docker inspect`.
+func fileAware(getenv Getenv) Getenv {
+	return func(key string) string {
+		if strings.HasSuffix(key, "_FILE") {
+			return getenv(key)
+		}
+		if path := strings.TrimSpace(getenv(key + "_FILE")); path != "" {
+			//nolint:gosec // the path is operator supplied configuration
+			if raw, err := os.ReadFile(path); err == nil {
+				return strings.TrimSpace(string(raw))
+			}
+		}
+		return getenv(key)
 	}
+}
+
+// certificatePartial reads NPM_CERTIFICATE_PARTIAL.
+func certificatePartial(getenv Getenv) (certs.Partial, error) {
+	partial, err := certs.ParsePartial(str(getenv, "", "NPM_CERTIFICATE_PARTIAL"))
+	if err != nil {
+		return partial, fmt.Errorf("NPM_CERTIFICATE_PARTIAL: %w", err)
+	}
+	return partial, nil
+}
+
+// portPreference parses NPM_PORT_PREFERENCE, the order in which an exposed
+// container port is picked when there is more than one.
+func portPreference(raw string) ([]int, error) {
+	if strings.TrimSpace(raw) == "" {
+		return fields.DefaultPortPreference, nil
+	}
+	var out []int
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == ';' }) {
+		n, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil {
+			return nil, fmt.Errorf("NPM_PORT_PREFERENCE: %q is not a port number", part)
+		}
+		if n < 1 || n > 65535 {
+			return nil, fmt.Errorf("NPM_PORT_PREFERENCE: %d is out of range (1-65535)", n)
+		}
+		out = append(out, n)
+	}
+	return out, nil
 }
 
 func logLevel(raw string) (slog.Level, error) {

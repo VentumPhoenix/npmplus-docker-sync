@@ -7,9 +7,13 @@ import (
 
 // BuildResource converts a Docker target into the NPM payload of its kind,
 // stamping the ownership marker used for orphan detection.
-func BuildResource(t *docker.Target) npm.Resource {
-	meta := buildMeta(t)
-	ssl := normalizeSSL(t)
+//
+// The certificate is passed in because it is resolved against the live
+// certificate list first (see certificates.go): "auto" only becomes an id once
+// the reconcile loop knows what exists.
+func BuildResource(t *docker.Target, certificate npm.CertificateID) npm.Resource {
+	meta := buildMeta(t, certificate)
+	ssl := normalizeSSL(t, certificate)
 
 	switch t.Kind {
 	case npm.KindProxy:
@@ -18,7 +22,7 @@ func BuildResource(t *docker.Target) npm.Resource {
 			ForwardScheme:         t.ForwardScheme,
 			ForwardHost:           t.ForwardHost,
 			ForwardPort:           t.ForwardPort,
-			CertificateID:         t.CertificateID,
+			CertificateID:         certificate,
 			SSLForced:             ssl.forced,
 			HSTSEnabled:           ssl.hsts,
 			HSTSSubdomains:        ssl.hstsSubdomains,
@@ -29,11 +33,25 @@ func BuildResource(t *docker.Target) npm.Resource {
 			CachingEnabled:        t.Caching,
 			AllowWebsocketUpgrade: t.Websockets,
 			AccessListIDs:         t.AccessListIDs,
+			AccessListNames:       t.AccessListNames,
 			AccessListType:        t.AccessListType,
 			AdvancedConfig:        t.AdvancedConfig,
+			LocationConfig:        t.LocationConfig,
 			Enabled:               npm.Flag(t.Enabled),
 			Locations:             locations(t),
 			Meta:                  meta,
+
+			// The three inverted NPMplus switches: the label is positive
+			// ("crowdsec_appsec: true" = active), the API field disables.
+			NoIndex:                  t.NoIndex,
+			DisableCrowdsecAppsec:    !t.CrowdsecAppsec,
+			DisableRequestBuffering:  !t.RequestBuffering,
+			DisableResponseBuffering: !t.ResponseBuffering,
+			UpstreamCompression:      t.UpstreamCompression,
+			FancyIndex:               t.FancyIndex,
+			XFrameOptions:            t.XFrameOptions,
+			AuthRequest:              t.AuthRequest,
+			AuthRequestUpstream:      t.AuthRequestUpstream,
 		}
 
 	case npm.KindRedirect:
@@ -43,7 +61,7 @@ func BuildResource(t *docker.Target) npm.Resource {
 			ForwardDomainName: t.ForwardDomainName,
 			ForwardHTTPCode:   t.ForwardHTTPCode,
 			PreservePath:      t.PreservePath,
-			CertificateID:     t.CertificateID,
+			CertificateID:     certificate,
 			SSLForced:         ssl.forced,
 			HSTSEnabled:       ssl.hsts,
 			HSTSSubdomains:    ssl.hstsSubdomains,
@@ -62,7 +80,11 @@ func BuildResource(t *docker.Target) npm.Resource {
 			ForwardingPort: npm.PortOf(t.ForwardingPort),
 			TCPForwarding:  t.TCPForwarding,
 			UDPForwarding:  t.UDPForwarding,
-			CertificateID:  t.CertificateID,
+			CertificateID:  certificate,
+			ProxyProtocol:  t.ProxyProtocol,
+			ProxyTLS:       t.ProxyTLS,
+			AdvancedConfig: t.AdvancedConfig,
+			Description:    t.Description,
 			Enabled:        npm.Flag(t.Enabled),
 			Meta:           meta,
 		}
@@ -70,7 +92,7 @@ func BuildResource(t *docker.Target) npm.Resource {
 	case npm.KindDead:
 		return &npm.DeadHost{
 			DomainNames:    npm.NormalizeDomains(t.DomainNames),
-			CertificateID:  t.CertificateID,
+			CertificateID:  certificate,
 			SSLForced:      ssl.forced,
 			HSTSEnabled:    ssl.hsts,
 			HSTSSubdomains: ssl.hstsSubdomains,
@@ -103,13 +125,20 @@ type sslSettings struct {
 // Without this the fingerprint is taken over the raw label values while the
 // API stores the cleaned ones, the two never match, and every Docker event and
 // every resync issues another pointless update.
-func normalizeSSL(t *docker.Target) sslSettings {
+//
+// An unset ssl_forced ("auto") means "on as soon as a certificate is
+// attached", which is the whole point of the automatic certificate selection.
+func normalizeSSL(t *docker.Target, certificate npm.CertificateID) sslSettings {
+	forced := !certificate.IsZero()
+	if t.SSLForced != nil {
+		forced = *t.SSLForced
+	}
 	s := sslSettings{
-		forced:         t.SSLForced,
+		forced:         forced,
 		hsts:           t.HSTSEnabled,
 		hstsSubdomains: t.HSTSSubdomains,
 	}
-	if t.CertificateID.IsZero() {
+	if certificate.IsZero() {
 		s.forced = false
 	}
 	if !s.forced {
@@ -132,15 +161,21 @@ func locations(t *docker.Target) []npm.Location {
 
 // buildMeta stamps ownership and, when a certificate is requested, the
 // Let's Encrypt settings NPM expects in the meta object.
-func buildMeta(t *docker.Target) npm.Meta {
+//
+// NPMplus takes the ACME account from its own ACME_EMAIL and ignores
+// letsencrypt_email/letsencrypt_agree, so they are only written when the
+// labels actually set them.
+func buildMeta(t *docker.Target, certificate npm.CertificateID) npm.Meta {
 	meta := npm.Meta{
 		npm.MetaManagedBy: npm.ManagedByValue,
 		npm.MetaContainer: t.ContainerName,
 		npm.MetaIndex:     t.Index,
 	}
-	if t.CertificateID.New || t.LetsEncryptEmail != "" {
-		meta["letsencrypt_agree"] = t.LetsEncryptAgree
-		meta["letsencrypt_email"] = t.LetsEncryptEmail
+	if certificate.New || t.LetsEncryptEmail != "" {
+		if t.LetsEncryptEmail != "" {
+			meta["letsencrypt_email"] = t.LetsEncryptEmail
+			meta["letsencrypt_agree"] = t.LetsEncryptAgree
+		}
 		meta["dns_challenge"] = t.DNSChallenge
 		if t.DNSChallenge {
 			meta["dns_provider"] = t.DNSProvider

@@ -15,6 +15,11 @@ import "fmt"
 //
 // Each payload struct below mirrors exactly one request schema, so adding a
 // field to a model can no longer leak into a request by accident.
+//
+// Fields that only exist on NPMplus are dropped when talking to upstream NPM
+// rather than failing the write: they are a better default, not a
+// requirement. UnsupportedByNPM lists them so the reconcile loop can say once
+// what it had to leave out.
 
 // ---------------------------------------------------------------------------
 // Proxy hosts
@@ -22,12 +27,25 @@ import "fmt"
 
 type locationPayloadNPMplus struct {
 	Path           string `json:"path"`
+	LocationType   string `json:"location_type"`
 	ForwardScheme  string `json:"forward_scheme"`
 	ForwardHost    string `json:"forward_host"`
 	ForwardPort    int    `json:"forward_port"`
 	AdvancedConfig string `json:"advanced_config"`
+	LocationConfig string `json:"npmplus_location_config"`
 	AccessListIDs  []int  `json:"npmplus_access_list_ids"`
 	AccessListType string `json:"npmplus_access_list_type"`
+
+	Enabled                  bool   `json:"npmplus_enabled"`
+	NoIndex                  bool   `json:"npmplus_noindex"`
+	DisableCrowdsecAppsec    bool   `json:"npmplus_crowdsec_appsec"`
+	DisableRequestBuffering  bool   `json:"npmplus_proxy_request_buffering"`
+	DisableResponseBuffering bool   `json:"npmplus_proxy_response_buffering"`
+	UpstreamCompression      bool   `json:"npmplus_upstream_compression"`
+	FancyIndex               bool   `json:"npmplus_fancyindex"`
+	XFrameOptions            string `json:"npmplus_x_frame_options,omitempty"`
+	AuthRequest              string `json:"npmplus_auth_request,omitempty"`
+	AuthRequestUpstream      string `json:"npmplus_auth_request_upstream"`
 }
 
 type locationPayloadNPM struct {
@@ -56,8 +74,20 @@ type proxyPayloadNPMplus struct {
 	AccessListIDs         []int                    `json:"npmplus_access_list_ids"`
 	AccessListType        string                   `json:"npmplus_access_list_type"`
 	AdvancedConfig        string                   `json:"advanced_config"`
+	LocationConfig        string                   `json:"npmplus_location_config"`
 	Locations             []locationPayloadNPMplus `json:"locations"`
-	Meta                  Meta                     `json:"meta"`
+
+	NoIndex                  bool   `json:"npmplus_noindex"`
+	DisableCrowdsecAppsec    bool   `json:"npmplus_crowdsec_appsec"`
+	DisableRequestBuffering  bool   `json:"npmplus_proxy_request_buffering"`
+	DisableResponseBuffering bool   `json:"npmplus_proxy_response_buffering"`
+	UpstreamCompression      bool   `json:"npmplus_upstream_compression"`
+	FancyIndex               bool   `json:"npmplus_fancyindex"`
+	XFrameOptions            string `json:"npmplus_x_frame_options,omitempty"`
+	AuthRequest              string `json:"npmplus_auth_request,omitempty"`
+	AuthRequestUpstream      string `json:"npmplus_auth_request_upstream"`
+
+	Meta Meta `json:"meta"`
 }
 
 type proxyPayloadNPM struct {
@@ -85,12 +115,15 @@ func (h *ProxyHost) Payload(flavour Flavour) (any, error) {
 	if err := checkScheme(flavour, h.ForwardScheme); err != nil {
 		return nil, err
 	}
+	if err := h.checkAccessListNames(); err != nil {
+		return nil, err
+	}
+	if err := checkLetsEncrypt(flavour, h.CertificateID, h.Meta); err != nil {
+		return nil, err
+	}
 	ids, listType := h.accessLists()
 
 	if flavour == FlavourNPM {
-		if h.HTTP3Support {
-			return nil, fmt.Errorf("npmplus_http3_support is not supported by upstream nginx-proxy-manager")
-		}
 		if len(ids) > 1 {
 			return nil, fmt.Errorf("upstream nginx-proxy-manager accepts a single access list, got %d", len(ids))
 		}
@@ -140,13 +173,25 @@ func (h *ProxyHost) Payload(flavour Flavour) (any, error) {
 			locationIDs = l.AccessListIDs
 		}
 		locations = append(locations, locationPayloadNPMplus{
-			Path:           l.Path,
-			ForwardScheme:  l.ForwardScheme,
-			ForwardHost:    l.ForwardHost,
-			ForwardPort:    l.ForwardPort,
-			AdvancedConfig: l.AdvancedConfig,
-			AccessListIDs:  idList(locationIDs),
-			AccessListType: listType,
+			Path:                     l.Path,
+			LocationType:             l.LocationType,
+			ForwardScheme:            l.ForwardScheme,
+			ForwardHost:              l.ForwardHost,
+			ForwardPort:              l.ForwardPort,
+			AdvancedConfig:           l.AdvancedConfig,
+			LocationConfig:           l.LocationConfig,
+			AccessListIDs:            idList(locationIDs),
+			AccessListType:           listType,
+			Enabled:                  l.IsEnabled(),
+			NoIndex:                  l.NoIndex,
+			DisableCrowdsecAppsec:    l.DisableCrowdsecAppsec,
+			DisableRequestBuffering:  l.DisableRequestBuffering,
+			DisableResponseBuffering: l.DisableResponseBuffering,
+			UpstreamCompression:      l.UpstreamCompression,
+			FancyIndex:               l.FancyIndex,
+			XFrameOptions:            l.XFrameOptions,
+			AuthRequest:              l.AuthRequest,
+			AuthRequestUpstream:      l.AuthRequestUpstream,
 		})
 	}
 	return &proxyPayloadNPMplus{
@@ -167,9 +212,72 @@ func (h *ProxyHost) Payload(flavour Flavour) (any, error) {
 		AccessListIDs:         idList(ids),
 		AccessListType:        listType,
 		AdvancedConfig:        h.AdvancedConfig,
+		LocationConfig:        h.LocationConfig,
 		Locations:             locations,
-		Meta:                  h.Meta,
+
+		NoIndex:                  h.NoIndex,
+		DisableCrowdsecAppsec:    h.DisableCrowdsecAppsec,
+		DisableRequestBuffering:  h.DisableRequestBuffering,
+		DisableResponseBuffering: h.DisableResponseBuffering,
+		UpstreamCompression:      h.UpstreamCompression,
+		FancyIndex:               h.FancyIndex,
+		XFrameOptions:            h.XFrameOptions,
+		AuthRequest:              h.AuthRequest,
+		AuthRequestUpstream:      h.AuthRequestUpstream,
+
+		Meta: h.Meta,
 	}, nil
+}
+
+// checkAccessListNames guards against writing a host without the protection
+// its labels asked for: an unresolved name must never silently become
+// "public".
+func (h *ProxyHost) checkAccessListNames() error {
+	if len(h.AccessListNames) > 0 {
+		return fmt.Errorf("unresolved access list name(s): %v", h.AccessListNames)
+	}
+	for _, l := range h.Locations {
+		if len(l.AccessListNames) > 0 {
+			return fmt.Errorf("location %s: unresolved access list name(s): %v", l.Path, l.AccessListNames)
+		}
+	}
+	return nil
+}
+
+// npmplusOnly implements the unsupportedFields interface.
+func (h *ProxyHost) npmplusOnly() []string {
+	var out []string
+	if h.HTTP3Support {
+		out = append(out, "ssl.http3")
+	}
+	if h.NoIndex {
+		out = append(out, "noindex")
+	}
+	if h.DisableCrowdsecAppsec {
+		out = append(out, "crowdsec_appsec")
+	}
+	if h.DisableRequestBuffering {
+		out = append(out, "request_buffering")
+	}
+	if h.DisableResponseBuffering {
+		out = append(out, "response_buffering")
+	}
+	if h.UpstreamCompression {
+		out = append(out, "upstream_compression")
+	}
+	if h.FancyIndex {
+		out = append(out, "fancyindex")
+	}
+	if h.XFrameOptions != "" {
+		out = append(out, "x_frame_options")
+	}
+	if h.AuthRequest != "" && h.AuthRequest != "none" {
+		out = append(out, "auth_request")
+	}
+	if h.LocationConfig != "" {
+		out = append(out, "location_config")
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -197,8 +305,8 @@ type redirectPayload struct {
 
 // Payload implements Resource.
 func (h *RedirectionHost) Payload(flavour Flavour) (any, error) {
-	if flavour == FlavourNPM && h.HTTP3Support {
-		return nil, fmt.Errorf("npmplus_http3_support is not supported by upstream nginx-proxy-manager")
+	if err := checkLetsEncrypt(flavour, h.CertificateID, h.Meta); err != nil {
+		return nil, err
 	}
 	payload := &redirectPayload{
 		DomainNames:       NormalizeDomains(h.DomainNames),
@@ -222,6 +330,14 @@ func (h *RedirectionHost) Payload(flavour Flavour) (any, error) {
 	return payload, nil
 }
 
+// npmplusOnly implements the unsupportedFields interface.
+func (h *RedirectionHost) npmplusOnly() []string {
+	if h.HTTP3Support {
+		return []string{"ssl.http3"}
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Streams
 // ---------------------------------------------------------------------------
@@ -235,6 +351,10 @@ type streamPayloadNPMplus struct {
 	TCPForwarding  bool   `json:"tcp_forwarding"`
 	UDPForwarding  bool   `json:"udp_forwarding"`
 	CertificateID  int    `json:"certificate_id"`
+	ProxyProtocol  int    `json:"npmplus_proxy_protocol_forwarding"`
+	ProxyTLS       bool   `json:"npmplus_proxy_tls"`
+	AdvancedConfig string `json:"npmplus_advanced_config"`
+	Description    string `json:"npmplus_description"`
 	Meta           Meta   `json:"meta"`
 }
 
@@ -271,6 +391,10 @@ func (s *Stream) Payload(flavour Flavour) (any, error) {
 	if s.CertificateID.New {
 		return nil, fmt.Errorf("certificate_id=%q is not supported for streams; reference an existing certificate id", CertificateNew)
 	}
+	description := s.Description
+	if len(description) > MaxDescriptionLength {
+		description = description[:MaxDescriptionLength]
+	}
 	return &streamPayloadNPMplus{
 		IncomingPort:   s.IncomingPort.String(),
 		ForwardingHost: s.ForwardingHost,
@@ -278,8 +402,30 @@ func (s *Stream) Payload(flavour Flavour) (any, error) {
 		TCPForwarding:  s.TCPForwarding,
 		UDPForwarding:  s.UDPForwarding,
 		CertificateID:  s.CertificateID.ID,
+		ProxyProtocol:  s.ProxyProtocol,
+		ProxyTLS:       s.ProxyTLS,
+		AdvancedConfig: s.AdvancedConfig,
+		Description:    description,
 		Meta:           s.Meta,
 	}, nil
+}
+
+// npmplusOnly implements the unsupportedFields interface.
+func (s *Stream) npmplusOnly() []string {
+	var out []string
+	if s.ProxyProtocol != 0 {
+		out = append(out, "proxy_protocol")
+	}
+	if s.ProxyTLS {
+		out = append(out, "proxy_tls")
+	}
+	if s.AdvancedConfig != "" {
+		out = append(out, "advanced_config")
+	}
+	if s.Description != "" {
+		out = append(out, "description")
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -300,8 +446,8 @@ type deadPayload struct {
 
 // Payload implements Resource.
 func (h *DeadHost) Payload(flavour Flavour) (any, error) {
-	if flavour == FlavourNPM && h.HTTP3Support {
-		return nil, fmt.Errorf("npmplus_http3_support is not supported by upstream nginx-proxy-manager")
+	if err := checkLetsEncrypt(flavour, h.CertificateID, h.Meta); err != nil {
+		return nil, err
 	}
 	payload := &deadPayload{
 		DomainNames:    NormalizeDomains(h.DomainNames),
@@ -320,9 +466,33 @@ func (h *DeadHost) Payload(flavour Flavour) (any, error) {
 	return payload, nil
 }
 
+// npmplusOnly implements the unsupportedFields interface.
+func (h *DeadHost) npmplusOnly() []string {
+	if h.HTTP3Support {
+		return []string{"ssl.http3"}
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+// unsupportedFields is implemented by every resource that can carry
+// NPMplus-only settings.
+type unsupportedFields interface {
+	npmplusOnly() []string
+}
+
+// UnsupportedByNPM returns the NPMplus-only fields the resource uses. Against
+// upstream nginx-proxy-manager they are silently left out of the request, and
+// the reconcile loop reports them once instead of failing the write.
+func UnsupportedByNPM(r Resource) []string {
+	if u, ok := r.(unsupportedFields); ok {
+		return u.npmplusOnly()
+	}
+	return nil
+}
 
 // idList never returns nil: both schemas type the field as an array, and a nil
 // slice would marshal to `null`.
@@ -331,6 +501,25 @@ func idList(ids []int) []int {
 		return []int{}
 	}
 	return ids
+}
+
+// checkLetsEncrypt guards a certificate request that upstream NPM would
+// reject: it takes the ACME account from the host's meta, where the address
+// and the agreement are mandatory. NPMplus uses its own ACME_EMAIL instead and
+// ignores both fields, so they are optional there.
+func checkLetsEncrypt(flavour Flavour, certificate CertificateID, meta Meta) error {
+	if flavour != FlavourNPM || !certificate.New {
+		return nil
+	}
+	email, _ := meta["letsencrypt_email"].(string)
+	agree, _ := meta["letsencrypt_agree"].(bool)
+	if email == "" {
+		return fmt.Errorf("upstream nginx-proxy-manager needs letsencrypt.email to request a certificate")
+	}
+	if !agree {
+		return fmt.Errorf("upstream nginx-proxy-manager needs letsencrypt.agree=true to request a certificate")
+	}
+	return nil
 }
 
 // checkScheme rejects an upstream scheme the flavour cannot express. NPMplus

@@ -514,6 +514,16 @@ func (c *Client) ListCertificates(ctx context.Context) ([]Certificate, error) {
 	return certs, nil
 }
 
+// ListAccessLists returns the access lists stored in NPM, so labels can name
+// them instead of pinning an id that differs between instances.
+func (c *Client) ListAccessLists(ctx context.Context) ([]AccessList, error) {
+	var lists []AccessList
+	if err := c.do(ctx, http.MethodGet, "/api/nginx/access-lists", nil, &lists); err != nil {
+		return nil, err
+	}
+	return lists, nil
+}
+
 // listCollection fetches a typed collection.
 func listCollection[T any](ctx context.Context, c *Client, kind Kind) ([]T, error) {
 	if !kind.Valid() {

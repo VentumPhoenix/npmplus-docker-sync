@@ -117,7 +117,7 @@ func TestListenerTargets(t *testing.T) {
 			ID:    "1111111111112222",
 			Names: []string{"/whoami"},
 			Labels: map[string]string{
-				"npm.enable": "true", "npm.host": "whoami.example.com", "npm.port": "80",
+				"npm.enable": "true", "npm.domains": "whoami.example.com", "npm.port": "80",
 			},
 		},
 		{ID: "2222", Names: []string{"/database"}},
@@ -128,7 +128,7 @@ func TestListenerTargets(t *testing.T) {
 		},
 	}}
 
-	listener := NewListener(api, ParseOptions{Prefix: "npm"}, nil)
+	listener := NewListener(api, ParseOptions{Prefix: "npm", ExposedByDefault: true}, nil)
 	targets, err := listener.Targets(context.Background())
 	if err != nil {
 		t.Fatalf("Targets() error = %v", err)
@@ -145,7 +145,7 @@ func TestListenerTargetsPropagatesListError(t *testing.T) {
 	t.Parallel()
 
 	api := &mockAPI{listErr: errors.New("permission denied")}
-	if _, err := NewListener(api, ParseOptions{Prefix: "npm"}, nil).Targets(context.Background()); err == nil {
+	if _, err := NewListener(api, ParseOptions{Prefix: "npm", ExposedByDefault: true}, nil).Targets(context.Background()); err == nil {
 		t.Fatal("Targets() error = nil, want the docker error")
 	}
 }
@@ -163,7 +163,9 @@ func TestListenerWatchForwardsEvents(t *testing.T) {
 
 	trigger := make(chan Event, 4)
 	done := make(chan error, 1)
-	go func() { done <- NewListener(api, ParseOptions{Prefix: "npm"}, nil).Watch(ctx, trigger) }()
+	go func() {
+		done <- NewListener(api, ParseOptions{Prefix: "npm", ExposedByDefault: true}, nil).Watch(ctx, trigger)
+	}()
 
 	for _, want := range []string{"start", "die"} {
 		select {
@@ -202,7 +204,9 @@ func TestListenerWatchReconnects(t *testing.T) {
 	defer cancel()
 
 	trigger := make(chan Event, 4)
-	go func() { _ = NewListener(api, ParseOptions{Prefix: "npm"}, nil).Watch(ctx, trigger) }()
+	go func() {
+		_ = NewListener(api, ParseOptions{Prefix: "npm", ExposedByDefault: true}, nil).Watch(ctx, trigger)
+	}()
 
 	var got []string
 	deadline := time.After(10 * time.Second)
@@ -268,7 +272,7 @@ func TestListenerResolvesContainerIP(t *testing.T) {
 		ID:    "abc",
 		Names: []string{"/app"},
 		Labels: map[string]string{
-			"npm.enable": "true", "npm.host": "app.example.com", "npm.port": "8080",
+			"npm.enable": "true", "npm.domains": "app.example.com", "npm.port": "8080",
 		},
 		NetworkSettings: &container.NetworkSettingsSummary{
 			Networks: map[string]*network.EndpointSettings{
@@ -285,22 +289,22 @@ func TestListenerResolvesContainerIP(t *testing.T) {
 	}{
 		{
 			name: "prefers the configured network",
-			opts: ParseOptions{Prefix: "npm", ResolveIP: true, PreferNetworks: []string{"npm"}},
+			opts: ParseOptions{Prefix: "npm", ResolveIP: true, ExposedByDefault: true, PreferNetworks: []string{"npm"}},
 			want: "172.20.0.5",
 		},
 		{
 			name: "falls back to the first network alphabetically",
-			opts: ParseOptions{Prefix: "npm", ResolveIP: true},
+			opts: ParseOptions{Prefix: "npm", ResolveIP: true, ExposedByDefault: true},
 			want: "172.21.0.9", // "backend" sorts before "npm"
 		},
 		{
 			name: "uses the container name when resolution is off",
-			opts: ParseOptions{Prefix: "npm", ResolveIP: false},
+			opts: ParseOptions{Prefix: "npm", ResolveIP: false, ExposedByDefault: true},
 			want: "app",
 		},
 		{
 			name: "unknown preferred network falls back",
-			opts: ParseOptions{Prefix: "npm", ResolveIP: true, PreferNetworks: []string{"nonexistent"}},
+			opts: ParseOptions{Prefix: "npm", ResolveIP: true, ExposedByDefault: true, PreferNetworks: []string{"nonexistent"}},
 			want: "172.21.0.9",
 		},
 	}
@@ -329,7 +333,7 @@ func TestListenerFallsBackToNameWithoutIP(t *testing.T) {
 		ID:    "abc",
 		Names: []string{"/app"},
 		Labels: map[string]string{
-			"npm.enable": "true", "npm.host": "app.example.com", "npm.port": "8080",
+			"npm.enable": "true", "npm.domains": "app.example.com", "npm.port": "8080",
 		},
 		// Host networking: no per-network IP address is reported.
 		NetworkSettings: &container.NetworkSettingsSummary{
@@ -337,7 +341,7 @@ func TestListenerFallsBackToNameWithoutIP(t *testing.T) {
 		},
 	}}}
 
-	targets, err := NewListener(api, ParseOptions{Prefix: "npm", ResolveIP: true}, nil).Targets(context.Background())
+	targets, err := NewListener(api, ParseOptions{Prefix: "npm", ResolveIP: true, ExposedByDefault: true}, nil).Targets(context.Background())
 	if err != nil {
 		t.Fatalf("Targets() error = %v", err)
 	}
@@ -353,7 +357,7 @@ func TestListenerLabelOverridesResolvedIP(t *testing.T) {
 		ID:    "abc",
 		Names: []string{"/app"},
 		Labels: map[string]string{
-			"npm.enable": "true", "npm.host": "app.example.com", "npm.port": "8080",
+			"npm.enable": "true", "npm.domains": "app.example.com", "npm.port": "8080",
 			"npm.proxy.forward_host": "custom-upstream",
 		},
 		NetworkSettings: &container.NetworkSettingsSummary{
@@ -361,7 +365,7 @@ func TestListenerLabelOverridesResolvedIP(t *testing.T) {
 		},
 	}}}
 
-	targets, err := NewListener(api, ParseOptions{Prefix: "npm", ResolveIP: true}, nil).Targets(context.Background())
+	targets, err := NewListener(api, ParseOptions{Prefix: "npm", ResolveIP: true, ExposedByDefault: true}, nil).Targets(context.Background())
 	if err != nil {
 		t.Fatalf("Targets() error = %v", err)
 	}
@@ -378,17 +382,17 @@ func TestListenerProducesMultipleTargetsPerContainer(t *testing.T) {
 		Names: []string{"/multi"},
 		Labels: map[string]string{
 			"npm.enable":                 "true",
-			"npm.0.proxy.host":           "app.example.com",
+			"npm.0.proxy.domains":        "app.example.com",
 			"npm.0.proxy.port":           "80",
 			"npm.1.stream.incoming_port": "5432",
-			"npm.2.404.host":             "parked.example.com",
+			"npm.2.404.domains":          "parked.example.com",
 		},
 		NetworkSettings: &container.NetworkSettingsSummary{
 			Networks: map[string]*network.EndpointSettings{"npm": {IPAddress: "172.20.0.7"}},
 		},
 	}}}
 
-	targets, err := NewListener(api, ParseOptions{Prefix: "npm", ResolveIP: true}, nil).Targets(context.Background())
+	targets, err := NewListener(api, ParseOptions{Prefix: "npm", ResolveIP: true, ExposedByDefault: true}, nil).Targets(context.Background())
 	if err != nil {
 		t.Fatalf("Targets() error = %v", err)
 	}

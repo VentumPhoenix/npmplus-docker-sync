@@ -77,9 +77,17 @@ services:
       RESYNC_INTERVAL: 5m
       # CAUTION: a resource this tool once created keeps its ownership marker.
       # Make sure every container whose hosts you want to keep still carries
-      # npm.enable=true - including the NPM/NPMplus container itself - or run
+      # its npm.* labels - including the NPM/NPMplus container itself - or run
       # once with DRY_RUN=true to see what would be removed.
       DELETE_ORPHANS: "true"
+      # Certificates are chosen automatically: exact match before wildcard.
+      NPM_DEFAULT_CERTIFICATE: auto
+      # Global defaults for any label field; a label on a container wins.
+      # See docs/FIELDS.md for the full list.
+      # NPM_PROXY_SSL_FORCE: "true"
+      # NPM_PROXY_WEBSOCKETS: "true"
+      # Take over hosts created by Redth/npm-docker-sync (docs/MIGRATION.md):
+      # MIGRATE_FROM_REDTH: "false"
       LOG_LEVEL: info
       LOG_FORMAT: json
       HEALTH_ADDR: ":8080"

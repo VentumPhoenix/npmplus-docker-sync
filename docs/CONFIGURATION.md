@@ -11,6 +11,10 @@ values are reported together at startup, not one at a time.
 | `NPM_IDENTITY` (`NPM_EMAIL`, `NPM_USER`) | — | **Required.** Admin e-mail. |
 | `NPM_SECRET` (`NPM_PASSWORD`) | — | **Required.** Admin password. |
 | `NPM_SECRET_FILE` | — | Path to a file holding the password; takes precedence. |
+
+Every variable on this page can also be supplied as `<NAME>_FILE` pointing at
+a file, which is how Docker and Podman secrets are mounted:
+`NPM_SECRET_FILE`, `NPM_PASSWORD_FILE`, and the same for anything else.
 | `NPM_TIMEOUT` | `30s` | Per-request HTTP timeout. |
 | `NPM_INSECURE_SKIP_VERIFY` | `false` | Skip TLS verification (self-signed NPM). |
 
@@ -53,6 +57,7 @@ inspected for `npmplus_access_list_ids` (NPMplus) or `access_list_id`
 | `DOCKER_CERT_PATH` | — | TLS material for a remote daemon (standard Docker variable). |
 | `DOCKER_TLS_VERIFY` | — | Standard Docker variable. |
 | `NPM_NETWORK` | — | The Docker network upstream IPs are taken from (alias `NPM_DOCKER_NETWORK`). |
+| `NPM_CONTAINER_NAME` | — | Name of the NPM/NPMplus container. Its networks are used when `NPM_NETWORK` is unset (alias `NPM_CONTAINER`). |
 | `NPM_NETWORK_STRICT` | `true` | With `NPM_NETWORK` set, skip a container that is not attached to it instead of falling back to another network. |
 | `RESOLVE_CONTAINER_IP` | `true` | Use container IPs instead of names as upstream hosts. |
 
@@ -63,7 +68,11 @@ Use `tcp://docker-socket-proxy:2375` with a filtered socket proxy — see
 
 | Variable | Default | Description |
 |---|---|---|
-| `LABEL_PREFIX` | `npm` | Label namespace. A trailing dot is stripped. |
+| `LABEL_PREFIX` | `npm` | Label namespace. A trailing dot is stripped; `.` and `-` both separate it from the field. |
+| `NPM_EXPOSED_BY_DEFAULT` | `true` | Manage every container carrying labels of the namespace. `false` requires `npm.enable=true` (alias `EXPOSED_BY_DEFAULT`). |
+| `STRICT_LABELS` | `false` | Skip a resource whose labels contain an unknown field instead of only warning. |
+| `NPM_PORT_PREFERENCE` | `80,8080,3000,8000,443` | Order in which an exposed container port is picked when there is more than one. |
+| `MIGRATE_FROM_REDTH` | `false` | Take over hosts created by [Redth/npm-docker-sync](https://github.com/Redth/npm-docker-sync). |
 | `SYNC_KINDS` | all four | Resource types to manage, e.g. `proxy,stream`. Aliases: `proxies`, `redirection`, `dead`, `404`. |
 | `DEBOUNCE_INTERVAL` | `3s` | Quiet period after the last event. |
 | `DEBOUNCE_MAX_WAIT` | `30s` | Cap for a continuous event stream. Must be ≥ interval. |
@@ -74,6 +83,39 @@ Use `tcp://docker-socket-proxy:2375` with a filtered socket proxy — see
 | `SHUTDOWN_TIMEOUT` | `30s` | Budget for the final flush after SIGTERM. |
 
 Durations use Go syntax (`500ms`, `3s`, `1m30s`); a bare number is seconds.
+
+## Certificates
+
+| Variable | Default | Description |
+|---|---|---|
+| `NPM_DEFAULT_CERTIFICATE` | `auto` | Default for the `certificate` label: `auto`, an id, a domain, `name:<nice name>`, `new` or `none`. |
+| `NPM_CERTIFICATE_PARTIAL` | `primary` | When no certificate covers every domain of a host: `primary` uses one for the first domain and warns, `none` attaches nothing. |
+| `NPM_CERTIFICATE_AUTO_CREATE` | `false` | Request a Let's Encrypt certificate when the automatic selection finds nothing. |
+| `CERTIFICATE_POLL_INTERVAL` | `1m` | How often the certificate list is checked for changes; `0` disables the poll. |
+
+The selection rules are documented in [LABELS.md](LABELS.md#certificates).
+
+## Field defaults
+
+Every label field has an environment variable that changes its default for all
+containers:
+
+```
+NPM_<KIND>_<FIELD>     kind specific, e.g. NPM_PROXY_WEBSOCKETS, NPM_STREAM_UDP
+NPM_DEFAULT_<FIELD>    every kind that has the field, e.g. NPM_DEFAULT_CERTIFICATE
+```
+
+`<KIND>` is `PROXY`, `REDIRECT`, `STREAM` or `DEAD`. The field name is upper
+cased with `.`, `-` and `_` all written as `_`, and every alias of a field has
+its own variable — which is why Redth's `NPM_PROXY_SSL_FORCE`,
+`NPM_PROXY_BLOCK_EXPLOITS` and `NPM_PROXY_HSTS_SUBDOMAINS` work unchanged.
+
+Labels on a container always win over these. Values are validated at start-up,
+the effective defaults that came from the environment are logged, and a
+variable in the `NPM_<KIND>_` or `NPM_DEFAULT_` namespace that names no field
+is reported as a warning instead of being ignored silently.
+
+The full list is in [FIELDS.md](FIELDS.md).
 
 ### The shutdown flush never deletes
 
