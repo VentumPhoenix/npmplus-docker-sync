@@ -1,0 +1,81 @@
+name: Bug report
+description: Something does not work as documented
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a report! Please redact passwords,
+        tokens and real domain names from logs before posting.
+
+  - type: input
+    id: version
+    attributes:
+      label: npmplus-docker-sync version
+      description: Output of `npmplus-docker-sync version` or the image tag you run.
+      placeholder: v1.0.0 / ghcr.io/ventumphoenix/npmplus-docker-sync:latest
+    validations:
+      required: true
+
+  - type: dropdown
+    id: flavour
+    attributes:
+      label: Proxy manager
+      options:
+        - Nginx Proxy Manager (jc21)
+        - NPMplus (ZoeyVid)
+        - Other / fork
+    validations:
+      required: true
+
+  - type: dropdown
+    id: resource-type
+    attributes:
+      label: Affected resource type
+      options:
+        - Proxy host
+        - Redirection host
+        - Stream
+        - 404 / dead host
+        - Several / not resource specific
+    validations:
+      required: true
+
+  - type: dropdown
+    id: docker-endpoint
+    attributes:
+      label: Docker endpoint
+      options:
+        - unix socket (mounted)
+        - tcp (docker-socket-proxy)
+        - tcp (remote daemon)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: labels
+    attributes:
+      label: Container labels
+      description: All npm.* labels of the affected container, including the indexes.
+      render: yaml
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Run with `LOG_LEVEL=debug` if possible.
+      render: shell
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Docker version, host OS, architecture, how NPM is deployed.

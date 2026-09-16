@@ -1,0 +1,23 @@
+# Binaries
+/npmplus-docker-sync
+/npm-docker-sync
+/dist/
+*.exe
+*.test
+
+# Coverage and profiling
+coverage.out
+coverage.html
+*.prof
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+secrets/
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

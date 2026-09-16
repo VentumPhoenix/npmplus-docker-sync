@@ -1,0 +1,17 @@
+.git
+.github
+.golangci.yml
+.goreleaser.yaml
+.govulncheck-allow
+scripts/
+*.md
+!README.md
+docs/
+dist/
+coverage.out
+coverage.html
+npmplus-docker-sync
+npm-docker-sync
+secrets/
+.env
+.env.*

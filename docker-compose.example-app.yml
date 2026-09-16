@@ -1,0 +1,57 @@
+# Example workload: label a container and the resources appear in NPM.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.example-app.yml up -d
+services:
+  whoami:
+    image: traefik/whoami:latest
+    container_name: whoami
+    restart: unless-stopped
+    networks:
+      - npm
+    labels:
+      npm.enable: "true"
+      npm.proxy.host: "whoami.example.com"
+      npm.proxy.port: "80"
+      # Optional hardening once a certificate exists:
+      # npm.proxy.certificate_id: "new"
+      # npm.proxy.ssl.forced: "true"
+      # npm.proxy.ssl.http2: "true"
+      # npm.letsencrypt.email: "admin@example.com"
+      # npm.letsencrypt.agree: "true"
+
+  # One container, four NPM resources — indexed labels at work.
+  demo-stack:
+    image: traefik/whoami:latest
+    container_name: demo-stack
+    restart: unless-stopped
+    networks:
+      - npm
+    labels:
+      npm.enable: "true"
+
+      # 0: the application itself, with a separate /api upstream
+      npm.0.proxy.host: "demo.example.com"
+      npm.0.proxy.port: "80"
+      npm.0.proxy.location.0.path: "/api"
+      npm.0.proxy.location.0.forward_port: "80"
+
+      # 1: an admin UI on another port, behind an access list
+      npm.1.proxy.host: "admin.demo.example.com"
+      npm.1.proxy.port: "8080"
+      # npm.1.proxy.access_list_id: "2"
+
+      # 2: a TCP stream (NPM must publish this port itself)
+      npm.2.stream.incoming_port: "5432"
+      npm.2.stream.forward_port: "5432"
+
+      # 3: redirect the legacy domain
+      npm.3.redirect.host: "old-demo.example.com"
+      npm.3.redirect.forward_domain: "demo.example.com"
+      npm.3.redirect.http_code: "301"
+
+      # 4: park an unused domain on the 404 page
+      npm.4.404.host: "parked.example.com"
+
+networks:
+  npm:
+    external: true

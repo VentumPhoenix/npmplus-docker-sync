@@ -1,0 +1,22 @@
+# Vulnerabilities that are knowingly accepted, one ID per line.
+#
+# Only add an entry with a reason that explains why the vulnerable code cannot
+# be reached from this binary. scripts/govulncheck.sh fails on every other
+# finding, and warns when an entry here is no longer reported so the list does
+# not rot.
+
+# Both advisories are daemon-side Moby bugs: an AuthZ plugin bypass on
+# oversized request bodies (4887) and an off-by-one in plugin privilege
+# validation (4883). This project only links the Docker *client* and only ever
+# calls ContainerList, Events and Ping - it never runs a daemon, never installs
+# a plugin and never uses AuthZ plugins.
+#
+# They are flagged because the fix landed in github.com/moby/moby/v2 >= 2.0.0-beta.8
+# and the advisory lists no fixed version for the github.com/docker/docker
+# +incompatible line we depend on. govulncheck therefore treats the whole
+# module as vulnerable, so every client symbol we touch reports as "called".
+#
+# Remove these once the client is migrated to github.com/moby/moby/v2 (that
+# module is still in beta; see the roadmap).
+GO-2026-4887
+GO-2026-4883
