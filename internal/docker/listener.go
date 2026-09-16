@@ -109,6 +109,8 @@ func (l *Listener) Containers(ctx context.Context) ([]Container, error) {
 			Name:     containerName(s),
 			Labels:   s.Labels,
 			Networks: networksOf(s),
+			Ports:    portsOf(s),
+			State:    s.State,
 		})
 	}
 	return out, nil
@@ -122,11 +124,27 @@ func (l *Listener) Targets(ctx context.Context) ([]*Target, error) {
 	if err != nil {
 		return nil, err
 	}
-	targets, errs := ParseAll(containers, l.opts)
-	for _, parseErr := range errs {
+	opts := l.opts
+	opts.SelfID = l.selfID
+	res := ParseAll(containers, opts)
+	for _, parseErr := range res.Errors {
 		l.log.Warn("ignoring invalid label definition", slog.String("error", parseErr.Error()))
 	}
-	return targets, nil
+	for _, warning := range res.Warnings {
+		l.log.Warn(warning)
+	}
+	return res.Targets, nil
+}
+
+// Summarize classifies the running containers for the start-up overview.
+func (l *Listener) Summarize(ctx context.Context) (Summary, error) {
+	containers, err := l.Containers(ctx)
+	if err != nil {
+		return Summary{}, err
+	}
+	opts := l.opts
+	opts.SelfID = l.selfID
+	return Classify(containers, opts), nil
 }
 
 // DiscoverOwnNetworks returns the networks this process's own container is
@@ -158,6 +176,29 @@ func (l *Listener) DiscoverOwnNetworks(ctx context.Context) []string {
 		}
 		return names
 	}
+	return nil
+}
+
+// NetworksOfContainer returns the networks a named container is attached to.
+// It is how NPM_CONTAINER_NAME turns into an upstream network preference
+// without the operator having to name the network as well.
+func (l *Listener) NetworksOfContainer(ctx context.Context, name string) []string {
+	if strings.TrimSpace(name) == "" {
+		return nil
+	}
+	containers, err := l.Containers(ctx)
+	if err != nil {
+		l.log.Debug("could not inspect the npm container", slog.String("error", err.Error()))
+		return nil
+	}
+	for _, c := range containers {
+		if c.Name != name && !strings.HasPrefix(c.ID, name) {
+			continue
+		}
+		return c.NetworkNames()
+	}
+	l.log.Warn("npm container not found, falling back to the own networks",
+		slog.String("container", name))
 	return nil
 }
 
@@ -269,6 +310,22 @@ func networksOf(s container.Summary) []Network {
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// portsOf converts the port list of a container. Docker reports exposed ports
+// with a private port only and published ones with both, which is exactly the
+// distinction the upstream guess needs.
+func portsOf(s container.Summary) []PortBinding {
+	out := make([]PortBinding, 0, len(s.Ports))
+	for _, p := range s.Ports {
+		out = append(out, PortBinding{
+			Private: int(p.PrivatePort),
+			Public:  int(p.PublicPort),
+			Type:    p.Type,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Private < out[j].Private })
 	return out
 }
 

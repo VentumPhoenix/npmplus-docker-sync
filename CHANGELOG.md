@@ -7,6 +7,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta.3] - 2026-09-16
+
+**Labels from [Redth/npm-docker-sync](https://github.com/Redth/npm-docker-sync)
+work unchanged, certificates pick themselves, and one label is enough for a
+complete host.** See [docs/MIGRATION.md](docs/MIGRATION.md).
+
+### Breaking
+
+- **`host` is the upstream, not the domain.** The domain is `domains` (alias
+  `domain`), and `host` is the target to forward to - the meaning it has in
+  Redth's labels. A proxy host or stream whose `host` looks like a domain and
+  that has no `domains` is rejected with a message naming both labels, instead
+  of quietly creating a host for the wrong name. Redirection and 404 hosts have
+  no upstream, so `host` remains an alias for `domains` there.
+- **`npm.enable` is no longer required.** Every container carrying at least one
+  label of the namespace is managed; `npm.enable=false` opts out.
+  `NPM_EXPOSED_BY_DEFAULT=false` restores the old opt-in behaviour.
+- **New defaults.** `certificate` and `ssl.forced` default to `auto`,
+  `ssl.http2` and `ssl.http3` to `true`, `forward_port` to `auto`, and the
+  NPMplus switches `crowdsec_appsec`, `request_buffering` and
+  `response_buffering` to active. Existing hosts are updated accordingly on the
+  first run - use `DRY_RUN=true` first, and pin the old values with
+  `NPM_DEFAULT_*` / `NPM_<KIND>_*` if you prefer them.
+- **Hosts created by Redth are no longer adopted automatically.** Its marker
+  (`managed_by: npm-docker-sync`) used to be recognised as a legacy marker of
+  this tool, which would have let two running tools delete each other's hosts.
+  Migration is now explicit: `MIGRATE_FROM_REDTH=true`.
+
+### Added
+
+- **Redth label compatibility.** Both index positions
+  (`npm.proxy.1.domains` and `npm.1.proxy.domains`), both namespace separators
+  (`npm.` and `npm-`), the shorthand `npm.domains`, and `.`/`_`/`-` as
+  interchangeable separators inside a field name. Every entry of Redth's label
+  table has a unit test.
+- **Redth environment compatibility.** `NPM_EMAIL`, `NPM_PASSWORD`,
+  `NPM_CONTAINER_NAME` (its networks are used for upstream resolution) and the
+  `NPM_PROXY_*` defaults. Each alias that is used is logged once with the
+  canonical name it maps to.
+- **Automatic certificate selection.** `certificate` accepts `auto` (the
+  default), an id, a domain, `name:<nice name>`, `new` or `none`. `auto` ranks
+  the certificates NPM holds - exact, exact+SANs, mixed, wildcard - breaking
+  ties by remaining validity and id, skipping expired entries, deleted ones and
+  NPMplus client CAs (`provider: mtls`). Wildcards cover exactly one label
+  (RFC 6125) and internationalised domains are compared as punycode. A
+  certificate that already fits is kept unless a candidate matches in a better
+  class, and the list is polled every `CERTIFICATE_POLL_INTERVAL` (default
+  `1m`) so a certificate created in the UI reaches its hosts without a restart.
+  `NPM_CERTIFICATE_PARTIAL` decides what happens when no certificate covers
+  every domain, `NPM_CERTIFICATE_AUTO_CREATE` requests one when nothing
+  matches.
+- **Global defaults for every field.** `NPM_<KIND>_<FIELD>` and
+  `NPM_DEFAULT_<FIELD>` set the default of any label field, including every
+  alias, so `NPM_PROXY_SSL_FORCE` and `NPM_PROXY_HSTS_SUBDOMAINS` work as they
+  do in Redth. Labels win over the environment, values are validated at
+  start-up, the effective defaults are logged, and a variable in that namespace
+  that names no field is reported instead of ignored.
+- **Upstream port detection.** `forward_port` defaults to `auto`: a single
+  exposed TCP port is used as-is, several are decided by
+  `NPM_PORT_PREFERENCE` (default `80,8080,3000,8000,443`), and a container that
+  offers no usable port is skipped with a message naming what it found.
+- **The NPMplus feature set as labels.** `ssl.http3`, `noindex`,
+  `crowdsec_appsec`, `request_buffering`, `response_buffering`,
+  `upstream_compression`, `fancyindex`, `x_frame_options`, `auth_request`,
+  `auth_request_upstream`, `location_config`, and for streams
+  `proxy_protocol`, `proxy_tls`, `advanced_config` and `description` (which
+  defaults to the container name). The three inverted API switches are written
+  positively as labels and negated on the way in; the explicit `disable_*`
+  spellings are accepted too.
+- **Custom locations gained the NPMplus fields**, including the location type
+  (`prefix`, `exact`, `regex`, `iregex`, `prefer`, `named`) and per-location
+  switches, all inherited from the host unless overridden.
+- **Access lists by name.** `access_list: Intern,VPN` is resolved against
+  `/api/nginx/access-lists`. An unknown name skips the resource - a typo must
+  never turn a protected host into a public one.
+- **Unknown labels are reported** with a suggestion
+  (`did you mean npm.proxy.ssl.forced?`). `STRICT_LABELS=true` skips the
+  resource instead of only warning.
+- **Domain conflicts are detected before the write.** A domain a foreign host
+  already serves is reported with that host's id and owner instead of
+  producing NPM's `domain already in use`.
+- **Per-resource backoff.** A resource the API rejects is retried with a
+  growing delay (30 s up to 30 min) instead of on every event; a change to its
+  labels clears the backoff.
+- **`<NAME>_FILE` for every variable**, not just the password.
+- **A generated field reference**, [docs/FIELDS.md](docs/FIELDS.md), produced
+  from the same table the parser uses and verified in CI, plus
+  [docs/MIGRATION.md](docs/MIGRATION.md).
+
+### Changed
+
+- **NPMplus-only settings no longer fail against upstream NPM.** They are left
+  out of the request and reported once per resource, so the new defaults
+  (HTTP/3 among them) do not break that flavour. Configurations upstream NPM
+  genuinely cannot express still fail with a message naming the feature.
+- **`letsencrypt.email` / `.agree` are only required for upstream NPM.**
+  NPMplus takes the ACME account from its own `ACME_EMAIL`, so `certificate:
+  new` works there without them.
+- **A start-up overview** reports how many containers are managed, opted out
+  or unlabelled.
+
 ## [1.0.0-beta.2] - 2026-09-16
 
 **Writing to NPMplus works again.** Every create and update failed in
@@ -268,7 +369,8 @@ Upstreams also change from container names to container IPs in 2.0. Set
 - Multi-stage `scratch` image running as `1000:1000`, published for
   linux/amd64, arm64 and arm/v7.
 
-[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.2...HEAD
+[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.3...HEAD
+[1.0.0-beta.3]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.2...v1.0.0-beta.3
 [1.0.0-beta.2]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.1...v1.0.0-beta.2
 [1.0.0-beta.1]: https://github.com/VentumPhoenix/npmplus-docker-sync/releases/tag/v1.0.0-beta.1
 [2.0.0]: https://github.com/VentumPhoenix/npmplus-docker-sync/releases/tag/v2.0.0

@@ -9,15 +9,15 @@ services:
     networks:
       - npm
     labels:
-      npm.enable: "true"
-      npm.proxy.host: "whoami.example.com"
-      npm.proxy.port: "80"
-      # Optional hardening once a certificate exists:
-      # npm.proxy.certificate_id: "new"
-      # npm.proxy.ssl.forced: "true"
-      # npm.proxy.ssl.http2: "true"
-      # npm.letsencrypt.email: "admin@example.com"
-      # npm.letsencrypt.agree: "true"
+      # That is the whole configuration: the port comes from the image's
+      # EXPOSE, the certificate from whatever matches in NPM, and https is
+      # enforced as soon as one is attached.
+      npm.proxy.domains: "whoami.example.com"
+      # Pin the certificate instead of letting it be chosen:
+      # npm.proxy.certificate: "7"              # by id
+      # npm.proxy.certificate: "name:wildcard"  # by nice name
+      # npm.proxy.certificate: "new"            # request a new one
+      # npm.proxy.certificate: "none"           # stay on plain http
 
   # One container, four NPM resources — indexed labels at work.
   demo-stack:
@@ -27,31 +27,30 @@ services:
     networks:
       - npm
     labels:
-      npm.enable: "true"
-
       # 0: the application itself, with a separate /api upstream
-      npm.0.proxy.host: "demo.example.com"
-      npm.0.proxy.port: "80"
-      npm.0.proxy.location.0.path: "/api"
-      npm.0.proxy.location.0.forward_port: "80"
+      npm.proxy.domains: "demo.example.com"
+      npm.proxy.port: "80"
+      npm.proxy.location.0.path: "/api"
+      npm.proxy.location.0.forward_port: "80"
 
-      # 1: an admin UI on another port, behind an access list
-      npm.1.proxy.host: "admin.demo.example.com"
+      # 1: an admin UI on another port, behind an access list and forward auth
+      npm.1.proxy.domains: "admin.demo.example.com"
       npm.1.proxy.port: "8080"
-      # npm.1.proxy.access_list_ids: "2"       # NPMplus accepts "2,5"
-      # npm.1.proxy.access_list_id: "2"        # single-id shorthand
+      npm.1.proxy.noindex: "true"
+      # npm.1.proxy.access_list: "Intern"      # by name, or "2,5" by id
+      # npm.1.proxy.auth_request: "authelia"   # NPMplus forward auth
 
       # 2: a TCP stream (NPM must publish this port itself)
       npm.2.stream.incoming_port: "5432"
       npm.2.stream.forward_port: "5432"
 
       # 3: redirect the legacy domain
-      npm.3.redirect.host: "old-demo.example.com"
+      npm.3.redirect.domains: "old-demo.example.com"
       npm.3.redirect.forward_domain: "demo.example.com"
       npm.3.redirect.http_code: "301"
 
       # 4: park an unused domain on the 404 page
-      npm.4.404.host: "parked.example.com"
+      npm.4.404.domains: "parked.example.com"
 
   # The proxy manager itself needs labels too: once this tool has created a
   # host for it, removing the labels makes that host an orphan, and
@@ -60,9 +59,15 @@ services:
   # npmplus:
   #   image: ghcr.io/zoeyvid/npmplus:<pin-a-version>   # not :latest
   #   labels:
-  #     npm.enable: "true"
-  #     npm.proxy.host: "npm.example.com"
+  #     npm.proxy.domains: "npm.example.com"
   #     npm.proxy.port: "81"
+
+  # A container that should not be touched at all:
+  #
+  # db:
+  #   image: postgres:17
+  #   labels:
+  #     npm.enable: "false"
 
 networks:
   npm:

@@ -22,10 +22,23 @@ const (
 	certificateNone = 0
 )
 
-// LegacyManagedByValues are ownership markers written by earlier releases.
-// They are still recognised so an upgrade adopts (and re-stamps) existing
-// resources instead of orphaning them.
-var LegacyManagedByValues = []string{"npm-docker-sync"}
+// RedthManagedByValue is the ownership marker of Redth/npm-docker-sync, the
+// project whose label syntax this tool adopted.
+//
+// It is deliberately *not* treated as our own: both tools can run against the
+// same NPM instance, and silently taking over the other's hosts would have
+// them delete each other's work. Migration is explicit (MIGRATE_FROM_REDTH).
+const RedthManagedByValue = "npm-docker-sync"
+
+// LegacyManagedByValues are ownership markers written by earlier releases of
+// *this* tool. They are still recognised so an upgrade adopts (and re-stamps)
+// existing resources instead of orphaning them.
+var LegacyManagedByValues = []string{}
+
+// redthMetaKeys are the fields Redth/npm-docker-sync keeps in the meta
+// object. They are preserved during a migration so a rollback still finds
+// what it wrote.
+var redthMetaKeys = []string{"container_id", "sync_instance_id", "npm_url", "created_at"}
 
 // IsManaged reports whether the meta object carries the current ownership
 // marker or one of its predecessors.
@@ -39,6 +52,39 @@ func IsManaged(m Meta) bool {
 		}
 	}
 	return false
+}
+
+// IsRedth reports whether the resource was created by Redth/npm-docker-sync.
+func IsRedth(m Meta) bool { return m.ManagedBy(RedthManagedByValue) }
+
+// Owner returns the tool named in the ownership marker, "" for a resource
+// created by hand.
+func Owner(m Meta) string {
+	if m == nil {
+		return ""
+	}
+	v, _ := m[MetaManagedBy].(string)
+	return v
+}
+
+// AdoptMeta carries the foreign bookkeeping of a resource we are taking over
+// into the meta we are about to write, so a migration is not a data loss.
+func AdoptMeta(desired, live Meta) Meta {
+	if live == nil {
+		return desired
+	}
+	if desired == nil {
+		desired = Meta{}
+	}
+	for _, key := range redthMetaKeys {
+		if _, taken := desired[key]; taken {
+			continue
+		}
+		if value, ok := live[key]; ok {
+			desired[key] = value
+		}
+	}
+	return desired
 }
 
 // Meta is the free-form meta object attached to every NPM resource. NPM keeps
@@ -72,19 +118,70 @@ const (
 	AccessListGlobal = "global"
 )
 
+// Location modifiers. NPMplus stores the nginx prefix of a custom location
+// verbatim, including the trailing space it needs in the generated config.
+const (
+	LocationPrefix = ""
+	LocationExact  = "= "
+	LocationRegex  = "~ "
+	LocationIRegex = "~* "
+	LocationPrefer = "^~ "
+	LocationNamed  = "@"
+)
+
+// MaxDescriptionLength is the limit NPMplus puts on `npmplus_description`.
+const MaxDescriptionLength = 255
+
+// XFrameOptionsValue returns the spelling NPMplus expects for a lower case
+// x-frame-options value.
+func XFrameOptionsValue(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "deny":
+		return "DENY"
+	case "sameorigin":
+		return "SAMEORIGIN"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
 // Location is an optional custom location block of a proxy host.
 //
-// The npmplus_* fields are mandatory on NPMplus and unknown to upstream NPM;
-// the per-flavour payload structs decide which of them are sent.
+// The npmplus_* fields are unknown to upstream NPM; the per-flavour payload
+// structs decide which of them are sent. Three of them are inverted in the
+// API - `npmplus_crowdsec_appsec: true` *disables* the AppSec component - so
+// the model spells them out as Disable* and the label parser negates them.
 type Location struct {
 	Path           string `json:"path"`
+	LocationType   string `json:"location_type"`
 	AdvancedConfig string `json:"advanced_config"`
+	LocationConfig string `json:"npmplus_location_config,omitempty"`
 	ForwardScheme  string `json:"forward_scheme"`
 	ForwardHost    string `json:"forward_host"`
 	ForwardPort    int    `json:"forward_port"`
+
 	AccessListIDs  []int  `json:"npmplus_access_list_ids,omitempty"`
 	AccessListType string `json:"npmplus_access_list_type,omitempty"`
+	// AccessListNames are names that still have to be resolved into ids. They
+	// never reach the API.
+	AccessListNames []string `json:"-"`
+
+	// Enabled is nil when the server did not report it; a location without
+	// the flag is enabled.
+	Enabled                  *bool  `json:"npmplus_enabled,omitempty"`
+	NoIndex                  bool   `json:"npmplus_noindex"`
+	DisableCrowdsecAppsec    bool   `json:"npmplus_crowdsec_appsec"`
+	DisableRequestBuffering  bool   `json:"npmplus_proxy_request_buffering"`
+	DisableResponseBuffering bool   `json:"npmplus_proxy_response_buffering"`
+	UpstreamCompression      bool   `json:"npmplus_upstream_compression"`
+	FancyIndex               bool   `json:"npmplus_fancyindex"`
+	XFrameOptions            string `json:"npmplus_x_frame_options,omitempty"`
+	AuthRequest              string `json:"npmplus_auth_request,omitempty"`
+	AuthRequestUpstream      string `json:"npmplus_auth_request_upstream,omitempty"`
 }
+
+// IsEnabled reports whether the location is active.
+func (l Location) IsEnabled() bool { return l.Enabled == nil || *l.Enabled }
 
 // accessListType returns the location's access list type, defaulting to
 // "global" (inherit the proxy host's setting).
@@ -99,12 +196,24 @@ func (l Location) accessListType() string {
 }
 
 // Certificate mirrors the `/api/nginx/certificates` resource.
+//
+// NPMplus stores client CAs in the same collection (provider "mtls"); they
+// are not server certificates, which is why the provider is decoded too.
 type Certificate struct {
 	ID          int      `json:"id"`
 	Provider    string   `json:"provider"`
 	NiceName    string   `json:"nice_name"`
 	DomainNames []string `json:"domain_names"`
 	ExpiresOn   string   `json:"expires_on"`
+	// IsDeleted is NPM's soft-delete marker, serialised as 0/1.
+	IsDeleted Flag `json:"is_deleted"`
+}
+
+// AccessList mirrors `/api/nginx/access-lists`. Only the identity is needed:
+// labels reference a list by name and the sync resolves it into an id.
+type AccessList struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
 }
 
 // CertificateID models NPM's polymorphic certificate_id field: responses

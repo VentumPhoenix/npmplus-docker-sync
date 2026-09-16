@@ -60,7 +60,7 @@ func main() {
 }
 
 func run() error {
-	cfg, err := config.Load(os.Getenv)
+	cfg, err := config.Load(os.Getenv, os.Environ())
 	if err != nil {
 		return fmt.Errorf("configuration error:\n%w", err)
 	}
@@ -71,6 +71,13 @@ func run() error {
 		slog.String("version", version),
 		slog.String("commit", commit),
 		slog.Any("config", cfg))
+	for _, notice := range cfg.Notices {
+		log.Info(notice)
+	}
+	for _, warning := range cfg.Warnings {
+		log.Warn(warning)
+	}
+	logDefaults(log, cfg)
 
 	// Graceful shutdown: SIGINT/SIGTERM cancel the root context, every
 	// component drains, and the worker flushes its state to the API.
@@ -84,8 +91,12 @@ func run() error {
 	defer func() { _ = dockerClient.Close() }()
 
 	parseOpts := docker.ParseOptions{
-		Prefix:    cfg.LabelPrefix,
-		ResolveIP: cfg.ResolveIP,
+		Prefix:           cfg.LabelPrefix,
+		ResolveIP:        cfg.ResolveIP,
+		Defaults:         cfg.Defaults,
+		ExposedByDefault: cfg.ExposedByDefault,
+		StrictLabels:     cfg.StrictLabels,
+		PortPreference:   cfg.PortPreference,
 	}
 
 	listener := docker.NewListener(dockerClient, parseOpts, log.With(slog.String("component", "docker")))
@@ -104,12 +115,24 @@ func run() error {
 	case cfg.NPMNetwork != "":
 		parseOpts.PreferNetworks = []string{cfg.NPMNetwork}
 		parseOpts.StrictNetworks = cfg.StrictNetwork
+	case cfg.NPMContainer != "":
+		// Redth's NPM_CONTAINER_NAME: whatever networks NPM itself is on are
+		// the ones an upstream address has to come from.
+		npmNetworks := listener.NetworksOfContainer(ctx, cfg.NPMContainer)
+		parseOpts.PreferNetworks = docker.DedupeNetworks(append(npmNetworks, ownNetworks...))
+		parseOpts.StrictNetworks = len(npmNetworks) > 0 && cfg.StrictNetwork
 	default:
 		parseOpts.PreferNetworks = docker.DedupeNetworks(ownNetworks)
 	}
 	selfID := listener.SelfID()
 	listener = docker.NewListener(dockerClient, parseOpts, log.With(slog.String("component", "docker")))
 	listener.SetSelfID(selfID)
+	if summary, err := listener.Summarize(ctx); err == nil {
+		log.Info("container overview",
+			slog.Int("managed", summary.Managed),
+			slog.Int("opted_out", summary.OptedOut),
+			slog.Int("without_labels", summary.Unlabeled))
+	}
 	log.Debug("upstream host resolution",
 		slog.Bool("resolve_ip", cfg.ResolveIP),
 		slog.Bool("strict_networks", parseOpts.StrictNetworks),
@@ -137,12 +160,16 @@ func run() error {
 	}
 
 	worker := syncer.NewWorker(npmClient, listener, syncer.Options{
-		Kinds:           cfg.Kinds,
-		DeleteOrphans:   cfg.DeleteOrphans,
-		AdoptExisting:   cfg.AdoptExisting,
-		DryRun:          cfg.DryRun,
-		ResyncInterval:  cfg.ResyncInterval,
-		ShutdownTimeout: cfg.ShutdownTimeout,
+		Kinds:                 cfg.Kinds,
+		DeleteOrphans:         cfg.DeleteOrphans,
+		AdoptExisting:         cfg.AdoptExisting,
+		DryRun:                cfg.DryRun,
+		ResyncInterval:        cfg.ResyncInterval,
+		ShutdownTimeout:       cfg.ShutdownTimeout,
+		CertificatePartial:    cfg.CertificatePartial,
+		CertificateAutoCreate: cfg.CertificateAutoCreate,
+		CertificatePoll:       cfg.CertificatePoll,
+		MigrateFromRedth:      cfg.MigrateFromRedth,
 	}, log.With(slog.String("component", "sync")))
 
 	events := make(chan docker.Event, eventBuffer)
@@ -315,6 +342,23 @@ func healthcheck(addr string) int {
 	return 0
 }
 
+// logDefaults reports the field defaults the environment changed, so the
+// effective configuration of a run is visible without reading the code.
+func logDefaults(log *slog.Logger, cfg *config.Config) {
+	changed := cfg.Defaults.FromEnv()
+	if len(changed) == 0 {
+		log.Debug("field defaults: all built-in")
+		return
+	}
+	for _, entry := range changed {
+		log.Info("field default from environment",
+			slog.String("kind", string(entry.Kind)),
+			slog.String("field", entry.Field),
+			slog.String("value", entry.Value),
+			slog.String("source", entry.Source))
+	}
+}
+
 func newLogger(cfg *config.Config) *slog.Logger {
 	opts := &slog.HandlerOptions{Level: cfg.LogLevel}
 	if cfg.LogFormat == "json" {
@@ -327,8 +371,13 @@ func usage() {
 	fmt.Print(`npmplus-docker-sync - sync Docker container labels to Nginx Proxy Manager / NPMplus
 
 Manages proxy hosts, redirection hosts, streams and 404 hosts from container
-labels such as npm.enable, npm.proxy.host, npm.1.redirect.host or
-npm.2.stream.incoming_port.
+labels such as npm.proxy.domains, npm.proxy.1.domains, npm.redirect.domains or
+npm.stream.incoming_port. One label is usually enough:
+
+  labels:
+    npm.proxy.domains: "app.example.com"
+
+Exclude a container with npm.enable=false.
 
 Usage:
   npmplus-docker-sync            run the sync daemon (configured via environment)
@@ -344,6 +393,18 @@ Required environment:
 
 Optional environment:
   NPM_FLAVOUR            api dialect: auto (default), npmplus or npm
+  NPM_EXPOSED_BY_DEFAULT manage every labelled container (default true)
+  NPM_CONTAINER_NAME     name of the npm container, for network discovery
+  NPM_PORT_PREFERENCE    order of exposed ports to pick from (default 80,8080,3000,8000,443)
+  NPM_DEFAULT_CERTIFICATE / NPM_<KIND>_<FIELD>
+                         global defaults for any label field, e.g.
+                         NPM_PROXY_SSL_FORCE, NPM_PROXY_WEBSOCKETS
+  NPM_CERTIFICATE_PARTIAL   primary (default) or none, when no certificate
+                         covers every domain of a host
+  NPM_CERTIFICATE_AUTO_CREATE  request a certificate when none matches (default false)
+  CERTIFICATE_POLL_INTERVAL    how often to look for new certificates (default 1m)
+  MIGRATE_FROM_REDTH     take over hosts created by npm-docker-sync (default false)
+  STRICT_LABELS          skip a resource that carries an unknown label (default false)
   DOCKER_HOST            unix:///var/run/docker.sock (default) or tcp://docker-socket-proxy:2375
   LABEL_PREFIX           label namespace (default "npm")
   SYNC_KINDS             resource types to manage (default proxy,redirect,stream,404)

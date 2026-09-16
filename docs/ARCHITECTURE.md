@@ -19,16 +19,31 @@ them through the `npm.Resource` interface:
 
 ```
 main.go
- ├── config.Load(os.Getenv)            validated configuration
+ ├── config.Load(os.Getenv, os.Environ())   validated configuration
+ │    └── fields.LoadDefaults               NPM_<KIND>_<FIELD> → effective defaults
  ├── docker.NewClient(DOCKER_HOST)     unix socket or TCP (socket proxy)
  │    └── docker.Listener              Containers(), Targets(), Watch()
  │         └── docker.Parse            indexed labels → []*docker.Target
+ │              └── fields.Lookup      any spelling → canonical field
  ├── npm.New(...)                      dual-auth REST client, 4 collections
  ├── syncer.Debouncer[docker.Event]    burst → single batch
  └── syncer.Worker                     single goroutine, owns all writes
+      ├── certs.Resolve                certificate wish → certificate id
       ├── syncer.BuildResource         target → npm.Resource of its kind
       └── syncer.Cache                 RWMutex-protected, one bucket per kind
 ```
+
+### The field table
+
+`internal/fields` is the single source of truth for every configurable
+property: the canonical label name, its aliases (including the ones
+Redth/npm-docker-sync uses), the value domain, the built-in default, the
+environment variables that override it and the API field it writes to.
+
+The label parser, the configuration loader, the start-up log and
+`docs/FIELDS.md` all read from that one table, and a test regenerates the
+documentation from it — so a field cannot exist in the parser without an
+environment variable and a documented default.
 
 ### The Resource interface
 
@@ -42,6 +57,7 @@ type Resource interface {
     SetResourceID(id int)
     ResourceKey() string               // identity within its kind
     ResourceMeta() Meta                // ownership marker lives here
+    ResourceCertificate() CertificateID // what the live resource carries
     Fingerprint() string               // config hash, ids excluded
     AdoptServerState(current Resource) // e.g. an issued certificate id
     Describe() string                  // log friendly summary
@@ -76,14 +92,56 @@ duplicated event cannot corrupt anything.
    kind is skipped without touching its cache.
 4. Both sides are keyed by identity: the alphabetically first domain name, or
    the incoming port for streams.
-5. For each desired target:
+5. For each desired target, before anything is built:
+   * a resource owned by another tool is skipped (see *Ownership* below),
+   * a domain a foreign host already serves is reported as a conflict,
+   * access list names are resolved into ids — an unknown name skips the
+     resource rather than creating an unprotected host,
+   * the certificate wish is resolved against the certificate list of this
+     run, taking the live certificate into account so the choice stays stable.
+6. Then:
    * not in NPM → `POST <collection>`
    * in NPM, fingerprint differs → `PUT <collection>/:id`
    * in NPM, fingerprint equal → nothing (counted as `unchanged`)
-6. Resources carrying `meta.managed_by = npmplus-docker-sync` whose key no
+7. Resources carrying `meta.managed_by = npmplus-docker-sync` whose key no
    longer appears in the desired set are deleted (unless
    `DELETE_ORPHANS=false`).
-7. The cache bucket of that kind is replaced atomically with the new state.
+8. The cache bucket of that kind is replaced atomically with the new state.
+
+A resource the API rejected is remembered with an exponential backoff
+(30 s → 30 min) and skipped until it expires; changing its labels — which
+changes its fingerprint — clears the backoff at once.
+
+## Certificate selection
+
+The certificate list is fetched once per reconcile run, so every host of a run
+reads the same snapshot; a failed fetch keeps the previous list rather than
+stripping hosts of their certificates. Resolution happens *before* the TLS
+cascade and the fingerprint, which is what lets `ssl.forced: auto` mean "on as
+soon as a certificate is attached".
+
+Candidates are filtered (no client CAs, no expired, no deleted entries) and
+ranked by class — exact, exact+SANs, mixed, wildcard — then by remaining
+validity and id. A certificate that is already attached and still fits is kept
+unless a candidate matches in a strictly better class, so importing another
+wildcard does not shuffle existing hosts around.
+
+Certificates are not part of the Docker event stream, so the list is polled
+every `CERTIFICATE_POLL_INTERVAL`; a changed list triggers a reconcile.
+
+## Ownership
+
+`meta.managed_by` decides what may be touched:
+
+| Marker | Behaviour |
+|---|---|
+| `npmplus-docker-sync` | ours: updated, disabled, deleted as an orphan |
+| *(none)* | created by hand: adopted and re-stamped unless `ADOPT_EXISTING=false`, never deleted while unmanaged |
+| `npm-docker-sync` (Redth) | left alone; adopted only with `MIGRATE_FROM_REDTH=true`, keeping Redth's own meta keys |
+| anything else | left alone |
+
+Both tools can therefore run against the same NPM instance without deleting
+each other's work.
 
 Failures are collected with `errors.Join`: a single failing host is reported
 but does not abort the run.

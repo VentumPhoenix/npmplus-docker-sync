@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -51,15 +53,43 @@ func sampleResources(t *testing.T) map[Kind]Resource {
 			CachingEnabled:        true,
 			AllowWebsocketUpgrade: true,
 			AccessListIDs:         []int{2},
+			AccessListType:        AccessListCustom,
 			AdvancedConfig:        "client_max_body_size 0;",
 			Enabled:               true,
+
+			HTTP3Support:             true,
+			NoIndex:                  true,
+			DisableCrowdsecAppsec:    true,
+			DisableRequestBuffering:  true,
+			DisableResponseBuffering: true,
+			UpstreamCompression:      true,
+			FancyIndex:               true,
+			XFrameOptions:            "DENY",
+			AuthRequest:              "authelia",
+			AuthRequestUpstream:      "http://authelia:9091",
+			LocationConfig:           "add_header X-Location 1;",
+
 			Locations: []Location{{
 				Path:           "/api",
+				LocationType:   LocationPrefer,
 				ForwardScheme:  "http",
 				ForwardHost:    "172.20.0.6",
 				ForwardPort:    8080,
 				AdvancedConfig: "proxy_read_timeout 300;",
+				LocationConfig: "add_header X-Api 1;",
 				AccessListIDs:  []int{3},
+				AccessListType: AccessListCustom,
+				Enabled:        boolPointer(true),
+
+				NoIndex:                  true,
+				DisableCrowdsecAppsec:    true,
+				DisableRequestBuffering:  true,
+				DisableResponseBuffering: true,
+				UpstreamCompression:      true,
+				FancyIndex:               true,
+				XFrameOptions:            "SAMEORIGIN",
+				AuthRequest:              "authentik",
+				AuthRequestUpstream:      "http://authentik:9000",
 			}},
 			Meta: meta,
 		},
@@ -74,6 +104,7 @@ func sampleResources(t *testing.T) map[Kind]Resource {
 			HSTSEnabled:       true,
 			HSTSSubdomains:    true,
 			HTTP2Support:      true,
+			HTTP3Support:      true,
 			BlockExploits:     true,
 			AdvancedConfig:    "add_header X-Redirected 1;",
 			Enabled:           true,
@@ -86,6 +117,10 @@ func sampleResources(t *testing.T) map[Kind]Resource {
 			TCPForwarding:  true,
 			UDPForwarding:  true,
 			CertificateID:  CertificateRef(7),
+			ProxyProtocol:  2,
+			ProxyTLS:       true,
+			AdvancedConfig: "proxy_timeout 30s;",
+			Description:    "postgres",
 			Enabled:        true,
 			Meta:           meta,
 		},
@@ -96,6 +131,7 @@ func sampleResources(t *testing.T) map[Kind]Resource {
 			HSTSEnabled:    true,
 			HSTSSubdomains: true,
 			HTTP2Support:   true,
+			HTTP3Support:   true,
 			AdvancedConfig: "return 404;",
 			Enabled:        true,
 			Meta:           meta,
@@ -224,11 +260,6 @@ func TestUnsupportedFeaturesAreRejected(t *testing.T) {
 		resource Resource
 	}{
 		{
-			name:     "http3 on upstream npm",
-			flavour:  FlavourNPM,
-			resource: &ProxyHost{DomainNames: []string{"a.example.com"}, ForwardScheme: "http", ForwardHost: "a", ForwardPort: 80, HTTP3Support: true},
-		},
-		{
 			name:     "grpc upstream on upstream npm",
 			flavour:  FlavourNPM,
 			resource: &ProxyHost{DomainNames: []string{"a.example.com"}, ForwardScheme: "grpc", ForwardHost: "a", ForwardPort: 80},
@@ -259,6 +290,37 @@ func TestUnsupportedFeaturesAreRejected(t *testing.T) {
 		})
 	}
 }
+
+// TestNPMplusOnlyFieldsAreDroppedNotRejected: a better default must not break
+// upstream nginx-proxy-manager. HTTP/3 and friends are simply left out of the
+// request, and the caller is told which fields those were.
+func TestNPMplusOnlyFieldsAreDroppedNotRejected(t *testing.T) {
+	t.Parallel()
+
+	host := &ProxyHost{
+		DomainNames: []string{"a.example.com"}, ForwardScheme: "http", ForwardHost: "a", ForwardPort: 80,
+		HTTP3Support: true, NoIndex: true, XFrameOptions: "DENY",
+	}
+	payload, err := host.Payload(FlavourNPM)
+	if err != nil {
+		t.Fatalf("Payload(npm) error = %v, want the npmplus fields to be dropped", err)
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(body), "npmplus_") {
+		t.Errorf("payload carries npmplus fields: %s", body)
+	}
+
+	unsupported := UnsupportedByNPM(host)
+	want := []string{"ssl.http3", "noindex", "x_frame_options"}
+	if !reflect.DeepEqual(unsupported, want) {
+		t.Errorf("UnsupportedByNPM() = %v, want %v", unsupported, want)
+	}
+}
+
+func boolPointer(b bool) *bool { return &b }
 
 func loadSchema(t *testing.T, flavour, name string) *jsonschema.Schema {
 	t.Helper()

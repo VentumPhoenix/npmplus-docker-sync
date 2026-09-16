@@ -19,6 +19,13 @@ no clicking, no drift.
 
 ---
 
+> [!IMPORTANT]
+> **v1.0.0-beta.3 changes what `host` means.** It is now the upstream target,
+> as in [Redth/npm-docker-sync](https://github.com/Redth/npm-docker-sync); the
+> domain is `domains`. Containers no longer need `npm.enable`, and certificates
+> are selected automatically. See
+> [docs/MIGRATION.md](docs/MIGRATION.md).
+
 ## Why
 
 Nginx Proxy Manager has a lovely UI and a decent API, but every new container
@@ -35,9 +42,12 @@ auth) — the auth mode is detected at login, nothing to configure.
 
 | | |
 |---|---|
-| 🏷️ **Label driven** | `npm.enable=true`, a hostname, a port — done |
+| 🏷️ **Label driven** | `npm.proxy.domains: app.example.com` — that is the whole configuration |
 | 🧩 **All four resource types** | Proxy hosts, redirection hosts, TCP/UDP streams and 404 hosts |
-| 🔢 **Many services per container** | Indexed labels: `npm.0.proxy.host`, `npm.1.redirect.host`, `npm.2.stream.incoming_port` |
+| 🔐 **Automatic certificates** | Picks the matching certificate, exact before wildcard, and keeps it stable |
+| 🎛️ **Global defaults** | `NPM_PROXY_*` / `NPM_DEFAULT_*` for every field, overridden per container |
+| 🤝 **Redth compatible** | The labels and environment of [npm-docker-sync](https://github.com/Redth/npm-docker-sync) work unchanged |
+| 🔢 **Many services per container** | Indexed labels: `npm.proxy.1.domains`, `npm.2.stream.incoming_port` |
 | 🎯 **IP-based upstreams** | Resolves the container's IP instead of its name — no more DNS-related 502s |
 | 🔁 **Event driven** | Reacts to `start` / `stop` / `die` / `destroy` within seconds |
 | 🧠 **Idempotent** | Per-kind fingerprint cache: no API call when nothing changed |
@@ -72,13 +82,15 @@ services:
     image: traefik/whoami
     networks: [npm]
     labels:
-      npm.enable: "true"
-      npm.proxy.host: "whoami.example.com"
-      npm.proxy.port: "80"
+      npm.proxy.domains: "whoami.example.com"
 ```
 
 Within a few seconds the proxy host `whoami.example.com → http://172.20.0.5:80`
-exists in NPM. `docker compose down` removes it again.
+exists in NPM — with the port read from the image's `EXPOSE`, the matching
+certificate attached and HTTPS enforced. `docker compose down` removes it
+again.
+
+Opt a container out with `npm.enable: "false"`.
 
 ### One container, many resources
 
@@ -87,31 +99,29 @@ index can be a different resource type:
 
 ```yaml
 labels:
-  npm.enable: "true"
-
   # 0: the web UI
-  npm.0.proxy.host: "app.example.com"
-  npm.0.proxy.port: "8080"
+  npm.proxy.domains: "app.example.com"
+  npm.proxy.port: "8080"
 
-  # 1: the metrics endpoint on another port
-  npm.1.proxy.host: "metrics.app.example.com"
+  # 1: the metrics endpoint on another port, behind an access list
+  npm.1.proxy.domains: "metrics.app.example.com"
   npm.1.proxy.port: "9090"
-  npm.1.proxy.access_list_id: "2"
+  npm.1.proxy.access_list: "Intern"
 
   # 2: the database, exposed as a TCP stream
   npm.2.stream.incoming_port: "5432"
-  npm.2.stream.forward_port: "5432"
 
   # 3: redirect the old domain
-  npm.3.redirect.host: "old-app.example.com"
+  npm.3.redirect.domains: "old-app.example.com"
   npm.3.redirect.forward_domain: "app.example.com"
 
   # 4: park a domain on a 404 page
-  npm.4.404.host: "parked.example.com"
+  npm.4.404.domains: "parked.example.com"
 ```
 
-Labels without an index belong to index `0`, so `npm.proxy.host` and
-`npm.0.proxy.host` are the same thing.
+Labels without an index belong to index `0`, so `npm.proxy.domains` and
+`npm.0.proxy.domains` are the same thing. The index may also follow the kind
+(`npm.proxy.1.domains`), which is how Redth writes it.
 
 ### Without compose
 
@@ -173,8 +183,11 @@ make check     # fmt + vet + lint + test
 4. **One worker** performs every write. NPM stores its config in SQLite, which
    does not appreciate concurrent writers.
 5. **A per-kind fingerprint cache** (SHA-256 over the canonical config)
-   short-circuits no-op updates, so a periodic resync costs four `GET`s.
-6. **SIGTERM** stops event intake, runs a final reconcile with a detached
+   short-circuits no-op updates, so a periodic resync costs a handful of
+   `GET`s.
+6. **The certificate list is polled** on its own schedule, because a
+   certificate issued in the NPM UI is not a Docker event.
+7. **SIGTERM** stops event intake, runs a final reconcile with a detached
    context and exits — nothing is lost when Watchtower or Proxmox restarts the
    container.
 
@@ -189,18 +202,20 @@ NPM can resolve Docker's internal DNS, which is the most common cause of
 `npmplus-docker-sync` therefore defaults the upstream to the container's **IP
 address**:
 
-1. an explicit `npm.proxy.forward_host` / `npm.stream.forward_host` label, else
+1. an explicit `npm.proxy.host` / `npm.stream.host` label, else
 2. **with `NPM_NETWORK` set** — the IP in exactly that network. A container
    that is not attached to it is skipped with a warning naming the networks it
    *is* on. Nothing else is tried: an address on a network NPM does not share
    is unreachable, and so is the container name, so a proxy host pointing
    there would only produce a silent `502`.
-3. **without `NPM_NETWORK`** — the IP in a network this sync container is
-   itself attached to, else the IP of the first network (alphabetically), else
-   the container name as a last resort.
+3. **with `NPM_CONTAINER_NAME` set** — the networks that container is on, so
+   naming the NPM container is enough to get the resolution right.
+4. **without either** — the IP in a network this sync container is itself
+   attached to, else the IP of the first network (alphabetically), else the
+   container name as a last resort.
 
 Set `RESOLVE_CONTAINER_IP=false` to go back to name-based upstreams, or
-`npm.<index>.<kind>.resolve_ip=false` for a single resource.
+`npm.<kind>.resolve_ip=false` for a single resource.
 `NPM_NETWORK_STRICT=false` restores the old fall-through behaviour if you
 really do want it.
 
@@ -210,109 +225,103 @@ really do want it.
 
 ## Labels
 
-Grammar:
-
 ```
-<prefix>.enable                          opt-in for the whole container (required)
-<prefix>[.<index>].<kind>.<field>        one resource
-<prefix>[.<index>].<field>               shorthand, <kind> defaults to proxy
-<prefix>.<index>.enable=false            switch a single index off
+<prefix>.enable=false                     exclude the container
+<prefix>.<kind>.<field>                   one resource, index 0
+<prefix>.<kind>.<index>.<field>           indexed (Redth's position)
+<prefix>.<index>.<kind>.<field>           indexed (our own position)
+<prefix>.<field>                          shorthand, <kind> defaults to proxy
 ```
 
-`<prefix>` is `npm` by default (`LABEL_PREFIX`), `<index>` defaults to `0`, and
-`<kind>` is one of `proxy`, `redirect`, `stream`, `404` (alias `dead`).
-Booleans accept `true/false`, `1/0`, `yes/no`, `on/off`.
+`<prefix>` is `npm` by default (`LABEL_PREFIX`) and may be followed by `.` or
+`-`. `<kind>` is one of `proxy`, `redirect`, `stream`, `404` (alias `dead`).
+Inside a field name `.`, `_` and `-` are interchangeable, so
+`ssl.hsts.subdomains`, `ssl.hsts_subdomains` and `ssl-hsts-subdomains` are the
+same field. Booleans accept `true/false`, `1/0`, `yes/no`, `on/off`.
 
-### Proxy hosts — `npm.<i>.proxy.*`
+Every container carrying at least one label of the namespace is managed;
+`npm.enable: "false"` opts out, and `NPM_EXPOSED_BY_DEFAULT=false` restores the
+old "opt-in only" behaviour.
 
-| Label | Default | Description |
-|---|---|---|
-| `host` | — | **Required.** Domain name(s), comma separated. |
-| `port` | — | **Required.** Container-internal port. |
-| `scheme` | `http` | Upstream scheme (`http`/`https`). |
-| `forward_host` | container IP | Upstream host override (alias `forward_ip`). |
-| `resolve_ip` | `RESOLVE_CONTAINER_IP` | Use the container IP as upstream. |
-| `websockets` | `true` | Allow websocket upgrades. |
-| `block_exploits` | `true` | NPM's common-exploit blocklist. |
-| `caching` | `false` | Cache static assets. |
-| `trust_forwarded_proto` | `false` | Trust `X-Forwarded-Proto` from the client. |
-| `access_list_ids` | – | Access list id(s), comma separated (aliases `access_list`, `access_lists`). NPMplus accepts several, upstream NPM exactly one. |
-| `access_list_id` | – | Shorthand for a single id; kept for compatibility. |
-| `access_list_type` | derived | `public` (no list) or `custom`. Derived from the ids unless set. |
-| `advanced_config` | – | Raw nginx snippet for this host. |
-| `location.<n>.path` | – | Custom location block, e.g. `/api` (see below). |
-| `location.<n>.forward_host` / `.forward_port` / `.forward_scheme` | inherited | Upstream of that location block. |
-| `location.<n>.advanced_config` | – | Raw nginx snippet inside the location. |
-| `location.<n>.access_list_ids` / `.access_list_type` | `global` | Per-location access list; `global` inherits the host's (NPMplus only). |
-| `enabled` | `true` | Create the host but leave it disabled with `false`. |
+> [!IMPORTANT]
+> `domains` is the domain the world asks for, `host` is the upstream it is
+> served from — the meaning Redth's labels have. For redirection and 404 hosts,
+> which have no upstream, `host` stays an alias for `domains`.
 
-Custom location blocks route parts of a domain somewhere else:
+**The full table of fields, aliases, environment variables and defaults is
+generated from the code: [docs/FIELDS.md](docs/FIELDS.md).**
+[docs/LABELS.md](docs/LABELS.md) explains the rules; the highlights:
+
+### Defaults you can move
+
+Every field has an environment variable that changes its default for all
+containers, and a label always wins over it:
 
 ```yaml
-npm.proxy.host: "app.example.com"
-npm.proxy.port: "8080"
-npm.proxy.location.0.path: "/api"
-npm.proxy.location.0.forward_host: "api-backend"
-npm.proxy.location.0.forward_port: "3000"
+# on the sync container
+NPM_PROXY_SSL_FORCE: "true"        # https everywhere ...
+NPM_DEFAULT_CERTIFICATE: "auto"
 ```
 
-### Redirection hosts — `npm.<i>.redirect.*`
+```yaml
+# ... except here
+npm.proxy.ssl.force: "false"
+```
 
-| Label | Default | Description |
-|---|---|---|
-| `host` | — | **Required.** Source domain(s) (alias `from`). |
-| `forward_domain` | — | **Required.** Target domain, no scheme (aliases `to`, `target`). |
-| `http_code` | `301` | Redirect status code, 300–308 (alias `code`). |
-| `scheme` | `auto` | `auto`, `http` or `https`. |
-| `preserve_path` | `true` | Append the request path to the target. |
-| `block_exploits` | `true` | NPM's common-exploit blocklist. |
-| `advanced_config` | – | Raw nginx snippet. |
-| `enabled` | `true` | Enable the redirect. |
+The resolution order per field is: indexed label → label → `NPM_<KIND>_<FIELD>`
+→ `NPM_DEFAULT_<FIELD>` → built-in default.
 
-### Streams — `npm.<i>.stream.*`
+### Certificates pick themselves
 
-| Label | Default | Description |
-|---|---|---|
-| `incoming_port` | — | **Required.** Port NPM listens on (alias `port`). |
-| `forward_port` | = incoming | Upstream port (alias `forwarding_port`). |
-| `forward_host` | container IP | Upstream host (alias `forwarding_host`). |
-| `tcp` | `true` | Forward TCP. |
-| `udp` | `false` | Forward UDP. |
-| `protocol` | `tcp` | Shorthand: `tcp`, `udp` or `both`. |
-| `certificate_id` | – | Certificate for TLS-terminating streams. |
-| `enabled` | `true` | Enable the stream. |
+`certificate` defaults to `auto`: the tool looks through the certificates that
+exist in NPM and attaches the one that fits best — exact match before wildcard,
+ties broken by the longest remaining validity. Expired certificates, deleted
+ones and NPMplus' client CAs (`provider: mtls`) are never considered, a
+wildcard covers exactly one label (RFC 6125), and a certificate that already
+fits is kept rather than swapped for an equally good one.
 
-### 404 hosts — `npm.<i>.404.*` (or `npm.<i>.dead.*`)
+```yaml
+npm.proxy.certificate: "auto"                # the default
+npm.proxy.certificate: "12"                  # a fixed id
+npm.proxy.certificate: "*.home.example.com"  # whatever covers this domain
+npm.proxy.certificate: "name:My wildcard"    # by nice name
+npm.proxy.certificate: "new"                 # request a Let's Encrypt one
+npm.proxy.certificate: "none"                # deliberately plain HTTP
+```
 
-| Label | Default | Description |
-|---|---|---|
-| `host` | — | **Required.** Domain name(s) to park. |
-| `advanced_config` | – | Raw nginx snippet. |
-| `enabled` | `true` | Enable the host. |
+`ssl.forced` defaults to `auto` — on as soon as a certificate is attached. New
+certificates are noticed within `CERTIFICATE_POLL_INTERVAL` (1 minute), without
+a restart.
 
-### TLS — available for every kind
+### Ports guess themselves
 
-| Label | Default | Description |
-|---|---|---|
-| `certificate_id` | – | Existing certificate id, or `new` for Let's Encrypt. |
-| `ssl.forced` | `false` | Redirect HTTP → HTTPS (needs a certificate). |
-| `ssl.http2` | `false` | HTTP/2 support. |
-| `ssl.http3` | `false` | HTTP/3 support (**NPMplus only**; rejected against upstream NPM). |
-| `ssl.hsts` | `false` | Enable HSTS. |
-| `ssl.hsts_subdomains` | `false` | Include subdomains in HSTS. |
-| `letsencrypt.email` | – | Required with `certificate_id=new`. |
-| `letsencrypt.agree` | `false` | Must be `true` with `certificate_id=new`. |
-| `letsencrypt.dns_challenge` | `false` | Use a DNS-01 challenge. |
-| `letsencrypt.dns_provider` | – | e.g. `cloudflare` (with DNS-01). |
-| `letsencrypt.dns_credentials` | – | Provider credentials (with DNS-01). |
-| `letsencrypt.propagation_seconds` | `0` | DNS propagation wait. |
+`port` defaults to `auto`: a container that exposes exactly one TCP port needs
+no port label at all. With several ports `NPM_PORT_PREFERENCE`
+(`80,8080,3000,8000,443`) decides, and when none of them matches the resource
+is skipped with a message naming the ports it found.
+
+### Everything NPMplus can do
+
+`auth_request` (Authelia, Authentik, tinyauth, …), `crowdsec_appsec`,
+`noindex`, `x_frame_options`, `fancyindex`, `upstream_compression`,
+`request_buffering`, `response_buffering`, `location_config`, HTTP/3, the
+stream extras and custom location blocks with their nginx modifiers are all
+labels. Against upstream nginx-proxy-manager the NPMplus-only ones are left out
+of the request and reported once, instead of failing the write.
+
+```yaml
+npm.proxy.domains: "kuma.home.example.com"
+npm.proxy.port: "3001"
+npm.proxy.auth_request: "authelia"
+npm.proxy.access_list: "Intern"
+npm.proxy.noindex: "true"
+```
 
 > [!NOTE]
-> `enabled` is not part of a create/update body — both APIs reject the property
-> and expose `POST <collection>/{id}/enable` and `/disable` instead. The
-> reconcile loop compares the live state and calls those endpoints when they
-> differ, so `enabled=false` takes effect on the next run without producing an
-> update loop.
+> Three NPMplus switches are "disable X" in the API. The labels are positive —
+> `crowdsec_appsec: "true"` means the AppSec component is **active** — and are
+> negated on the way in. The explicit `disable_crowdsec_appsec` spelling works
+> too.
 
 > [!NOTE]
 > The server clears TLS settings that cannot apply: without a certificate
@@ -321,7 +330,10 @@ npm.proxy.location.0.forward_port: "3000"
 > cascade before comparing, so a half-configured host converges instead of
 > being rewritten on every event.
 
-Full reference with examples: [docs/LABELS.md](docs/LABELS.md).
+> [!NOTE]
+> A label that names no field produces a warning with a suggestion
+> (`did you mean npm.proxy.ssl.forced?`). `STRICT_LABELS=true` skips the
+> resource instead, so a typo cannot quietly leave a host without TLS.
 
 ## Configuration
 
@@ -330,16 +342,26 @@ Full reference with examples: [docs/LABELS.md](docs/LABELS.md).
 | `NPM_URL` | — | **Required.** API base URL, e.g. `http://npm:81`. |
 | `NPM_IDENTITY` | — | **Required.** Admin e-mail (alias: `NPM_EMAIL`). |
 | `NPM_SECRET` | — | **Required.** Admin password (alias: `NPM_PASSWORD`). |
-| `NPM_SECRET_FILE` | — | Read the password from a file (Docker secrets). Wins over `NPM_SECRET`. |
+| `<NAME>_FILE` | — | Any variable can be read from a file instead (Docker secrets), e.g. `NPM_SECRET_FILE`. |
 | `NPM_TIMEOUT` | `30s` | HTTP timeout per API request. |
 | `NPM_INSECURE_SKIP_VERIFY` | `false` | Accept self-signed NPM certificates. |
 | `NPM_FLAVOUR` | `auto` | API dialect: `auto`, `npmplus` or `npm` (alias `NPM_FLAVOR`). See below. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | `unix://`, `tcp://`, `npipe://` or `ssh://`. |
 | `NPM_NETWORK` | — | The Docker network upstream IPs are taken from. |
+| `NPM_CONTAINER_NAME` | — | Name of the NPM container; its networks are used when `NPM_NETWORK` is unset. |
 | `NPM_NETWORK_STRICT` | `true` | With `NPM_NETWORK` set, skip containers that are not on it instead of using another network. |
 | `RESOLVE_CONTAINER_IP` | `true` | Use container IPs instead of names as upstreams. |
 | `SYNC_KINDS` | all | Resource types to manage: `proxy,redirect,stream,404`. |
 | `LABEL_PREFIX` | `npm` | Label namespace. |
+| `NPM_EXPOSED_BY_DEFAULT` | `true` | Manage every labelled container; `false` requires `npm.enable=true`. |
+| `NPM_PORT_PREFERENCE` | `80,8080,3000,8000,443` | Order for picking an exposed port. |
+| `NPM_DEFAULT_CERTIFICATE` | `auto` | Default certificate wish for every host. |
+| `NPM_CERTIFICATE_PARTIAL` | `primary` | When no certificate covers all domains: `primary` or `none`. |
+| `NPM_CERTIFICATE_AUTO_CREATE` | `false` | Request a certificate when nothing matches. |
+| `CERTIFICATE_POLL_INTERVAL` | `1m` | How often to look for new certificates. |
+| `NPM_<KIND>_<FIELD>` / `NPM_DEFAULT_<FIELD>` | — | Default for any label field, e.g. `NPM_PROXY_WEBSOCKETS`. |
+| `STRICT_LABELS` | `false` | Skip a resource that carries an unknown label. |
+| `MIGRATE_FROM_REDTH` | `false` | Take over hosts created by `npm-docker-sync`. |
 | `DEBOUNCE_INTERVAL` | `3s` | Quiet period after the last event. |
 | `DEBOUNCE_MAX_WAIT` | `30s` | Hard cap for a continuous event stream. |
 | `RESYNC_INTERVAL` | `5m` | Periodic full reconcile (`0` disables it). |
@@ -381,10 +403,12 @@ back to the `version` object in `GET /api/` — and logged:
 ```
 
 Pin it with `NPM_FLAVOUR=npmplus` or `NPM_FLAVOUR=npm` if the detection ever
-guesses wrong. A configuration the target flavour cannot express (HTTP/3 on
-upstream NPM, several access lists on upstream NPM, a Let's Encrypt
-`certificate_id=new` on an NPMplus stream) fails with a message naming the
-feature instead of an opaque 400.
+guesses wrong. NPMplus-only *settings* (HTTP/3, forward auth, CrowdSec, …) are
+simply left out of an upstream-NPM request and reported once per resource.
+Configurations that flavour genuinely cannot express — several access lists on
+upstream NPM, a Let's Encrypt `certificate: new` on an NPMplus stream, a port
+range against upstream NPM — fail with a message naming the feature instead of
+an opaque 400.
 
 > [!TIP]
 > Pin your NPM/NPMplus image to a version tag rather than `:latest`. The
@@ -397,9 +421,17 @@ Every resource created by this tool is stamped with
 `managed_by: npmplus-docker-sync` in its NPM `meta` field.
 
 * Resources **without** that marker are never deleted — your hand-made entries
-  are safe, even if `DELETE_ORPHANS=true`. The marker of the 1.x releases
-  (`npm-docker-sync`) is still recognised, so an upgrade adopts and re-stamps
-  those resources instead of duplicating them.
+  are safe, even if `DELETE_ORPHANS=true`.
+* Resources carrying **another tool's** marker are never touched at all. That
+  includes `managed_by: npm-docker-sync`, written by
+  [Redth/npm-docker-sync](https://github.com/Redth/npm-docker-sync): both tools
+  can run against the same NPM instance without deleting each other's work.
+  `MIGRATE_FROM_REDTH=true` takes those hosts over and re-stamps them, keeping
+  Redth's own bookkeeping in the meta — see
+  [docs/MIGRATION.md](docs/MIGRATION.md).
+* A domain that another, foreign host already serves is reported as a conflict
+  (with that host's id and owner) and the own host is not created, instead of
+  letting the API answer `domain already in use`.
 * Resources **with** the marker are deleted as soon as no labelled container
   claims their key any more.
 * If a labelled key already exists as an unmanaged resource, it is adopted and
@@ -427,13 +459,12 @@ you get a new resource, not a rename.
 > services:
 >   npmplus:
 >     labels:
->       npm.enable: "true"
->       npm.proxy.host: "npm.example.com"
+>       npm.proxy.domains: "npm.example.com"
 >       npm.proxy.port: "81"
 > ```
 >
-> A container without `npm.enable=true` is not evaluated at all, so its hosts
-> look orphaned regardless of what else the container says.
+> A container excluded with `npm.enable: "false"` is not evaluated at all, so
+> its hosts look orphaned regardless of what else the container says.
 >
 > `DRY_RUN=true` lists every deletion it *would* perform — do that first:
 >
@@ -517,7 +548,9 @@ Run with `LOG_LEVEL=debug`. If no `docker event` lines appear, the event stream
 is not reaching the tool — check `DOCKER_HOST` and, when using the socket
 proxy, that `EVENTS=1` is set. If events arrive but nothing is created, the
 labels are likely invalid; the parser logs the exact label and reason at
-`warn`.
+`warn`, including a suggestion for a misspelled field name. The start-up line
+`container overview managed=… opted_out=… without_labels=…` says how many
+containers were classified as what.
 </details>
 
 <details>
@@ -614,10 +647,36 @@ your `.env`. The socket-proxy setup avoids this entirely.
 <details>
 <summary><b>A certificate is requested over and over</b></summary>
 
-That would be a bug — once NPM issues a certificate for a `certificate_id=new`
+That would be a bug — once NPM issues a certificate for a `certificate: new`
 resource, the assigned id is adopted on the next reconcile and the fingerprint
 stays stable. If you see repeated issuance, please open an issue with debug
 logs (Let's Encrypt rate limits are unforgiving).
+</details>
+
+<details>
+<summary><b>The wrong certificate was attached</b></summary>
+
+The reason is in the log:
+
+```
+{"msg":"certificate selected","key":"app.home.example.com","id":12,
+ "match":"wildcard","pattern":"*.home.example.com"}
+```
+
+`match` is the class that won: `exact`, `exact+sans`, `mixed` or `wildcard`. A
+certificate that already fits is kept, so a freshly imported one only takes
+over when it matches in a better class. Pin it with
+`npm.proxy.certificate: "<id>"` if the automatic choice is not what you want,
+and use `npm.proxy.certificate: "none"` to keep a host on plain HTTP.
+</details>
+
+<details>
+<summary><b>A host is skipped with "domain already used by another host"</b></summary>
+
+Another host in NPM — created by hand or by a different tool — already serves
+one of the domains. NPM allows a domain exactly once per collection, so the
+own host is not created. The message carries the id and the owner of the
+conflicting host; remove or rename it, then the next reconcile creates yours.
 </details>
 
 ## Project layout
@@ -625,10 +684,12 @@ logs (Let's Encrypt rate limits are unforgiving).
 ```
 main.go                     wiring, signals, health endpoint
 internal/config/            environment parsing + validation
+internal/fields/            the field table: labels, aliases, env vars, defaults
+internal/certs/             certificate matching and selection
 internal/npm/               API client and the four resource models
 internal/docker/            event listener, indexed label parser, IP resolution
 internal/syncer/            debouncer, per-kind state cache, reconcile worker
-docs/                       architecture, labels, configuration
+docs/                       architecture, labels (generated), configuration, migration
 ```
 
 ## Contributing
@@ -639,10 +700,19 @@ a test, and commits follow [Conventional Commits](https://www.conventionalcommit
 
 ## Roadmap
 
-- [ ] Custom access lists from labels
-- [ ] Prometheus metrics endpoint
+Shipped in v1.0.0-beta.3: Redth label compatibility, automatic certificate
+selection, global field defaults, opt-out instead of opt-in, port detection,
+the NPMplus feature set and access lists by name.
+
+Next (v1.0.0-beta.4):
+
+- [ ] Upstream modes: container name, host IP with published ports, Swarm VIPs
+- [ ] Stopped vs. removed containers (`NPM_ON_STOP`, grace period, health gating)
+- [ ] Multi-instance ownership (`SYNC_INSTANCE_ID`)
+- [ ] `/status` and Prometheus `/metrics`
+- [ ] Field diff in dry-run output
+- [ ] Runtime schema check against `/api/schema`
 - [ ] Docker Swarm service labels
-- [ ] Certificate management (create/renew) from labels
 
 ## Acknowledgements
 

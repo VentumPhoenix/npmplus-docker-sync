@@ -1,19 +1,62 @@
 package docker
 
 import (
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/VentumPhoenix/npmplus-docker-sync/internal/certs"
+	"github.com/VentumPhoenix/npmplus-docker-sync/internal/fields"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/npm"
 )
 
 func opts(prefix string) ParseOptions {
-	return ParseOptions{Prefix: prefix}
+	return ParseOptions{Prefix: prefix, ExposedByDefault: true}
 }
 
-// container is a small helper for label-only fixtures.
+// withLabels is a small helper for label-only fixtures.
 func withLabels(name string, labels map[string]string) Container {
 	return Container{ID: name + "-id", Name: name, Labels: labels}
+}
+
+// withPorts adds exposed ports to a fixture.
+func withPorts(c Container, ports ...int) Container {
+	for _, p := range ports {
+		c.Ports = append(c.Ports, PortBinding{Private: p, Type: "tcp"})
+	}
+	return c
+}
+
+// autoCert is the default certificate wish.
+var autoCert = certs.Spec{Mode: certs.ModeAuto, Raw: fields.Auto}
+
+// proxyTarget returns a target with every built-in default applied, so a test
+// only has to spell out what it actually exercises.
+func proxyTarget(name string, mutate func(*Target)) *Target {
+	t := &Target{
+		Kind:          npm.KindProxy,
+		ContainerID:   name + "-id",
+		ContainerName: name,
+		Certificate:   autoCert,
+		HTTP2Support:  true,
+		HTTP3Support:  true,
+		ForwardScheme: "http",
+		ForwardHost:   name,
+		Websockets:    true,
+		BlockExploits: true,
+		Enabled:       true,
+
+		CrowdsecAppsec:    true,
+		RequestBuffering:  true,
+		ResponseBuffering: true,
+		AuthRequest:       "none",
+		AccessListType:    npm.AccessListPublic,
+	}
+	if mutate != nil {
+		mutate(t)
+	}
+	return t
 }
 
 func TestParseProxy(t *testing.T) {
@@ -27,171 +70,220 @@ func TestParseProxy(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "minimal configuration",
+			name: "one label is enough",
 			opts: opts("npm"),
-			c: withLabels("whoami", map[string]string{
-				"npm.enable":     "true",
-				"npm.proxy.host": "whoami.example.com",
-				"npm.proxy.port": "80",
-			}),
-			want: []*Target{{
-				Kind: npm.KindProxy, Index: 0,
-				ContainerID: "whoami-id", ContainerName: "whoami",
-				DomainNames:   []string{"whoami.example.com"},
-				ForwardScheme: "http", ForwardHost: "whoami", ForwardPort: 80,
-				Websockets: true, BlockExploits: true, Enabled: true,
-				AccessListType: npm.AccessListPublic,
-			}},
+			c: withPorts(withLabels("homepage", map[string]string{
+				"npm.proxy.domains": "homepage.example.com",
+			}), 3000),
+			want: []*Target{proxyTarget("homepage", func(t *Target) {
+				t.DomainNames = []string{"homepage.example.com"}
+				t.ForwardPort = 3000
+			})},
 		},
 		{
 			name: "shorthand without the proxy segment",
 			opts: opts("npm"),
 			c: withLabels("app", map[string]string{
-				"npm.enable": "yes",
-				"npm.host":   "app.example.com",
-				"npm.port":   "3000",
+				"npm.domains": "app.example.com",
+				"npm.port":    "3000",
 			}),
-			want: []*Target{{
-				Kind: npm.KindProxy, ContainerID: "app-id", ContainerName: "app",
-				DomainNames:   []string{"app.example.com"},
-				ForwardScheme: "http", ForwardHost: "app", ForwardPort: 3000,
-				Websockets: true, BlockExploits: true, Enabled: true,
-				AccessListType: npm.AccessListPublic,
-			}},
+			want: []*Target{proxyTarget("app", func(t *Target) {
+				t.DomainNames = []string{"app.example.com"}
+				t.ForwardPort = 3000
+			})},
+		},
+		{
+			name: "redth spelling: host is the upstream",
+			opts: opts("npm"),
+			c: withLabels("kuma", map[string]string{
+				"npm.proxy.domains": "kuma.example.com",
+				"npm.proxy.host":    "192.168.1.50",
+				"npm.proxy.port":    "3001",
+			}),
+			want: []*Target{proxyTarget("kuma", func(t *Target) {
+				t.DomainNames = []string{"kuma.example.com"}
+				t.ForwardHost = "192.168.1.50"
+				t.ForwardPort = 3001
+			})},
 		},
 		{
 			name: "custom prefix",
 			opts: opts("proxy"),
 			c: withLabels("svc", map[string]string{
-				"proxy.enable": "true",
-				"proxy.host":   "svc.example.com",
-				"proxy.port":   "8080",
+				"proxy.domains": "svc.example.com",
+				"proxy.port":    "8080",
 			}),
-			want: []*Target{{
-				Kind: npm.KindProxy, ContainerID: "svc-id", ContainerName: "svc",
-				DomainNames:   []string{"svc.example.com"},
-				ForwardScheme: "http", ForwardHost: "svc", ForwardPort: 8080,
-				Websockets: true, BlockExploits: true, Enabled: true,
-				AccessListType: npm.AccessListPublic,
-			}},
+			want: []*Target{proxyTarget("svc", func(t *Target) {
+				t.DomainNames = []string{"svc.example.com"}
+				t.ForwardPort = 8080
+			})},
+		},
+		{
+			name: "dash separated namespace",
+			opts: opts("npm"),
+			c: withLabels("dash", map[string]string{
+				"npm-proxy.domains": "dash.example.com",
+				"npm-proxy.port":    "8080",
+			}),
+			want: []*Target{proxyTarget("dash", func(t *Target) {
+				t.DomainNames = []string{"dash.example.com"}
+				t.ForwardPort = 8080
+			})},
 		},
 		{
 			name: "full configuration",
 			opts: opts("npm"),
 			c: withLabels("api", map[string]string{
-				"npm.enable":                    "1",
-				"npm.proxy.host":                "api.example.com, www.api.example.com",
+				"npm.proxy.domains":             "api.example.com, www.api.example.com",
 				"npm.proxy.port":                "8443",
 				"npm.proxy.scheme":              "https",
-				"npm.proxy.forward_host":        "internal-api",
-				"npm.proxy.certificate_id":      "7",
+				"npm.proxy.host":                "internal-api",
+				"npm.proxy.certificate":         "7",
 				"npm.proxy.ssl.forced":          "true",
 				"npm.proxy.ssl.http2":           "true",
+				"npm.proxy.ssl.http3":           "false",
 				"npm.proxy.ssl.hsts":            "true",
 				"npm.proxy.ssl.hsts_subdomains": "true",
 				"npm.proxy.websockets":          "false",
 				"npm.proxy.block_exploits":      "off",
 				"npm.proxy.caching":             "true",
-				"npm.proxy.access_list_id":      "2",
+				"npm.proxy.access_list":         "2",
 				"npm.proxy.advanced_config":     "client_max_body_size 0;",
+				"npm.proxy.noindex":             "true",
+				"npm.proxy.crowdsec_appsec":     "false",
+				"npm.proxy.x_frame_options":     "sameorigin",
+				"npm.proxy.auth_request":        "authelia",
 			}),
-			want: []*Target{{
-				Kind: npm.KindProxy, ContainerID: "api-id", ContainerName: "api",
-				DomainNames:   []string{"api.example.com", "www.api.example.com"},
-				ForwardScheme: "https", ForwardHost: "internal-api", ForwardPort: 8443,
-				CertificateID: npm.CertificateRef(7),
-				SSLForced:     true, HTTP2Support: true, HSTSEnabled: true, HSTSSubdomains: true,
-				Websockets: false, BlockExploits: false, Caching: true,
-				AccessListIDs: []int{2}, AccessListType: npm.AccessListCustom, AdvancedConfig: "client_max_body_size 0;",
-				Enabled: true,
-			}},
+			want: []*Target{proxyTarget("api", func(t *Target) {
+				t.DomainNames = []string{"api.example.com", "www.api.example.com"}
+				t.ForwardScheme = "https"
+				t.ForwardHost = "internal-api"
+				t.ForwardPort = 8443
+				t.Certificate = certs.Spec{Mode: certs.ModeID, ID: 7, Raw: "7"}
+				t.SSLForced = boolPtr(true)
+				t.HSTSEnabled = true
+				t.HSTSSubdomains = true
+				t.HTTP3Support = false
+				t.Websockets = false
+				t.BlockExploits = false
+				t.Caching = true
+				t.AccessListIDs = []int{2}
+				t.AccessListType = npm.AccessListCustom
+				t.AdvancedConfig = "client_max_body_size 0;"
+				t.NoIndex = true
+				t.CrowdsecAppsec = false
+				t.XFrameOptions = "SAMEORIGIN"
+				t.AuthRequest = "authelia"
+			})},
+		},
+		{
+			name: "access list by name",
+			opts: opts("npm"),
+			c: withLabels("kuma", map[string]string{
+				"npm.proxy.domains":     "kuma.example.com",
+				"npm.proxy.port":        "3001",
+				"npm.proxy.access_list": "Intern, 4",
+			}),
+			want: []*Target{proxyTarget("kuma", func(t *Target) {
+				t.DomainNames = []string{"kuma.example.com"}
+				t.ForwardPort = 3001
+				t.AccessListIDs = []int{4}
+				t.AccessListNames = []string{"Intern"}
+				t.AccessListType = npm.AccessListCustom
+			})},
+		},
+		{
+			name: "explicit disable alias inverts the value",
+			opts: opts("npm"),
+			c: withLabels("inv", map[string]string{
+				"npm.proxy.domains":                   "inv.example.com",
+				"npm.proxy.port":                      "80",
+				"npm.proxy.disable_crowdsec_appsec":   "true",
+				"npm.proxy.disable_request_buffering": "true",
+			}),
+			want: []*Target{proxyTarget("inv", func(t *Target) {
+				t.DomainNames = []string{"inv.example.com"}
+				t.ForwardPort = 80
+				t.CrowdsecAppsec = false
+				t.RequestBuffering = false
+			})},
 		},
 		{
 			name: "new letsencrypt certificate",
 			opts: opts("npm"),
 			c: withLabels("blog", map[string]string{
-				"npm.enable":               "true",
-				"npm.proxy.host":           "blog.example.com",
-				"npm.proxy.port":           "2368",
-				"npm.proxy.certificate_id": "new",
-				"npm.proxy.ssl.forced":     "true",
-				"npm.letsencrypt.email":    "admin@example.com",
-				"npm.letsencrypt.agree":    "true",
+				"npm.proxy.domains":     "blog.example.com",
+				"npm.proxy.port":        "2368",
+				"npm.proxy.certificate": "new",
+				"npm.letsencrypt.email": "admin@example.com",
+				"npm.letsencrypt.agree": "true",
 			}),
-			want: []*Target{{
-				Kind: npm.KindProxy, ContainerID: "blog-id", ContainerName: "blog",
-				DomainNames:   []string{"blog.example.com"},
-				ForwardScheme: "http", ForwardHost: "blog", ForwardPort: 2368,
-				CertificateID: npm.NewCertificate(), SSLForced: true,
-				LetsEncryptEmail: "admin@example.com", LetsEncryptAgree: true,
-				Websockets: true, BlockExploits: true, Enabled: true,
-				AccessListType: npm.AccessListPublic,
-			}},
+			want: []*Target{proxyTarget("blog", func(t *Target) {
+				t.DomainNames = []string{"blog.example.com"}
+				t.ForwardPort = 2368
+				t.Certificate = certs.Spec{Mode: certs.ModeNew, Raw: "new"}
+				t.LetsEncryptEmail = "admin@example.com"
+				t.LetsEncryptAgree = true
+			})},
 		},
 		{name: "no labels at all", opts: opts("npm"), c: withLabels("db", nil)},
 		{
 			name: "explicitly disabled container",
 			opts: opts("npm"),
-			c:    withLabels("db", map[string]string{"npm.enable": "false", "npm.host": "db.example.com"}),
+			c:    withLabels("db", map[string]string{"npm.enable": "false", "npm.domains": "db.example.com"}),
 		},
 		{
-			name:    "enabled but no host",
+			name: "opt-in required when exposed_by_default is off",
+			opts: ParseOptions{Prefix: "npm"},
+			c:    withLabels("db", map[string]string{"npm.domains": "db.example.com", "npm.port": "80"}),
+		},
+		{
+			name:    "domains missing",
 			opts:    opts("npm"),
-			c:       withLabels("x", map[string]string{"npm.enable": "true", "npm.port": "80"}),
+			c:       withLabels("x", map[string]string{"npm.port": "80"}),
 			wantErr: true,
 		},
 		{
-			name:    "enabled but no port",
+			name: "host that looks like a domain is rejected",
+			opts: opts("npm"),
+			c: withLabels("old", map[string]string{
+				"npm.proxy.host": "old.example.com",
+				"npm.proxy.port": "80",
+			}),
+			wantErr: true,
+		},
+		{
+			name:    "port cannot be guessed",
 			opts:    opts("npm"),
-			c:       withLabels("x", map[string]string{"npm.enable": "true", "npm.host": "x.example.com"}),
+			c:       withLabels("noport", map[string]string{"npm.proxy.domains": "noport.example.com"}),
 			wantErr: true,
 		},
 		{
-			name: "port out of range",
+			name: "ambiguous ports need the preference list",
 			opts: opts("npm"),
-			c: withLabels("x", map[string]string{
-				"npm.enable": "true", "npm.host": "x.example.com", "npm.port": "70000",
-			}),
+			c: withPorts(withLabels("multi", map[string]string{
+				"npm.proxy.domains": "multi.example.com",
+			}), 9000, 9001),
 			wantErr: true,
 		},
 		{
-			name: "invalid scheme",
-			opts: opts("npm"),
-			c: withLabels("x", map[string]string{
-				"npm.enable": "true", "npm.host": "x.example.com", "npm.port": "80", "npm.scheme": "ftp",
-			}),
-			wantErr: true,
+			name: "port preference decides",
+			opts: ParseOptions{Prefix: "npm", ExposedByDefault: true, PortPreference: []int{9001}},
+			c: withPorts(withLabels("multi", map[string]string{
+				"npm.proxy.domains": "multi.example.com",
+			}), 9000, 9001),
+			want: []*Target{proxyTarget("multi", func(t *Target) {
+				t.DomainNames = []string{"multi.example.com"}
+				t.ForwardPort = 9001
+			})},
 		},
 		{
-			name: "invalid boolean",
+			name: "invalid enum value",
 			opts: opts("npm"),
-			c: withLabels("x", map[string]string{
-				"npm.enable": "true", "npm.host": "x.example.com", "npm.port": "80", "npm.caching": "maybe",
-			}),
-			wantErr: true,
-		},
-		{
-			name: "ssl forced without certificate",
-			opts: opts("npm"),
-			c: withLabels("x", map[string]string{
-				"npm.enable": "true", "npm.host": "x.example.com", "npm.port": "80", "npm.ssl.forced": "true",
-			}),
-			wantErr: true,
-		},
-		{
-			name: "new certificate without agreeing to the terms",
-			opts: opts("npm"),
-			c: withLabels("x", map[string]string{
-				"npm.enable": "true", "npm.host": "x.example.com", "npm.port": "80",
-				"npm.certificate_id": "new", "npm.letsencrypt.email": "a@example.com",
-			}),
-			wantErr: true,
-		},
-		{
-			name: "domain with a path is rejected",
-			opts: opts("npm"),
-			c: withLabels("x", map[string]string{
-				"npm.enable": "true", "npm.host": "x.example.com/foo", "npm.port": "80",
+			c: withLabels("bad", map[string]string{
+				"npm.proxy.domains":      "bad.example.com",
+				"npm.proxy.port":         "80",
+				"npm.proxy.auth_request": "nope",
 			}),
 			wantErr: true,
 		},
@@ -200,532 +292,407 @@ func TestParseProxy(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			got, errs := Parse(tc.c, tc.opts)
+			res := Parse(tc.c, tc.opts)
 			if tc.wantErr {
-				if len(errs) == 0 {
-					t.Fatalf("Parse() errors = none, want an error (targets %+v)", got)
+				if len(res.Errors) == 0 {
+					t.Fatalf("expected an error, got targets %+v", res.Targets)
 				}
 				return
 			}
-			if len(errs) != 0 {
-				t.Fatalf("Parse() errors = %v", errs)
+			if len(res.Errors) > 0 {
+				t.Fatalf("unexpected errors: %v", res.Errors)
 			}
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("Parse() =\n%s\nwant\n%s", format(got), format(tc.want))
+			if !reflect.DeepEqual(res.Targets, tc.want) {
+				t.Errorf("targets mismatch\n got: %s\nwant: %s", dump(res.Targets), dump(tc.want))
 			}
 		})
 	}
 }
 
-func TestParseIndexedLabels(t *testing.T) {
+// TestRedthSpellingMatchesOurs is the compatibility guarantee of section 1.2:
+// the same configuration written in Redth's syntax and in ours has to produce
+// the very same target.
+func TestRedthSpellingMatchesOurs(t *testing.T) {
 	t.Parallel()
 
-	c := withLabels("multi", map[string]string{
-		"npm.enable": "true",
-
-		// index 0, implicit proxy
-		"npm.0.proxy.host": "app.example.com",
-		"npm.0.proxy.port": "8080",
-
-		// index 1, a second proxy host of the same container
-		"npm.1.proxy.host":   "admin.example.com",
-		"npm.1.proxy.port":   "9090",
-		"npm.1.proxy.scheme": "https",
-
-		// index 2, a stream
-		"npm.2.stream.incoming_port": "5432",
-		"npm.2.stream.forward_port":  "5432",
-		"npm.2.stream.udp":           "true",
-
-		// index 3, a redirect
-		"npm.3.redirect.host":           "old.example.com",
-		"npm.3.redirect.forward_domain": "app.example.com",
-		"npm.3.redirect.http_code":      "308",
-
-		// index 4, a 404 host
-		"npm.4.404.host": "parked.example.com",
+	redth := withLabels("app", map[string]string{
+		"npm.proxy.1.domains":               "app.example.com",
+		"npm.proxy.1.host":                  "10.0.0.5",
+		"npm.proxy.1.port":                  "8080",
+		"npm.proxy.1.ssl.force":             "true",
+		"npm.proxy.1.ssl.certificate.id":    "3",
+		"npm.proxy.1.ssl.hsts":              "true",
+		"npm.proxy.1.ssl.hsts.subdomains":   "true",
+		"npm.proxy.1.block_common_exploits": "false",
+		"npm.proxy.1.accesslist.id":         "2",
+	})
+	ours := withLabels("app", map[string]string{
+		"npm.1.proxy.domains":             "app.example.com",
+		"npm.1.proxy.forward_host":        "10.0.0.5",
+		"npm.1.proxy.forward_port":        "8080",
+		"npm.1.proxy.ssl_forced":          "true",
+		"npm.1.proxy.certificate":         "3",
+		"npm.1.proxy.ssl-hsts":            "true",
+		"npm.1.proxy.ssl_hsts_subdomains": "true",
+		"npm.1.proxy.block_exploits":      "false",
+		"npm.1.proxy.access_list":         "2",
 	})
 
-	targets, errs := Parse(c, opts("npm"))
-	if len(errs) != 0 {
-		t.Fatalf("Parse() errors = %v", errs)
+	left := Parse(redth, opts("npm"))
+	right := Parse(ours, opts("npm"))
+	if len(left.Errors) > 0 || len(right.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v / %v", left.Errors, right.Errors)
 	}
-	if len(targets) != 5 {
-		t.Fatalf("got %d targets, want 5:\n%s", len(targets), format(targets))
+	if !reflect.DeepEqual(left.Targets, right.Targets) {
+		t.Errorf("spellings differ\nredth: %s\nours:  %s", dump(left.Targets), dump(right.Targets))
 	}
-
-	// Targets come back ordered by index, then by kind.
-	wantKinds := []npm.Kind{npm.KindProxy, npm.KindProxy, npm.KindStream, npm.KindRedirect, npm.KindDead}
-	for i, want := range wantKinds {
-		if targets[i].Kind != want {
-			t.Errorf("target %d kind = %s, want %s", i, targets[i].Kind, want)
-		}
-		if targets[i].Index != i {
-			t.Errorf("target %d index = %d, want %d", i, targets[i].Index, i)
-		}
-	}
-
-	if targets[1].ForwardScheme != "https" || targets[1].ForwardPort != 9090 {
-		t.Errorf("index 1 = %+v, want https:9090", targets[1])
-	}
-	stream := targets[2]
-	if stream.IncomingPort != 5432 || stream.ForwardingPort != 5432 || !stream.TCPForwarding || !stream.UDPForwarding {
-		t.Errorf("stream = %+v, want tcp+udp 5432", stream)
-	}
-	redirect := targets[3]
-	if redirect.ForwardDomainName != "app.example.com" || redirect.ForwardHTTPCode != 308 || !redirect.PreservePath {
-		t.Errorf("redirect = %+v", redirect)
-	}
-	if targets[4].Key() != "parked.example.com" {
-		t.Errorf("404 host key = %q", targets[4].Key())
+	if len(left.Targets) != 1 || left.Targets[0].Index != 1 {
+		t.Fatalf("expected one target at index 1, got %s", dump(left.Targets))
 	}
 }
 
-func TestParseUnindexedIsIndexZero(t *testing.T) {
-	t.Parallel()
-
-	c := withLabels("mixed", map[string]string{
-		"npm.enable":               "true",
-		"npm.proxy.host":           "app.example.com",
-		"npm.proxy.port":           "80",
-		"npm.stream.incoming_port": "5000",
-		"npm.1.proxy.host":         "second.example.com",
-		"npm.1.proxy.port":         "81",
-	})
-
-	targets, errs := Parse(c, opts("npm"))
-	if len(errs) != 0 {
-		t.Fatalf("Parse() errors = %v", errs)
-	}
-	if len(targets) != 3 {
-		t.Fatalf("got %d targets, want 3:\n%s", len(targets), format(targets))
-	}
-	for _, target := range targets[:2] {
-		if target.Index != 0 {
-			t.Errorf("unindexed label produced index %d, want 0", target.Index)
-		}
-	}
-	// The stream of index 0 defaults its forwarding port to the incoming one.
-	if targets[1].Kind != npm.KindStream || targets[1].ForwardingPort != 5000 {
-		t.Errorf("stream = %+v, want forwarding port 5000", targets[1])
-	}
-}
-
-func TestParsePerIndexDisable(t *testing.T) {
-	t.Parallel()
-
-	c := withLabels("partly", map[string]string{
-		"npm.enable":       "true",
-		"npm.0.proxy.host": "a.example.com",
-		"npm.0.proxy.port": "80",
-		"npm.1.proxy.host": "b.example.com",
-		"npm.1.proxy.port": "81",
-		"npm.1.enable":     "false",
-	})
-
-	targets, errs := Parse(c, opts("npm"))
-	if len(errs) != 0 {
-		t.Fatalf("Parse() errors = %v", errs)
-	}
-	if len(targets) != 1 || targets[0].Key() != "a.example.com" {
-		t.Fatalf("targets = %s, want only index 0", format(targets))
-	}
-}
-
-func TestParseOneBrokenEntryKeepsTheOthers(t *testing.T) {
-	t.Parallel()
-
-	c := withLabels("half-broken", map[string]string{
-		"npm.enable":       "true",
-		"npm.0.proxy.host": "good.example.com",
-		"npm.0.proxy.port": "80",
-		"npm.1.proxy.host": "broken.example.com", // no port
-	})
-
-	targets, errs := Parse(c, opts("npm"))
-	if len(targets) != 1 || targets[0].Key() != "good.example.com" {
-		t.Fatalf("targets = %s, want the valid entry", format(targets))
-	}
-	if len(errs) != 1 {
-		t.Fatalf("errs = %v, want exactly one", errs)
-	}
-}
-
-func TestParseRedirect(t *testing.T) {
+// TestAliasTable walks the alias table of section 1.3 label by label.
+func TestAliasTable(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		labels  map[string]string
-		want    *Target
-		wantErr bool
+		label string
+		value string
+		check func(*Target) bool
 	}{
-		{
-			name: "defaults",
-			labels: map[string]string{
-				"npm.enable":                  "true",
-				"npm.redirect.host":           "old.example.com",
-				"npm.redirect.forward_domain": "new.example.com",
-			},
-			want: &Target{
-				Kind: npm.KindRedirect, ContainerID: "r-id", ContainerName: "r",
-				DomainNames:       []string{"old.example.com"},
-				ForwardScheme:     "auto",
-				ForwardDomainName: "new.example.com",
-				ForwardHTTPCode:   301,
-				PreservePath:      true,
-				BlockExploits:     true,
-				Enabled:           true,
-			},
-		},
-		{
-			name: "aliases and overrides",
-			labels: map[string]string{
-				"npm.enable":                 "true",
-				"npm.redirect.from":          "old.example.com",
-				"npm.redirect.to":            "new.example.com",
-				"npm.redirect.code":          "302",
-				"npm.redirect.scheme":        "https",
-				"npm.redirect.preserve_path": "false",
-			},
-			want: &Target{
-				Kind: npm.KindRedirect, ContainerID: "r-id", ContainerName: "r",
-				DomainNames:       []string{"old.example.com"},
-				ForwardScheme:     "https",
-				ForwardDomainName: "new.example.com",
-				ForwardHTTPCode:   302,
-				PreservePath:      false,
-				BlockExploits:     true,
-				Enabled:           true,
-			},
-		},
-		{
-			name: "missing target domain",
-			labels: map[string]string{
-				"npm.enable":        "true",
-				"npm.redirect.host": "old.example.com",
-			},
-			wantErr: true,
-		},
-		{
-			name: "target with a scheme",
-			labels: map[string]string{
-				"npm.enable":                  "true",
-				"npm.redirect.host":           "old.example.com",
-				"npm.redirect.forward_domain": "https://new.example.com",
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid status code",
-			labels: map[string]string{
-				"npm.enable":                  "true",
-				"npm.redirect.host":           "old.example.com",
-				"npm.redirect.forward_domain": "new.example.com",
-				"npm.redirect.http_code":      "200",
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid scheme",
-			labels: map[string]string{
-				"npm.enable":                  "true",
-				"npm.redirect.host":           "old.example.com",
-				"npm.redirect.forward_domain": "new.example.com",
-				"npm.redirect.scheme":         "gopher",
-			},
-			wantErr: true,
-		},
+		{"npm.proxy.domains", "a.example.com", func(t *Target) bool { return t.DomainNames[0] == "a.example.com" }},
+		{"npm.proxy.domain", "a.example.com", func(t *Target) bool { return t.DomainNames[0] == "a.example.com" }},
+		{"npm.domains", "a.example.com", func(t *Target) bool { return t.DomainNames[0] == "a.example.com" }},
+		{"npm.proxy.host", "10.0.0.1", func(t *Target) bool { return t.ForwardHost == "10.0.0.1" }},
+		{"npm.proxy.port", "8081", func(t *Target) bool { return t.ForwardPort == 8081 }},
+		{"npm.proxy.scheme", "https", func(t *Target) bool { return t.ForwardScheme == "https" }},
+		{"npm.proxy.ssl.force", "true", func(t *Target) bool { return t.SSLForced != nil && *t.SSLForced }},
+		{"npm.proxy.ssl.certificate.id", "9", func(t *Target) bool { return t.Certificate.ID == 9 }},
+		{"npm.proxy.ssl.http2", "false", func(t *Target) bool { return !t.HTTP2Support }},
+		{"npm.proxy.ssl.hsts", "true", func(t *Target) bool { return t.HSTSEnabled }},
+		{"npm.proxy.ssl.hsts.subdomains", "true", func(t *Target) bool { return t.HSTSSubdomains }},
+		{"npm.proxy.caching", "true", func(t *Target) bool { return t.Caching }},
+		{"npm.proxy.block_common_exploits", "false", func(t *Target) bool { return !t.BlockExploits }},
+		{"npm.proxy.websockets", "false", func(t *Target) bool { return !t.Websockets }},
+		{"npm.proxy.accesslist.id", "5", func(t *Target) bool { return len(t.AccessListIDs) == 1 && t.AccessListIDs[0] == 5 }},
+		{"npm.proxy.advanced.config", "x;", func(t *Target) bool { return t.AdvancedConfig == "x;" }},
+		{"npm.certificate_id", "4", func(t *Target) bool { return t.Certificate.ID == 4 }},
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.label, func(t *testing.T) {
 			t.Parallel()
-
-			targets, errs := Parse(withLabels("r", tc.labels), opts("npm"))
-			if tc.wantErr {
-				if len(errs) == 0 {
-					t.Fatalf("Parse() errors = none, want an error")
-				}
-				return
+			labels := map[string]string{"npm.proxy.port": "80", tc.label: tc.value}
+			if !strings.HasSuffix(tc.label, ".domain") && !strings.HasSuffix(tc.label, ".domains") {
+				labels["npm.proxy.domains"] = "base.example.com"
 			}
-			if len(errs) != 0 {
-				t.Fatalf("Parse() errors = %v", errs)
+			res := Parse(withLabels("alias", labels), opts("npm"))
+			if len(res.Errors) > 0 {
+				t.Fatalf("unexpected errors: %v", res.Errors)
 			}
-			if len(targets) != 1 || !reflect.DeepEqual(targets[0], tc.want) {
-				t.Errorf("Parse() =\n%s\nwant\n%+v", format(targets), tc.want)
+			if len(res.Targets) != 1 {
+				t.Fatalf("expected one target, got %d", len(res.Targets))
+			}
+			if !tc.check(res.Targets[0]) {
+				t.Errorf("%s=%s did not reach the target: %s", tc.label, tc.value, dump(res.Targets))
 			}
 		})
 	}
 }
 
-func TestParseStream(t *testing.T) {
+func TestStreamLabels(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		labels  map[string]string
-		check   func(t *testing.T, target *Target)
-		wantErr bool
-	}{
-		{
-			name: "tcp by default",
-			labels: map[string]string{
-				"npm.enable":               "true",
-				"npm.stream.incoming_port": "5432",
-				"npm.stream.forward_port":  "5432",
-			},
-			check: func(t *testing.T, target *Target) {
-				if !target.TCPForwarding || target.UDPForwarding {
-					t.Errorf("protocols = tcp:%v udp:%v, want tcp only", target.TCPForwarding, target.UDPForwarding)
-				}
-				if target.Key() != "5432" {
-					t.Errorf("Key() = %q, want the incoming port", target.Key())
-				}
-			},
-		},
-		{
-			name: "port alias and protocol shorthand",
-			labels: map[string]string{
-				"npm.enable":          "true",
-				"npm.stream.port":     "51820",
-				"npm.stream.protocol": "udp",
-			},
-			check: func(t *testing.T, target *Target) {
-				if target.IncomingPort != 51820 || target.ForwardingPort != 51820 {
-					t.Errorf("ports = %d/%d, want 51820 on both sides", target.IncomingPort, target.ForwardingPort)
-				}
-				if target.TCPForwarding || !target.UDPForwarding {
-					t.Errorf("protocols = tcp:%v udp:%v, want udp only", target.TCPForwarding, target.UDPForwarding)
-				}
-			},
-		},
-		{
-			name: "explicit forwarding host",
-			labels: map[string]string{
-				"npm.enable":                 "true",
-				"npm.stream.incoming_port":   "2222",
-				"npm.stream.forwarding_host": "ssh-box",
-				"npm.stream.forwarding_port": "22",
-			},
-			check: func(t *testing.T, target *Target) {
-				if target.ForwardingHost != "ssh-box" || target.ForwardingPort != 22 {
-					t.Errorf("upstream = %s:%d", target.ForwardingHost, target.ForwardingPort)
-				}
-			},
-		},
-		{
-			name:    "missing incoming port",
-			labels:  map[string]string{"npm.enable": "true", "npm.stream.forward_port": "5432"},
-			wantErr: true,
-		},
-		{
-			name: "no protocol at all",
-			labels: map[string]string{
-				"npm.enable":               "true",
-				"npm.stream.incoming_port": "5432",
-				"npm.stream.tcp":           "false",
-				"npm.stream.udp":           "false",
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid protocol",
-			labels: map[string]string{
-				"npm.enable":               "true",
-				"npm.stream.incoming_port": "5432",
-				"npm.stream.protocol":      "sctp",
-			},
-			wantErr: true,
-		},
+	res := Parse(withLabels("db", map[string]string{
+		"npm.stream.incoming.port": "5432",
+		"npm.stream.forward.host":  "10.0.0.9",
+		"npm.stream.forward.port":  "5432",
+		"npm.stream.forward.tcp":   "true",
+		"npm.stream.forward.udp":   "false",
+		"npm.stream.ssl":           "db.example.com",
+	}), opts("npm"))
+	if len(res.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", res.Errors)
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			targets, errs := Parse(withLabels("s", tc.labels), opts("npm"))
-			if tc.wantErr {
-				if len(errs) == 0 {
-					t.Fatalf("Parse() errors = none, want an error")
-				}
-				return
-			}
-			if len(errs) != 0 {
-				t.Fatalf("Parse() errors = %v", errs)
-			}
-			if len(targets) != 1 {
-				t.Fatalf("targets = %s, want exactly one stream", format(targets))
-			}
-			if targets[0].Kind != npm.KindStream {
-				t.Fatalf("kind = %s, want stream", targets[0].Kind)
-			}
-			tc.check(t, targets[0])
-		})
+	if len(res.Targets) != 1 {
+		t.Fatalf("expected one target, got %d", len(res.Targets))
+	}
+	got := res.Targets[0]
+	if got.Kind != npm.KindStream || got.IncomingPort != 5432 || got.ForwardingPort != 5432 {
+		t.Errorf("unexpected stream: %s", dump(res.Targets))
+	}
+	if got.ForwardingHost != "10.0.0.9" || !got.TCPForwarding || got.UDPForwarding {
+		t.Errorf("unexpected forwarding: %s", dump(res.Targets))
+	}
+	if got.Certificate.Mode != certs.ModeDomain || got.Certificate.Domain != "db.example.com" {
+		t.Errorf("unexpected certificate: %+v", got.Certificate)
+	}
+	if got.Description != "db" {
+		t.Errorf("description should default to the container name, got %q", got.Description)
 	}
 }
 
-func TestParseDeadHost(t *testing.T) {
+func TestStreamForwardPortDefaultsToIncoming(t *testing.T) {
 	t.Parallel()
 
-	for _, segment := range []string{"404", "dead"} {
-		t.Run(segment, func(t *testing.T) {
-			t.Parallel()
-
-			targets, errs := Parse(withLabels("parked", map[string]string{
-				"npm.enable":                    "true",
-				"npm." + segment + ".host":      "parked.example.com",
-				"npm." + segment + ".ssl.http2": "true",
-			}), opts("npm"))
-			if len(errs) != 0 {
-				t.Fatalf("Parse() errors = %v", errs)
-			}
-			if len(targets) != 1 || targets[0].Kind != npm.KindDead {
-				t.Fatalf("targets = %s, want one 404 host", format(targets))
-			}
-			if !targets[0].HTTP2Support {
-				t.Error("http2 label was not applied")
-			}
-		})
+	res := Parse(withLabels("db", map[string]string{"npm.stream.port": "5432"}), opts("npm"))
+	if len(res.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", res.Errors)
+	}
+	if got := res.Targets[0].ForwardingPort; got != 5432 {
+		t.Errorf("forwarding port = %d, want 5432", got)
 	}
 }
 
-func TestParseAll(t *testing.T) {
+func TestRedirectAndDeadHosts(t *testing.T) {
+	t.Parallel()
+
+	res := Parse(withLabels("old", map[string]string{
+		"npm.redirect.domains":        "old.example.com",
+		"npm.redirect.forward_domain": "new.example.com",
+		"npm.redirect.http_code":      "308",
+		"npm.404.domains":             "gone.example.com",
+	}), opts("npm"))
+	if len(res.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", res.Errors)
+	}
+	if len(res.Targets) != 2 {
+		t.Fatalf("expected two targets, got %s", dump(res.Targets))
+	}
+	redirect, dead := res.Targets[0], res.Targets[1]
+	if redirect.Kind != npm.KindRedirect || redirect.ForwardDomainName != "new.example.com" || redirect.ForwardHTTPCode != 308 {
+		t.Errorf("unexpected redirect: %s", dump(res.Targets[:1]))
+	}
+	if redirect.ForwardScheme != fields.Auto || !redirect.PreservePath {
+		t.Errorf("redirect defaults are wrong: %s", dump(res.Targets[:1]))
+	}
+	if dead.Kind != npm.KindDead || dead.DomainNames[0] != "gone.example.com" {
+		t.Errorf("unexpected 404 host: %s", dump(res.Targets[1:]))
+	}
+}
+
+func TestUnknownLabelWarns(t *testing.T) {
+	t.Parallel()
+
+	c := withLabels("typo", map[string]string{
+		"npm.proxy.domains":   "typo.example.com",
+		"npm.proxy.port":      "80",
+		"npm.proxy.ssl.forcd": "true",
+	})
+
+	res := Parse(c, opts("npm"))
+	if len(res.Targets) != 1 {
+		t.Fatalf("the resource should still be created, got %s", dump(res.Targets))
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "ssl.forced") {
+		t.Fatalf("expected a suggestion for ssl.forced, got %v", res.Warnings)
+	}
+
+	strict := opts("npm")
+	strict.StrictLabels = true
+	res = Parse(c, strict)
+	if len(res.Targets) != 0 {
+		t.Errorf("STRICT_LABELS should skip the resource, got %s", dump(res.Targets))
+	}
+}
+
+func TestDefaultsFromEnvironment(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"NPM_PROXY_WEBSOCKETS": "false",
+		"NPM_PROXY_SSL_FORCE":  "true",
+		"NPM_DEFAULT_HTTP3":    "false",
+	}
+	defaults, _, err := fields.LoadDefaults(func(k string) string { return env[k] }, nil)
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+
+	o := opts("npm")
+	o.Defaults = defaults
+	res := Parse(withLabels("app", map[string]string{
+		"npm.proxy.domains":    "app.example.com",
+		"npm.proxy.port":       "80",
+		"npm.proxy.websockets": "true", // the label wins over the environment
+	}), o)
+	if len(res.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", res.Errors)
+	}
+	got := res.Targets[0]
+	if !got.Websockets {
+		t.Error("the label should override NPM_PROXY_WEBSOCKETS")
+	}
+	if got.SSLForced == nil || !*got.SSLForced {
+		t.Error("NPM_PROXY_SSL_FORCE should apply")
+	}
+	if got.HTTP3Support {
+		t.Error("NPM_DEFAULT_HTTP3 should apply")
+	}
+}
+
+func TestLocations(t *testing.T) {
+	t.Parallel()
+
+	res := Parse(withLabels("app", map[string]string{
+		"npm.proxy.domains":               "app.example.com",
+		"npm.proxy.port":                  "80",
+		"npm.proxy.location.0.path":       "/api",
+		"npm.proxy.location.0.type":       "prefer",
+		"npm.proxy.location.0.port":       "9000",
+		"npm.proxy.location.0.noindex":    "true",
+		"npm.proxy.location.1.path":       "/static",
+		"npm.proxy.location.1.fancyindex": "true",
+	}), opts("npm"))
+	if len(res.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", res.Errors)
+	}
+	locations := res.Targets[0].Locations
+	if len(locations) != 2 {
+		t.Fatalf("expected two locations, got %d", len(locations))
+	}
+	if locations[0].Path != "/api" || locations[0].LocationType != npm.LocationPrefer || locations[0].ForwardPort != 9000 {
+		t.Errorf("unexpected first location: %+v", locations[0])
+	}
+	if !locations[0].NoIndex || locations[0].DisableCrowdsecAppsec {
+		t.Errorf("location switches are wrong: %+v", locations[0])
+	}
+	if locations[1].ForwardPort != 80 || !locations[1].FancyIndex {
+		t.Errorf("unexpected second location: %+v", locations[1])
+	}
+}
+
+func TestManagedClassification(t *testing.T) {
 	t.Parallel()
 
 	containers := []Container{
-		withLabels("ok", map[string]string{"npm.enable": "true", "npm.host": "ok.example.com", "npm.port": "80"}),
-		withLabels("broken", map[string]string{"npm.enable": "true", "npm.host": "broken.example.com"}),
-		withLabels("ignored", nil),
+		withLabels("a", map[string]string{"npm.proxy.domains": "a.example.com"}),
+		withLabels("b", map[string]string{"npm.enable": "false"}),
+		withLabels("c", nil),
+		withLabels("d", map[string]string{"npm.enable": "true"}),
 	}
-
-	targets, errs := ParseAll(containers, opts("npm"))
-	if len(targets) != 1 || targets[0].ContainerName != "ok" {
-		t.Fatalf("targets = %s, want only the valid container", format(targets))
-	}
-	if len(errs) != 1 {
-		t.Fatalf("errs = %v, want exactly one error", errs)
+	got := Classify(containers, opts("npm"))
+	want := Summary{Managed: 2, OptedOut: 1, Unlabeled: 1}
+	if got != want {
+		t.Errorf("classification = %+v, want %+v", got, want)
 	}
 }
 
-func TestIsEnabled(t *testing.T) {
+func TestSelfContainerIsIgnored(t *testing.T) {
 	t.Parallel()
 
-	tests := map[string]bool{"true": true, "1": true, "yes": true, "false": false, "": false, "nonsense": false}
-	for value, want := range tests {
-		c := withLabels("c", map[string]string{"npm.enable": value})
-		if got := IsEnabled(c, "npm"); got != want {
-			t.Errorf("IsEnabled(%q) = %v, want %v", value, got, want)
-		}
-	}
-	if IsEnabled(withLabels("c", nil), "npm") {
-		t.Error("IsEnabled() = true for a container without labels")
+	o := opts("npm")
+	o.SelfID = "self-id"
+	res := Parse(withLabels("self", map[string]string{"npm.proxy.domains": "self.example.com"}), o)
+	if len(res.Targets) != 0 {
+		t.Errorf("the sync container must never manage itself, got %s", dump(res.Targets))
 	}
 }
 
-func TestTargetKey(t *testing.T) {
+func TestParseAllReportsContainerName(t *testing.T) {
 	t.Parallel()
 
-	proxy := &Target{Kind: npm.KindProxy, DomainNames: []string{"b.example.com", "a.example.com"}}
-	if got := proxy.Key(); got != "a.example.com" {
-		t.Errorf("Key() = %q, want the alphabetically first domain", got)
-	}
-	stream := &Target{Kind: npm.KindStream, IncomingPort: 5432}
-	if got := stream.Key(); got != "5432" {
-		t.Errorf("Key() = %q, want the incoming port", got)
-	}
-	if got := (&Target{Kind: npm.KindProxy}).Key(); got != "" {
-		t.Errorf("Key() = %q, want empty without domains", got)
+	res := ParseAll([]Container{
+		withLabels("broken", map[string]string{"npm.proxy.port": "80"}),
+	}, opts("npm"))
+	if len(res.Errors) != 1 || !strings.Contains(res.Errors[0].Error(), "broken") {
+		t.Fatalf("expected an error naming the container, got %v", res.Errors)
 	}
 }
 
-// format renders targets for readable test failures.
-func format(targets []*Target) string {
-	out := ""
+func boolPtr(b bool) *bool { return &b }
+
+// dump renders targets for a readable diff.
+func dump(targets []*Target) string {
+	var sb strings.Builder
 	for _, t := range targets {
-		out += "  " + t.Describe() + "\n"
+		fmt.Fprintf(&sb, "%+v\n", *t)
 	}
-	if out == "" {
-		return "  <none>"
-	}
-	return out
+	return sb.String()
 }
 
-func TestParseLocationBlocks(t *testing.T) {
+// TestEnableSemantics separates the three meanings of `enable`: the container
+// switch, the per-index switch and a resource's own flag.
+func TestEnableSemantics(t *testing.T) {
 	t.Parallel()
 
-	targets, errs := Parse(withLabels("app", map[string]string{
-		"npm.enable":     "true",
-		"npm.proxy.host": "app.example.com",
-		"npm.proxy.port": "8080",
+	tests := []struct {
+		name   string
+		labels map[string]string
+		want   int
+		check  func(*testing.T, []*Target)
+	}{
+		{
+			name: "container opt-out",
+			labels: map[string]string{
+				"npm.enable":        "false",
+				"npm.proxy.domains": "a.example.com",
+				"npm.proxy.port":    "80",
+			},
+			want: 0,
+		},
+		{
+			name: "index opt-out",
+			labels: map[string]string{
+				"npm.proxy.domains":   "a.example.com",
+				"npm.proxy.port":      "80",
+				"npm.1.proxy.domains": "b.example.com",
+				"npm.1.proxy.port":    "80",
+				"npm.1.enable":        "false",
+			},
+			want: 1,
+			check: func(t *testing.T, targets []*Target) {
+				if targets[0].DomainNames[0] != "a.example.com" {
+					t.Errorf("the wrong index survived: %s", dump(targets))
+				}
+			},
+		},
+		{
+			name: "resource flag stays a field",
+			labels: map[string]string{
+				"npm.proxy.domains": "a.example.com",
+				"npm.proxy.port":    "80",
+				"npm.proxy.enable":  "false",
+			},
+			want: 1,
+			check: func(t *testing.T, targets []*Target) {
+				if targets[0].Enabled {
+					t.Error("npm.proxy.enable=false should create a disabled host")
+				}
+			},
+		},
+		{
+			name: "404 is a kind, not an index",
+			labels: map[string]string{
+				"npm.proxy.domains": "a.example.com",
+				"npm.proxy.port":    "80",
+				"npm.404.domains":   "parked.example.com",
+				"npm.404.enable":    "false",
+			},
+			want: 2,
+			check: func(t *testing.T, targets []*Target) {
+				if !targets[0].Enabled {
+					t.Error("the proxy host must stay enabled")
+				}
+				if targets[1].Enabled {
+					t.Error("npm.404.enable=false should only disable the 404 host")
+				}
+			},
+		},
+	}
 
-		"npm.proxy.location.0.path":            "/api",
-		"npm.proxy.location.0.forward_host":    "api-backend",
-		"npm.proxy.location.0.forward_port":    "3000",
-		"npm.proxy.location.0.advanced_config": "proxy_read_timeout 600s;",
-
-		// Everything but the path defaults to the host's own upstream.
-		"npm.proxy.location.1.path": "/static",
-	}), opts("npm"))
-	if len(errs) != 0 {
-		t.Fatalf("Parse() errors = %v", errs)
-	}
-	if len(targets) != 1 {
-		t.Fatalf("targets = %s, want one proxy host", format(targets))
-	}
-
-	locations := targets[0].Locations
-	if len(locations) != 2 {
-		t.Fatalf("locations = %+v, want 2", locations)
-	}
-	if locations[0].Path != "/api" || locations[0].ForwardHost != "api-backend" || locations[0].ForwardPort != 3000 {
-		t.Errorf("location 0 = %+v", locations[0])
-	}
-	if locations[0].AdvancedConfig != "proxy_read_timeout 600s;" {
-		t.Errorf("location 0 advanced config = %q", locations[0].AdvancedConfig)
-	}
-	if locations[1].Path != "/static" || locations[1].ForwardHost != "app" || locations[1].ForwardPort != 8080 {
-		t.Errorf("location 1 = %+v, want the proxy host defaults", locations[1])
-	}
-	if locations[1].ForwardScheme != "http" {
-		t.Errorf("location 1 scheme = %q, want the inherited scheme", locations[1].ForwardScheme)
-	}
-}
-
-func TestParseLocationBlockErrors(t *testing.T) {
-	t.Parallel()
-
-	base := map[string]string{
-		"npm.enable":     "true",
-		"npm.proxy.host": "app.example.com",
-		"npm.proxy.port": "8080",
-	}
-
-	tests := map[string]map[string]string{
-		"missing path":      {"npm.proxy.location.0.forward_port": "3000"},
-		"relative path":     {"npm.proxy.location.0.path": "api"},
-		"invalid index":     {"npm.proxy.location.x.path": "/api"},
-		"missing sub field": {"npm.proxy.location.0": "/api"},
-		"invalid port":      {"npm.proxy.location.0.path": "/api", "npm.proxy.location.0.forward_port": "abc"},
-		"port out of range": {"npm.proxy.location.0.path": "/api", "npm.proxy.location.0.forward_port": "70000"},
-		"invalid scheme":    {"npm.proxy.location.0.path": "/api", "npm.proxy.location.0.forward_scheme": "ftp"},
-	}
-
-	for name, extra := range tests {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			labels := map[string]string{}
-			for k, v := range base {
-				labels[k] = v
+			res := Parse(withLabels("app", tc.labels), opts("npm"))
+			if len(res.Errors) > 0 {
+				t.Fatalf("unexpected errors: %v", res.Errors)
 			}
-			for k, v := range extra {
-				labels[k] = v
+			if len(res.Targets) != tc.want {
+				t.Fatalf("got %d targets, want %d: %s", len(res.Targets), tc.want, dump(res.Targets))
 			}
-
-			if _, errs := Parse(withLabels("app", labels), opts("npm")); len(errs) == 0 {
-				t.Fatalf("Parse() errors = none, want an error")
+			if tc.check != nil {
+				tc.check(t, res.Targets)
 			}
 		})
 	}

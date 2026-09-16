@@ -7,6 +7,8 @@ import (
 	"net"
 	"sort"
 
+	"github.com/VentumPhoenix/npmplus-docker-sync/internal/certs"
+	"github.com/VentumPhoenix/npmplus-docker-sync/internal/fields"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/npm"
 )
 
@@ -18,12 +20,28 @@ type Network struct {
 	Aliases []string
 }
 
+// PortBinding is one port of a container: the port inside the container and,
+// when published, the port on the host.
+type PortBinding struct {
+	// Private is the container-internal port (what EXPOSE declares).
+	Private int
+	// Public is the host port, 0 when the port is not published.
+	Public int
+	// Type is "tcp" or "udp".
+	Type string
+}
+
 // Container is the subset of Docker container data the parser needs.
 type Container struct {
 	ID       string
 	Name     string
 	Labels   map[string]string
 	Networks []Network
+	// Ports are the container's exposed and published ports, used to guess
+	// the upstream port when no label names one.
+	Ports []PortBinding
+	// State is the Docker state ("running", "exited", ...).
+	State string
 }
 
 // ParseOptions controls how labels are turned into targets.
@@ -43,11 +61,26 @@ type ParseOptions struct {
 	// proxy host that resolves to a dead upstream. Set whenever the operator
 	// named the network explicitly (NPM_NETWORK).
 	StrictNetworks bool
+	// Defaults are the effective field defaults (built-in, overridden by the
+	// NPM_<KIND>_<FIELD> and NPM_DEFAULT_<FIELD> environment variables).
+	Defaults *fields.Defaults
+	// ExposedByDefault manages every container that carries at least one
+	// label of the namespace, without requiring npm.enable=true
+	// (NPM_EXPOSED_BY_DEFAULT, default true).
+	ExposedByDefault bool
+	// StrictLabels skips a resource whose label set contains an unknown
+	// field instead of only warning about it.
+	StrictLabels bool
+	// PortPreference is the order in which an exposed port is picked when a
+	// container exposes several (NPM_PORT_PREFERENCE).
+	PortPreference []int
+	// SelfID is this process's own container: it is never managed.
+	SelfID string
 }
 
 // Target is one desired NPM resource derived from a container. A single
 // container can produce many targets through indexed labels
-// (npm.0.proxy.host, npm.1.stream.incoming_port, ...).
+// (npm.proxy.domains, npm.proxy.1.domains, npm.1.stream.incoming_port, ...).
 type Target struct {
 	Kind          npm.Kind
 	Index         int
@@ -55,9 +88,13 @@ type Target struct {
 	ContainerName string
 
 	// Shared across proxy, redirect and 404 hosts.
-	DomainNames    []string
-	CertificateID  npm.CertificateID
-	SSLForced      bool
+	DomainNames []string
+	// Certificate is the unresolved certificate wish; the reconcile loop
+	// turns it into an id once it knows which certificates exist.
+	Certificate certs.Spec
+	// SSLForced is nil for "auto": forced as soon as a certificate is
+	// attached.
+	SSLForced      *bool
 	HTTP2Support   bool
 	HSTSEnabled    bool
 	HSTSSubdomains bool
@@ -74,8 +111,21 @@ type Target struct {
 	Caching             bool
 	TrustForwardedProto bool
 	AccessListIDs       []int
+	AccessListNames     []string
 	AccessListType      string
 	Locations           []npm.Location
+
+	// Proxy hosts, NPMplus only.
+	NoIndex             bool
+	CrowdsecAppsec      bool
+	RequestBuffering    bool
+	ResponseBuffering   bool
+	UpstreamCompression bool
+	FancyIndex          bool
+	XFrameOptions       string
+	AuthRequest         string
+	AuthRequestUpstream string
+	LocationConfig      string
 
 	// Redirection hosts.
 	ForwardDomainName string
@@ -88,6 +138,9 @@ type Target struct {
 	ForwardingPort int
 	TCPForwarding  bool
 	UDPForwarding  bool
+	ProxyProtocol  int
+	ProxyTLS       bool
+	Description    string
 
 	// Let's Encrypt (all kinds that carry a certificate).
 	LetsEncryptEmail   string
@@ -115,10 +168,13 @@ func (t *Target) Key() string {
 }
 
 // Describe returns a log friendly identifier such as
-// "web/0 proxy app.example.com".
+// "web#0 proxy app.example.com".
 func (t *Target) Describe() string {
 	return fmt.Sprintf("%s#%d %s %s", t.ContainerName, t.Index, t.Kind, t.Key())
 }
+
+// Domains returns the domain names this target serves; streams have none.
+func (t *Target) Domains() []string { return npm.NormalizeDomains(t.DomainNames) }
 
 // ResolveHost returns the upstream host for the container: the container's IP
 // address when resolution is enabled and an address is available, otherwise
@@ -191,6 +247,74 @@ func (c Container) OnAnyNetwork(names []string) bool {
 		}
 	}
 	return false
+}
+
+// DefaultPortPreference is the order in which an exposed port is picked when a
+// container exposes several of them.
+var DefaultPortPreference = fields.DefaultPortPreference
+
+// GuessPort returns the container port to forward to when no label names one.
+//
+// A container that exposes exactly one TCP port needs no configuration at all;
+// with several ports the preference list decides, and when none of them is
+// listed the caller is told to be explicit rather than being handed a random
+// port.
+func (c Container) GuessPort(preference []int) (int, bool) {
+	tcp := make([]int, 0, len(c.Ports))
+	seen := make(map[int]struct{}, len(c.Ports))
+	for _, p := range c.Ports {
+		if p.Private <= 0 || (p.Type != "" && p.Type != "tcp") {
+			continue
+		}
+		if _, dup := seen[p.Private]; dup {
+			continue
+		}
+		seen[p.Private] = struct{}{}
+		tcp = append(tcp, p.Private)
+	}
+	if len(tcp) == 0 {
+		return 0, false
+	}
+	if len(tcp) == 1 {
+		return tcp[0], true
+	}
+	if len(preference) == 0 {
+		preference = DefaultPortPreference
+	}
+	for _, want := range preference {
+		if _, ok := seen[want]; ok {
+			return want, true
+		}
+	}
+	return 0, false
+}
+
+// PublishedPort returns the host port a container port is published on.
+func (c Container) PublishedPort(private int) (int, bool) {
+	for _, p := range c.Ports {
+		if p.Private == private && p.Public > 0 {
+			return p.Public, true
+		}
+	}
+	return 0, false
+}
+
+// ExposedPorts returns the container's TCP ports, sorted, for error messages.
+func (c Container) ExposedPorts() []int {
+	out := make([]int, 0, len(c.Ports))
+	seen := make(map[int]struct{}, len(c.Ports))
+	for _, p := range c.Ports {
+		if p.Private <= 0 {
+			continue
+		}
+		if _, dup := seen[p.Private]; dup {
+			continue
+		}
+		seen[p.Private] = struct{}{}
+		out = append(out, p.Private)
+	}
+	sort.Ints(out)
+	return out
 }
 
 // DedupeNetworks removes duplicates while keeping the first occurrence, so a

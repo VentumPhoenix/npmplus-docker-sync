@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/VentumPhoenix/npmplus-docker-sync/internal/certs"
+	"github.com/VentumPhoenix/npmplus-docker-sync/internal/fields"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/npm"
 )
 
@@ -32,7 +34,7 @@ func minimalEnv(extra map[string]string) map[string]string {
 func TestLoadDefaults(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := Load(env(minimalEnv(nil)))
+	cfg, err := Load(env(minimalEnv(nil)), nil)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -84,7 +86,7 @@ func TestLoadValidation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := Load(env(tc.values))
+			_, err := Load(env(tc.values), nil)
 			if err == nil {
 				t.Fatalf("Load() error = nil, want an error mentioning %q", tc.wantErr)
 			}
@@ -111,7 +113,7 @@ func TestLoadOverrides(t *testing.T) {
 		"LOG_FORMAT":        "json",
 		"HEALTH_ADDR":       ":8080",
 		"NPM_URL":           "https://npm.example.com/",
-	})))
+	})), nil)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -139,7 +141,7 @@ func TestLoadOverrides(t *testing.T) {
 func TestBareNumbersAreSeconds(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := Load(env(minimalEnv(map[string]string{"DEBOUNCE_INTERVAL": "5"})))
+	cfg, err := Load(env(minimalEnv(map[string]string{"DEBOUNCE_INTERVAL": "5"})), nil)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -160,7 +162,7 @@ func TestSecretFromFile(t *testing.T) {
 		"NPM_URL":         "http://npm:81",
 		"NPM_IDENTITY":    "admin@example.com",
 		"NPM_SECRET_FILE": path,
-	}))
+	}), nil)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -168,7 +170,7 @@ func TestSecretFromFile(t *testing.T) {
 		t.Errorf("NPMSecret = %q, want the trimmed file contents", cfg.NPMSecret)
 	}
 
-	if _, err := Load(env(minimalEnv(map[string]string{"NPM_SECRET_FILE": "/nonexistent/secret"}))); err == nil {
+	if _, err := Load(env(minimalEnv(map[string]string{"NPM_SECRET_FILE": "/nonexistent/secret"})), nil); err == nil {
 		t.Error("Load() error = nil for a missing secret file")
 	}
 }
@@ -180,7 +182,7 @@ func TestAliasVariables(t *testing.T) {
 		"NPM_BASE_URL": "http://npm:81",
 		"NPM_EMAIL":    "admin@example.com",
 		"NPM_PASSWORD": "changeme",
-	}))
+	}), nil)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -192,7 +194,7 @@ func TestAliasVariables(t *testing.T) {
 func TestSecretIsNeverLogged(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := Load(env(minimalEnv(nil)))
+	cfg, err := Load(env(minimalEnv(nil)), nil)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -245,7 +247,7 @@ func TestLoadResourceKinds(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg, err := Load(env(minimalEnv(map[string]string{"SYNC_KINDS": tc.value})))
+			cfg, err := Load(env(minimalEnv(map[string]string{"SYNC_KINDS": tc.value})), nil)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("Load() error = nil, want an error")
@@ -265,7 +267,7 @@ func TestLoadResourceKinds(t *testing.T) {
 func TestLoadIPResolutionDefaults(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := Load(env(minimalEnv(nil)))
+	cfg, err := Load(env(minimalEnv(nil)), nil)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -279,7 +281,7 @@ func TestLoadIPResolutionDefaults(t *testing.T) {
 	cfg, err = Load(env(minimalEnv(map[string]string{
 		"RESOLVE_CONTAINER_IP": "false",
 		"NPM_NETWORK":          "npm",
-	})))
+	})), nil)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -309,7 +311,7 @@ func TestLoadFlavour(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			cfg, err := Load(env(minimalEnv(tt.values)))
+			cfg, err := Load(env(minimalEnv(tt.values)), nil)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("Load() = nil error, want a rejection")
@@ -329,7 +331,7 @@ func TestLoadFlavour(t *testing.T) {
 func TestLoadNetworkStrictness(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := Load(env(minimalEnv(map[string]string{"NPM_NETWORK": "npm-frontend"})))
+	cfg, err := Load(env(minimalEnv(map[string]string{"NPM_NETWORK": "npm-frontend"})), nil)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -340,7 +342,7 @@ func TestLoadNetworkStrictness(t *testing.T) {
 	cfg, err = Load(env(minimalEnv(map[string]string{
 		"NPM_NETWORK":        "npm-frontend",
 		"NPM_NETWORK_STRICT": "false",
-	})))
+	})), nil)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -353,7 +355,7 @@ func TestLoadPayloadLogging(t *testing.T) {
 	t.Parallel()
 
 	for _, key := range []string{"LOG_PAYLOADS", "NPM_DEBUG_PAYLOADS"} {
-		cfg, err := Load(env(minimalEnv(map[string]string{key: "true"})))
+		cfg, err := Load(env(minimalEnv(map[string]string{key: "true"})), nil)
 		if err != nil {
 			t.Fatalf("Load() error = %v", err)
 		}
@@ -362,11 +364,146 @@ func TestLoadPayloadLogging(t *testing.T) {
 		}
 	}
 
-	cfg, err := Load(env(minimalEnv(nil)))
+	cfg, err := Load(env(minimalEnv(nil)), nil)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if cfg.LogPayloads {
 		t.Error("payload logging must be off by default: bodies can carry DNS credentials")
+	}
+}
+
+// TestLoadBeta3Defaults pins the defaults of the settings added in
+// v1.0.0-beta.3.
+func TestLoadBeta3Defaults(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(env(minimalEnv(nil)), nil)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.ExposedByDefault {
+		t.Error("NPM_EXPOSED_BY_DEFAULT should default to true")
+	}
+	if cfg.StrictLabels || cfg.MigrateFromRedth || cfg.CertificateAutoCreate {
+		t.Error("the opt-in switches should default to false")
+	}
+	if cfg.CertificatePartial != certs.PartialPrimary {
+		t.Errorf("CertificatePartial = %q, want primary", cfg.CertificatePartial)
+	}
+	if cfg.CertificatePoll != DefaultCertificatePoll {
+		t.Errorf("CertificatePoll = %s, want %s", cfg.CertificatePoll, DefaultCertificatePoll)
+	}
+	if !reflect.DeepEqual(cfg.PortPreference, fields.DefaultPortPreference) {
+		t.Errorf("PortPreference = %v, want %v", cfg.PortPreference, fields.DefaultPortPreference)
+	}
+	if got := cfg.Defaults.Value(npm.KindProxy, fields.Certificate); got != fields.Auto {
+		t.Errorf("certificate default = %q, want auto", got)
+	}
+}
+
+func TestLoadBeta3Settings(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(env(minimalEnv(map[string]string{
+		"NPM_EXPOSED_BY_DEFAULT":      "false",
+		"STRICT_LABELS":               "true",
+		"MIGRATE_FROM_REDTH":          "true",
+		"NPM_CERTIFICATE_PARTIAL":     "none",
+		"NPM_CERTIFICATE_AUTO_CREATE": "true",
+		"CERTIFICATE_POLL_INTERVAL":   "30",
+		"NPM_PORT_PREFERENCE":         "3000, 80",
+		"NPM_CONTAINER_NAME":          "npmplus",
+		"NPM_PROXY_WEBSOCKETS":        "false",
+	})), []string{"NPM_PROXY_TYPO=1"})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ExposedByDefault || !cfg.StrictLabels || !cfg.MigrateFromRedth || !cfg.CertificateAutoCreate {
+		t.Errorf("switches = %+v", cfg)
+	}
+	if cfg.CertificatePartial != certs.PartialNone {
+		t.Errorf("CertificatePartial = %q, want none", cfg.CertificatePartial)
+	}
+	if cfg.CertificatePoll != 30*time.Second {
+		t.Errorf("CertificatePoll = %s, want 30s", cfg.CertificatePoll)
+	}
+	if !reflect.DeepEqual(cfg.PortPreference, []int{3000, 80}) {
+		t.Errorf("PortPreference = %v, want [3000 80]", cfg.PortPreference)
+	}
+	if cfg.NPMContainer != "npmplus" {
+		t.Errorf("NPMContainer = %q", cfg.NPMContainer)
+	}
+	if got := cfg.Defaults.Value(npm.KindProxy, fields.Websockets); got != "false" {
+		t.Errorf("websockets default = %q, want false", got)
+	}
+	if len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], "NPM_PROXY_TYPO") {
+		t.Errorf("Warnings = %v, want the unknown variable reported", cfg.Warnings)
+	}
+}
+
+// Redth's environment block has to run unchanged, and each alias is announced
+// once so the log says which canonical name it mapped to.
+func TestRedthEnvironmentAliases(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(env(map[string]string{
+		"NPM_URL":      "http://npm:81",
+		"NPM_EMAIL":    "admin@example.com",
+		"NPM_PASSWORD": "changeme",
+	}), nil)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.NPMIdentity != "admin@example.com" || cfg.NPMSecret != "changeme" {
+		t.Fatalf("credentials = %q / %q", cfg.NPMIdentity, cfg.Redacted().NPMSecret)
+	}
+	joined := strings.Join(cfg.Notices, "\n")
+	for _, want := range []string{"NPM_EMAIL", "NPM_PASSWORD"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("notices = %v, want %s to be announced", cfg.Notices, want)
+		}
+	}
+}
+
+// Any variable may come from a file, not just the password.
+func TestAnyVariableFromFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "url")
+	if err := os.WriteFile(path, []byte("http://npm-from-file:81\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load(env(map[string]string{
+		"NPM_URL_FILE": path,
+		"NPM_IDENTITY": "admin@example.com",
+		"NPM_SECRET":   "changeme",
+	}), nil)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.NPMURL != "http://npm-from-file:81" {
+		t.Errorf("NPMURL = %q, want the file content", cfg.NPMURL)
+	}
+}
+
+func TestInvalidBeta3Settings(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"NPM_CERTIFICATE_PARTIAL": "sometimes",
+		"NPM_PORT_PREFERENCE":     "http",
+		"NPM_PROXY_AUTH_REQUEST":  "nope",
+		"NPM_DEFAULT_HTTP3":       "maybe",
+	}
+	for key, value := range tests {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			if _, err := Load(env(minimalEnv(map[string]string{key: value})), nil); err == nil {
+				t.Fatalf("Load() error = nil for %s=%s", key, value)
+			}
+		})
 	}
 }

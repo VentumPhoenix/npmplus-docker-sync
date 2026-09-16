@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
+	golang.org/x/net v0.58.0
 )
 
 require (

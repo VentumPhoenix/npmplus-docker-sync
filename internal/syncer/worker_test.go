@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/VentumPhoenix/npmplus-docker-sync/internal/certs"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/docker"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/npm"
 )
@@ -21,6 +22,10 @@ type fakeAPI struct {
 
 	resources map[npm.Kind]map[int]npm.Resource
 	nextID    int
+
+	certificates []npm.Certificate
+	accessLists  []npm.AccessList
+	flavour      npm.Flavour
 
 	listErr    map[npm.Kind]error
 	createErr  error
@@ -48,6 +53,31 @@ func newFakeAPI(seed ...npm.Resource) *fakeAPI {
 		f.bucket(r.Kind())[r.ResourceID()] = r
 	}
 	return f
+}
+
+func (f *fakeAPI) ListCertificates(ctx context.Context) ([]npm.Certificate, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]npm.Certificate(nil), f.certificates...), nil
+}
+
+func (f *fakeAPI) ListAccessLists(ctx context.Context) ([]npm.AccessList, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]npm.AccessList(nil), f.accessLists...), nil
+}
+
+func (f *fakeAPI) Flavour() npm.Flavour {
+	if f.flavour == "" {
+		return npm.FlavourNPMplus
+	}
+	return f.flavour
 }
 
 func (f *fakeAPI) bucket(kind npm.Kind) map[int]npm.Resource {
@@ -314,9 +344,22 @@ func deadTarget(name, domain string) *docker.Target {
 
 // managed builds a live resource as this tool would have created it.
 func managed(id int, target *docker.Target) npm.Resource {
-	r := BuildResource(target)
+	r := BuildResource(target, targetCertificate(target))
 	r.SetResourceID(id)
 	return r
+}
+
+// targetCertificate resolves a target's certificate wish without an API, the
+// way an empty NPM instance would.
+func targetCertificate(t *docker.Target) npm.CertificateID {
+	switch t.Certificate.Mode {
+	case certs.ModeNew:
+		return npm.NewCertificate()
+	case certs.ModeID:
+		return npm.CertificateRef(t.Certificate.ID)
+	default:
+		return npm.CertificateID{}
+	}
 }
 
 func defaultOptions() Options {
@@ -636,7 +679,7 @@ func TestReconcileAdoptsIssuedCertificate(t *testing.T) {
 			t.Parallel()
 
 			target := tc.target
-			target.CertificateID = npm.NewCertificate()
+			target.Certificate = certs.Spec{Mode: certs.ModeNew, Raw: "new"}
 			target.LetsEncryptEmail = "admin@example.com"
 			target.LetsEncryptAgree = true
 
@@ -842,7 +885,7 @@ func TestBuildResourceStampsOwnership(t *testing.T) {
 		deadTarget("parked", "parked.example.com"),
 	} {
 		t.Run(string(target.Kind), func(t *testing.T) {
-			resource := BuildResource(target)
+			resource := BuildResource(target, targetCertificate(target))
 			if resource == nil {
 				t.Fatal("BuildResource() = nil")
 			}
@@ -869,7 +912,7 @@ func TestBuildResourceLetsEncryptMeta(t *testing.T) {
 	t.Parallel()
 
 	target := proxyTarget("blog", "blog.example.com", 2368)
-	target.CertificateID = npm.NewCertificate()
+	target.Certificate = certs.Spec{Mode: certs.ModeNew, Raw: "new"}
 	target.LetsEncryptEmail = "admin@example.com"
 	target.LetsEncryptAgree = true
 	target.DNSChallenge = true
@@ -877,7 +920,7 @@ func TestBuildResourceLetsEncryptMeta(t *testing.T) {
 	target.DNSCredentials = "dns_cloudflare_api_token=secret"
 	target.PropagationSeconds = 60
 
-	meta := BuildResource(target).ResourceMeta()
+	meta := BuildResource(target, targetCertificate(target)).ResourceMeta()
 	if meta["letsencrypt_email"] != "admin@example.com" || meta["letsencrypt_agree"] != true {
 		t.Errorf("meta = %+v, want the letsencrypt label values", meta)
 	}
@@ -886,51 +929,80 @@ func TestBuildResourceLetsEncryptMeta(t *testing.T) {
 	}
 }
 
-// Resources created by an earlier release carry the old ownership marker.
-// They must be adopted and re-stamped, and cleaned up when orphaned.
-func TestReconcileHandlesLegacyOwnershipMarker(t *testing.T) {
+// Hosts created by Redth/npm-docker-sync carry its own ownership marker. Both
+// tools may run against the same NPM instance, so they are left alone until
+// the operator asks for a migration.
+func TestReconcileRedthOwnership(t *testing.T) {
 	t.Parallel()
 
-	legacy := func(id int, target *docker.Target) npm.Resource {
-		r := BuildResource(target)
+	redth := func(id int, target *docker.Target) npm.Resource {
+		r := BuildResource(target, targetCertificate(target))
 		r.SetResourceID(id)
-		r.ResourceMeta()[npm.MetaManagedBy] = npm.LegacyManagedByValues[0]
+		meta := r.ResourceMeta()
+		meta[npm.MetaManagedBy] = npm.RedthManagedByValue
+		meta["container_id"] = "abc123"
+		meta["npm_url"] = "http://npm:81"
 		return r
 	}
 
-	t.Run("adopts and re-stamps", func(t *testing.T) {
+	t.Run("left alone by default", func(t *testing.T) {
 		t.Parallel()
 
 		target := proxyTarget("web", "web.example.com", 80)
-		api := newFakeAPI(legacy(5, target))
+		api := newFakeAPI(redth(5, target))
 		w := NewWorker(api, &fakeSource{targets: []*docker.Target{target}}, defaultOptions(), nil)
 
 		res, err := w.Reconcile(context.Background())
 		if err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
-		if res.Updated != 1 {
-			t.Fatalf("Result = %+v, want the legacy resource to be updated", res)
+		if res.Skipped != 1 || res.Updated != 0 {
+			t.Fatalf("Result = %+v, want the foreign host skipped", res)
 		}
-
 		live, _ := api.List(context.Background(), npm.KindProxy)
-		if !live[0].ResourceMeta().ManagedBy(npm.ManagedByValue) {
-			t.Errorf("meta = %+v, want the new ownership marker", live[0].ResourceMeta())
+		if !live[0].ResourceMeta().ManagedBy(npm.RedthManagedByValue) {
+			t.Errorf("meta = %+v, want the foreign marker untouched", live[0].ResourceMeta())
 		}
 	})
 
-	t.Run("deletes legacy orphans", func(t *testing.T) {
+	t.Run("never deleted as an orphan", func(t *testing.T) {
 		t.Parallel()
 
-		api := newFakeAPI(legacy(6, proxyTarget("gone", "gone.example.com", 80)))
+		api := newFakeAPI(redth(6, proxyTarget("gone", "gone.example.com", 80)))
 		w := NewWorker(api, &fakeSource{}, defaultOptions(), nil)
 
 		res, err := w.Reconcile(context.Background())
 		if err != nil {
 			t.Fatalf("Reconcile() error = %v", err)
 		}
-		if res.Deleted != 1 {
-			t.Errorf("Result = %+v, want the legacy orphan removed", res)
+		if res.Deleted != 0 {
+			t.Errorf("Result = %+v, want a foreign host to survive", res)
+		}
+	})
+
+	t.Run("migrated on request", func(t *testing.T) {
+		t.Parallel()
+
+		target := proxyTarget("web", "web.example.com", 80)
+		api := newFakeAPI(redth(5, target))
+		opts := defaultOptions()
+		opts.MigrateFromRedth = true
+		w := NewWorker(api, &fakeSource{targets: []*docker.Target{target}}, opts, nil)
+
+		res, err := w.Reconcile(context.Background())
+		if err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+		if res.Updated != 1 {
+			t.Fatalf("Result = %+v, want the host taken over", res)
+		}
+		live, _ := api.List(context.Background(), npm.KindProxy)
+		meta := live[0].ResourceMeta()
+		if !meta.ManagedBy(npm.ManagedByValue) {
+			t.Errorf("meta = %+v, want our ownership marker", meta)
+		}
+		if meta["container_id"] != "abc123" || meta["npm_url"] != "http://npm:81" {
+			t.Errorf("meta = %+v, want the redth bookkeeping preserved", meta)
 		}
 	})
 }
@@ -1127,10 +1199,10 @@ func TestSSLNormalisationMatchesTheServer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			target := proxyTarget("web", "web.example.com", 80)
-			target.CertificateID = tt.certificate
-			target.SSLForced, target.HSTSEnabled, target.HSTSSubdomains = tt.forced, tt.hsts, tt.hstsSub
+			forced := tt.forced
+			target.SSLForced, target.HSTSEnabled, target.HSTSSubdomains = &forced, tt.hsts, tt.hstsSub
 
-			host, ok := BuildResource(target).(*npm.ProxyHost)
+			host, ok := BuildResource(target, tt.certificate).(*npm.ProxyHost)
 			if !ok {
 				t.Fatal("BuildResource() did not return a proxy host")
 			}
