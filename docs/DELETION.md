@@ -30,7 +30,7 @@ Everything else is left alone.
 | `LABEL_PREFIX` changed | Deletions are refused for the whole run, with the old prefix named. |
 | `NPM_EXPOSED_BY_DEFAULT` switched to `false` | Every unlabelled container becomes an orphan at once, which the delete guard stops. |
 | Docker or the socket proxy answers with an empty container list | Deletions are refused: "no containers at all" is never a reason to delete. |
-| Another sync instance manages the host | Never touched (`SYNC_INSTANCE_ID`). |
+| Another sync instance manages the host | Never touched (`SYNC_INSTANCE_ID`). Without an id - `/info` denied and nothing configured - instance scoping is off and every resource with our marker counts as ours, which is what a single instance wants. |
 | Another tool manages the host (`npm-docker-sync`, anything else) | Never touched. |
 | The host was created by hand | Adopted when a label claims its domain, otherwise never touched — and never deleted while unmanaged. |
 | SIGTERM / container shutdown | The final flush creates and updates, but never deletes. |

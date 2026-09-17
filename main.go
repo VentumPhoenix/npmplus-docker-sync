@@ -200,7 +200,16 @@ func run(mode runMode) error {
 	if instanceID == "" {
 		instanceID = listener.DaemonID(ctx)
 	}
-	log.Info("sync instance", slog.String("id", instanceID))
+	if instanceID == "" {
+		// Without an identity every resource carrying our marker is ours,
+		// which is right for a single instance. Two instances against one NPM
+		// would fight over each other's hosts, so say so once.
+		log.Info("no sync instance id (docker /info is not available); " +
+			"managing every resource with our marker. Set SYNC_INSTANCE_ID when " +
+			"several instances share one npm, or allow INFO on the socket proxy")
+	} else {
+		log.Info("sync instance", slog.String("id", instanceID))
+	}
 	log.Debug("upstream host resolution",
 		slog.Bool("resolve_ip", cfg.ResolveIP),
 		slog.Bool("strict_networks", parseOpts.StrictNetworks),

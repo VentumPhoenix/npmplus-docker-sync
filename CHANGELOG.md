@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The integration stack could not start.** Both server images refuse to boot
+  without their data directories - upstream NPM wants `/data` *and*
+  `/etc/letsencrypt`, NPMplus wants `/data` - so every job of the new
+  integration matrix failed before the first test. The compose stack now mounts
+  named volumes for both. The NPM container also lost its healthcheck: it
+  assumed a shell, `wget` and a plain-http admin API, none of which holds for
+  both images. The harness probes the API itself instead, under http *and*
+  https, because NPMplus serves its admin API with a self-signed certificate.
+- **The sync instance id fell back to the host name.** Inside a container that
+  is the short container id, so it changed with every recreate - and an
+  instance whose identity changes considers its own resources to belong to
+  somebody else, which would leave them un-managed (never updated, never
+  deleted). When the Docker daemon id is not readable there is now no instance
+  id at all, which means "every resource with our marker is ours": the right
+  answer for a single instance, and the documented reason to set
+  `SYNC_INSTANCE_ID` explicitly when several share one NPM. The bundled
+  `docker-compose.yml` now allows `INFO` on the socket proxy so the daemon id
+  is available in the first place.
+
 ## [1.0.0-beta.4] - 2026-09-16
 
 **Deletion is now hard to trigger by accident.** Five situations in which this

@@ -58,7 +58,8 @@ func TestPrefixChangeDoesNotDelete(t *testing.T) {
 		requireHost(t, c, npm.KindProxy, name+".test")
 	}
 
-	run := syncOnce(t, "LABEL_PREFIX=other")
+	// The guard is off for the rest of the suite; here it is the point.
+	run := syncOnce(t, "LABEL_PREFIX=other", "DELETE_GUARD=0.5")
 	for _, name := range []string{"it-prefix-a", "it-prefix-b", "it-prefix-c"} {
 		requireHost(t, c, npm.KindProxy, name+".test")
 	}
@@ -97,8 +98,44 @@ func TestTwoInstancesCoexist(t *testing.T) {
 	// Cleanup: each instance removes its own.
 	removeContainer("it-instance-b")
 	mustSync(t, "SYNC_INSTANCE_ID=instance-b")
-	mustSync(t, "SYNC_INSTANCE_ID=instance-a", "DELETE_GUARD=off")
+	mustSync(t, "SYNC_INSTANCE_ID=instance-a")
 	requireNoHost(t, c, npm.KindProxy, "instance-a.test")
+}
+
+// The delete guard refuses a run that would remove an implausible share of the
+// managed hosts - here: all of them at once.
+func TestDeleteGuardRefusesAMassDeletion(t *testing.T) {
+	c := client(t)
+
+	names := []string{"it-guard-a", "it-guard-b", "it-guard-c", "it-guard-d"}
+	for _, name := range names {
+		startContainer(t, name, map[string]string{
+			"npm.proxy.domains": name + ".test",
+			"npm.proxy.port":    "80",
+		})
+	}
+	mustSync(t, "DELETE_GUARD=0.5")
+	for _, name := range names {
+		requireHost(t, c, npm.KindProxy, name+".test")
+	}
+
+	for _, name := range names {
+		removeContainer(name)
+	}
+	run := mustSync(t, "DELETE_GUARD=0.5")
+	if !strings.Contains(run.Output, "refusing to delete") {
+		t.Errorf("the guard should stop the run:\n%s", run.Output)
+	}
+	for _, name := range names {
+		requireHost(t, c, npm.KindProxy, name+".test")
+	}
+
+	// With the guard off the same run cleans up, which is also what leaves
+	// the stack tidy for the next test.
+	mustSync(t)
+	for _, name := range names {
+		requireNoHost(t, c, npm.KindProxy, name+".test")
+	}
 }
 
 // DRY_RUN has to be exactly that: it reports and changes nothing.

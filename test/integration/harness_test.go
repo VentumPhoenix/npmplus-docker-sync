@@ -17,6 +17,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -45,15 +47,22 @@ var (
 	project     = "npmsync-it"
 )
 
-// defaultCredentials are what both projects ship with; the harness rotates
-// them when the image does not seed a user from the environment.
-const (
-	defaultIdentity = "admin@example.com"
-	defaultSecret   = "changeme"
-)
+// shippedCredentials are the accounts the two projects ship with. When an
+// image does not seed the first user from the environment, the harness logs in
+// with one of these and rotates it into the configured pair.
+var shippedCredentials = [][2]string{
+	{"admin@example.com", "changeme"},                         // nginx-proxy-manager
+	{"admin@example.org", "iArhP1j7p1P6TA92FA2FMbbUYYAdUFDU"}, // NPMplus
+}
 
 // binary is the freshly built sync binary, set up by TestMain.
 var binary string
+
+// apiBase is the admin API of the stack, resolved by waitForAPI. It is not a
+// constant because the two flavours disagree about the scheme: NPMplus serves
+// its admin API over https with a self-signed certificate, upstream NPM over
+// plain http. Probing beats guessing from the image name.
+var apiBase string
 
 func env(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
@@ -62,8 +71,29 @@ func env(key, fallback string) string {
 	return fallback
 }
 
-func apiURL() string  { return "http://127.0.0.1:" + apiPort }
+// apiURL is the admin API. Before waitForAPI resolved it, the http form is
+// used - that is only the case in error messages.
+func apiURL() string {
+	if apiBase != "" {
+		return apiBase
+	}
+	return "http://127.0.0.1:" + apiPort
+}
+
+// httpURL is the proxy port: what a visitor of a proxied host would hit.
 func httpURL() string { return "http://127.0.0.1:" + httpPort }
+
+// insecureClient talks to the admin API. NPMplus presents a self-signed
+// certificate there, so verification is off - as it is for the tool itself
+// via NPM_INSECURE_SKIP_VERIFY.
+func insecureClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // a throwaway test stack
+		},
+	}
+}
 
 // TestMain builds the binary, starts the stack and tears it down again.
 func TestMain(m *testing.M) {
@@ -78,7 +108,7 @@ func TestMain(m *testing.M) {
 }
 
 func runSuite(m *testing.M) (int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	dir, err := os.MkdirTemp("", "npmsync-it")
@@ -100,11 +130,11 @@ func runSuite(m *testing.M) (int, error) {
 		return 1, fmt.Errorf("start the stack: %w\n%s", err, logs)
 	}
 	if err := waitForAPI(ctx); err != nil {
-		logs, _ := compose(context.Background(), "logs", "--no-color", "--tail", "80")
-		return 1, fmt.Errorf("wait for the npm api: %w\n%s", err, logs)
+		return 1, fmt.Errorf("wait for the npm api: %w\n%s", err, npmLogs())
 	}
+	fmt.Fprintf(os.Stderr, "integration harness: admin api at %s\n", apiBase)
 	if err := ensureAdmin(ctx); err != nil {
-		return 1, fmt.Errorf("prepare the admin account: %w", err)
+		return 1, fmt.Errorf("prepare the admin account: %w\n%s", err, npmLogs())
 	}
 	return m.Run(), nil
 }
@@ -119,8 +149,12 @@ func compose(ctx context.Context, args ...string) (string, error) {
 }
 
 func composeUp(ctx context.Context) error {
-	out, err := compose(ctx, "up", "-d", "--wait", "--wait-timeout", "300")
-	if err != nil {
+	// Start from nothing: a stack left behind by an aborted run still holds
+	// the database of that run, including the password it rotated to.
+	if out, err := compose(ctx, "down", "-v", "--remove-orphans"); err != nil {
+		fmt.Fprintf(os.Stderr, "integration harness: pre-clean: %v\n%s", err, out)
+	}
+	if out, err := compose(ctx, "up", "-d", "--wait", "--wait-timeout", "420"); err != nil {
 		return fmt.Errorf("%w\n%s", err, out)
 	}
 	return nil
@@ -193,6 +227,33 @@ func removeContainer(name string) {
 // the sync binary
 // ---------------------------------------------------------------------------
 
+// baseEnv is the environment every invocation of the tool starts from. A test
+// overrides a value by appending it again - the last occurrence wins.
+//
+// Two of these are deliberate test-suite settings rather than defaults:
+//
+//   - DELETE_GUARD is off, because each scenario leaves the hosts of the
+//     previous one behind for a moment and the guard would refuse to clean
+//     them up. The guard itself has its own unit tests, and the two scenarios
+//     that assert a refusal turn it back on.
+//   - NPM_STOP_GRACE is zero, so a scenario that stops a container sees the
+//     effect in the very next run instead of waiting a minute. The grace
+//     period has its own test, which sets it explicitly.
+func baseEnv() []string {
+	return []string{
+		"NPM_URL=" + apiURL(),
+		"NPM_IDENTITY=" + npmIdentity,
+		"NPM_SECRET=" + npmSecret,
+		// NPMplus serves its admin API with a self-signed certificate.
+		"NPM_INSECURE_SKIP_VERIFY=true",
+		"DOCKER_HOST=unix:///var/run/docker.sock",
+		"NPM_NETWORK=" + network,
+		"LOG_LEVEL=debug",
+		"DELETE_GUARD=off",
+		"NPM_STOP_GRACE=0",
+	}
+}
+
 // syncRun is one invocation of the tool.
 type syncRun struct {
 	Output string
@@ -222,16 +283,8 @@ func runBinary(t *testing.T, args []string, extra ...string) syncRun {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, binary, args...) //nolint:gosec // the binary this repo builds
-	cmd.Env = append(os.Environ(),
-		"NPM_URL="+apiURL(),
-		"NPM_IDENTITY="+npmIdentity,
-		"NPM_SECRET="+npmSecret,
-		"DOCKER_HOST=unix:///var/run/docker.sock",
-		"NPM_NETWORK="+network,
-		"LOG_LEVEL=debug",
-		"LOG_FORMAT=text",
-		"RESYNC_INTERVAL=0",
-	)
+	cmd.Env = append(os.Environ(), baseEnv()...)
+	cmd.Env = append(cmd.Env, "LOG_FORMAT=text", "RESYNC_INTERVAL=0")
 	cmd.Env = append(cmd.Env, extra...)
 
 	var buf bytes.Buffer
@@ -263,15 +316,8 @@ func startDaemon(t *testing.T, extra ...string) func() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, binary) //nolint:gosec // the binary this repo builds
-	cmd.Env = append(os.Environ(),
-		"NPM_URL="+apiURL(),
-		"NPM_IDENTITY="+npmIdentity,
-		"NPM_SECRET="+npmSecret,
-		"DOCKER_HOST=unix:///var/run/docker.sock",
-		"NPM_NETWORK="+network,
-		"LOG_LEVEL=debug",
-		"RESYNC_INTERVAL=30s",
-	)
+	cmd.Env = append(os.Environ(), baseEnv()...)
+	cmd.Env = append(cmd.Env, "RESYNC_INTERVAL=30s")
 	cmd.Env = append(cmd.Env, extra...)
 
 	var buf syncBuffer
@@ -334,7 +380,7 @@ func (b *syncBuffer) String() string {
 func client(t *testing.T) *npm.Client {
 	t.Helper()
 
-	c, err := npm.New(apiURL(), npmIdentity, npmSecret, npm.WithTimeout(30*time.Second))
+	c, err := client0(npmIdentity, npmSecret)
 	if err != nil {
 		t.Fatalf("npm.New: %v", err)
 	}
@@ -347,21 +393,26 @@ func client(t *testing.T) *npm.Client {
 	return c
 }
 
-// waitForAPI blocks until the API answers at all.
+// waitForAPI blocks until the admin API answers, and remembers under which
+// scheme it did. A container that has died in the meantime is reported at once
+// instead of after the full timeout.
 func waitForAPI(ctx context.Context) error {
-	deadline := time.Now().Add(5 * time.Minute)
+	candidates := []string{
+		"http://127.0.0.1:" + apiPort,
+		"https://127.0.0.1:" + apiPort,
+	}
+	client := insecureClient(5 * time.Second)
+
+	deadline := time.Now().Add(6 * time.Minute)
 	for time.Now().Before(deadline) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL()+"/api/", nil)
-		if err != nil {
-			return err
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			_ = resp.Body.Close()
-			if resp.StatusCode < 500 {
+		for _, base := range candidates {
+			if reachable(ctx, client, base) {
+				apiBase = base
 				return nil
 			}
+		}
+		if status := containerState("npmsync-it-npm"); status != "running" {
+			return fmt.Errorf("the npm container is %q", status)
 		}
 		select {
 		case <-ctx.Done():
@@ -372,6 +423,47 @@ func waitForAPI(ctx context.Context) error {
 	return errors.New("timed out")
 }
 
+// reachable reports whether the admin API answers under this base URL.
+func reachable(ctx context.Context, client *http.Client, base string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	return resp.StatusCode < 500
+}
+
+// containerState returns the Docker state of a container ("running",
+// "exited", ...), or "gone" when it does not exist.
+func containerState(name string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	out, err := run(ctx, "", "docker", "inspect", "-f", "{{.State.Status}}", name)
+	if err != nil {
+		return "gone"
+	}
+	return strings.TrimSpace(out)
+}
+
+// npmLogs returns the tail of the NPM container log, which is where both
+// projects explain what they are missing.
+func npmLogs() string {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	out, err := compose(ctx, "logs", "--no-color", "--tail", "60", "npm")
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
 // ensureAdmin makes the configured credentials work.
 //
 // Recent NPM and NPMplus images seed the first user from the environment;
@@ -379,28 +471,106 @@ func waitForAPI(ctx context.Context) error {
 // changed on first login. Both are handled, so the suite does not depend on
 // which of the two an image does.
 func ensureAdmin(ctx context.Context) error {
-	if err := login(ctx, npmIdentity, npmSecret); err == nil {
-		return nil
+	candidates := append([][2]string{{npmIdentity, npmSecret}}, shippedCredentials...)
+	if identity, secret := os.Getenv("NPM_FALLBACK_IDENTITY"), os.Getenv("NPM_FALLBACK_SECRET"); identity != "" {
+		candidates = append(candidates, [2]string{identity, secret})
 	}
-	if err := login(ctx, defaultIdentity, defaultSecret); err != nil {
-		return fmt.Errorf("neither the configured nor the default credentials work: %w", err)
+
+	var tried []string
+	for _, candidate := range candidates {
+		identity, secret := candidate[0], candidate[1]
+		if err := login(ctx, identity, secret); err != nil {
+			tried = append(tried, identity)
+			continue
+		}
+		if identity == npmIdentity && secret == npmSecret {
+			return nil
+		}
+
+		// The image shipped its own account: rotate it into the configured
+		// one, which is what every test uses from here on.
+		fmt.Fprintf(os.Stderr, "integration harness: rotating the shipped account %s\n", identity)
+		c, err := client0(identity, secret)
+		if err != nil {
+			return err
+		}
+		if err := c.Login(ctx); err != nil {
+			return err
+		}
+		if err := c.UpdateOwnCredentials(ctx, npmIdentity, secret, npmSecret); err != nil {
+			return fmt.Errorf("rotate the credentials of %s: %w", identity, err)
+		}
+		return login(ctx, npmIdentity, npmSecret)
 	}
-	// Rotate the default account into the configured one.
-	c, err := npm.New(apiURL(), defaultIdentity, defaultSecret, npm.WithTimeout(30*time.Second))
-	if err != nil {
-		return err
+	// Last resort: both projects print the account they created into their
+	// log on first boot.
+	if identity, secret, ok := credentialsFromLogs(npmLogs()); ok {
+		fmt.Fprintf(os.Stderr, "integration harness: trying the account from the container log (%s)\n", identity)
+		if err := login(ctx, identity, secret); err == nil {
+			c, err := client0(identity, secret)
+			if err != nil {
+				return err
+			}
+			if err := c.Login(ctx); err != nil {
+				return err
+			}
+			if err := c.UpdateOwnCredentials(ctx, npmIdentity, secret, npmSecret); err != nil {
+				return fmt.Errorf("rotate the credentials of %s: %w", identity, err)
+			}
+			return login(ctx, npmIdentity, npmSecret)
+		}
+		tried = append(tried, identity)
 	}
-	if err := c.Login(ctx); err != nil {
-		return err
+
+	return fmt.Errorf("no working credentials; tried %s. Set NPM_FALLBACK_IDENTITY and "+
+		"NPM_FALLBACK_SECRET when the image ships a different default account",
+		strings.Join(tried, ", "))
+}
+
+// credentialsFromLogs digs the initial account out of the container log, which
+// is where a version that neither seeds from the environment nor uses a known
+// default announces it.
+func credentialsFromLogs(logs string) (identity, secret string, ok bool) {
+	email := regexp.MustCompile(`[\w.+-]+@[\w-]+\.[\w.-]+`)
+	for _, line := range strings.Split(logs, "\n") {
+		lower := strings.ToLower(line)
+		if !strings.Contains(lower, "password") {
+			continue
+		}
+		// "Initial admin password: xxx", "password: xxx", "Password = xxx"
+		fields := strings.FieldsFunc(line, func(r rune) bool {
+			return r == ' ' || r == '\t' || r == ':' || r == '=' || r == '"' || r == '\''
+		})
+		if len(fields) == 0 {
+			continue
+		}
+		candidate := fields[len(fields)-1]
+		if len(candidate) < 6 || strings.Contains(strings.ToLower(candidate), "password") {
+			continue
+		}
+		secret = candidate
 	}
-	if err := c.UpdateOwnCredentials(ctx, npmIdentity, defaultSecret, npmSecret); err != nil {
-		return fmt.Errorf("rotate the default credentials: %w", err)
+	if secret == "" {
+		return "", "", false
 	}
-	return login(ctx, npmIdentity, npmSecret)
+	if found := email.FindAllString(logs, -1); len(found) > 0 {
+		identity = found[len(found)-1]
+	}
+	if identity == "" {
+		return "", "", false
+	}
+	return identity, secret, true
+}
+
+// client0 builds an API client for arbitrary credentials.
+func client0(identity, secret string) (*npm.Client, error) {
+	return npm.New(apiURL(), identity, secret,
+		npm.WithTimeout(30*time.Second),
+		npm.WithInsecureSkipVerify(true))
 }
 
 func login(ctx context.Context, identity, secret string) error {
-	c, err := npm.New(apiURL(), identity, secret, npm.WithTimeout(30*time.Second))
+	c, err := client0(identity, secret)
 	if err != nil {
 		return err
 	}

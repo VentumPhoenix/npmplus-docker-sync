@@ -50,7 +50,7 @@ Endpoints this tool needs, and nothing else:
 | `GET /events` | `EVENTS=1` | yes | react to lifecycle changes |
 | `GET /_ping` | `PING=1` | yes | startup connectivity check |
 | `GET /version` | `VERSION=1` | yes | API version negotiation |
-| `GET /info` | `INFO=1` | no | the daemon id, used as the default `SYNC_INSTANCE_ID`; without it the host name is used |
+| `GET /info` | `INFO=1` | recommended | the daemon id, used as the default `SYNC_INSTANCE_ID`. Without it there is no instance id at all: fine for a single instance, but several instances against one NPM then need an explicit `SYNC_INSTANCE_ID` each |
 
 Everything else stays at `0`. In particular:
 
@@ -78,7 +78,7 @@ docker-socket-proxy:
     EVENTS: "1"
     PING: "1"
     VERSION: "1"
-    INFO: "1"    # optional, for the instance id
+    INFO: "1"    # recommended, for a stable instance id
     POST: "0"
   volumes:
     - /var/run/docker.sock:/var/run/docker.sock:ro

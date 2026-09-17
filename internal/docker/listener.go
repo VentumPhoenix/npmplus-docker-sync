@@ -279,23 +279,27 @@ func (l *Listener) NetworksOfContainer(ctx context.Context, name string) []strin
 }
 
 // DaemonID returns the id of the Docker daemon, which is the natural default
-// for the sync instance id: it is stable across restarts of this container and
-// different for every Docker host.
+// for the sync instance id: it is stable across restarts and recreates of this
+// container, and different for every Docker host.
 //
-// It falls back to the host name when the endpoint does not expose /info - a
-// filtered socket proxy usually does not.
+// When the endpoint does not expose /info - a filtered socket proxy may well
+// deny it - the answer is deliberately empty rather than something like the
+// host name. Inside a container the host name is the short container id, so it
+// changes with every recreate, and a sync instance whose identity changes
+// would consider all of its own resources to belong to somebody else. No
+// identity at all is the safe answer: it means "manage every resource carrying
+// our marker", which is what a single-instance setup wants anyway.
 func (l *Listener) DaemonID(ctx context.Context) string {
-	if client, ok := l.api.(InfoClient); ok {
-		if info, err := client.Info(ctx); err == nil && info.ID != "" {
-			return info.ID
-		} else if err != nil {
-			l.log.Debug("could not read the docker daemon id", slog.String("error", err.Error()))
-		}
+	client, ok := l.api.(InfoClient)
+	if !ok {
+		return ""
 	}
-	if name, err := os.Hostname(); err == nil && name != "" {
-		return name
+	info, err := client.Info(ctx)
+	if err != nil {
+		l.log.Debug("could not read the docker daemon id", slog.String("error", err.Error()))
+		return ""
 	}
-	return ""
+	return info.ID
 }
 
 // Watch streams relevant container events into trigger. It reconnects with

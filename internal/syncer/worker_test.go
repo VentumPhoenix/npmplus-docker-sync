@@ -897,8 +897,13 @@ func TestWorkerRunHandlesTriggers(t *testing.T) {
 	src.set(proxyTarget("web", "web.example.com", 80), streamTarget("db", 5432, 5432))
 	triggers <- []docker.Event{{ContainerID: "web-id", Name: "web", Action: "start"}}
 
-	deadline := time.After(3 * time.Second)
-	for api.callCount("create proxy web.example.com") == 0 || api.callCount("create stream 5432") == 0 {
+	// Wait for the *run* to finish, not just for its API calls: the status is
+	// recorded after the last write, so checking the call counts alone races
+	// with the end of the reconcile.
+	deadline := time.After(5 * time.Second)
+	for !w.Status().Ready() ||
+		api.callCount("create proxy web.example.com") == 0 ||
+		api.callCount("create stream 5432") == 0 {
 		select {
 		case <-deadline:
 			t.Fatal("timed out waiting for the triggered reconcile")

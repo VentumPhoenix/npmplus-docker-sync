@@ -24,6 +24,24 @@ environment each scenario needs. That makes every assertion deterministic
 instead of racing a debounce window; the event-driven path has its own test
 that runs the daemon.
 
+Two details the two server images disagree about, and how the harness deals
+with them:
+
+* **Data directories.** Both images refuse to start without them: jc21 wants
+  `/data` *and* `/etc/letsencrypt`, NPMplus wants `/data`. The compose file
+  mounts named volumes for both, and `down -v` throws them away, so every run
+  starts from an empty database.
+* **The admin API scheme.** NPMplus serves it over https with a self-signed
+  certificate, upstream NPM over plain http. The harness probes both and uses
+  whichever answers, and the tool is run with `NPM_INSECURE_SKIP_VERIFY=true`.
+  The NPM container therefore carries no healthcheck of its own — a
+  container-side probe would only ever fit one of the two images.
+
+The whole suite runs with `DELETE_GUARD=off` and `NPM_STOP_GRACE=0`, because
+each scenario leaves the hosts of the previous one behind for a moment and
+would otherwise wait out a grace period or hit the guard. Both have their own
+scenarios that turn them back on.
+
 Useful knobs:
 
 | Variable | Default | Meaning |
@@ -32,10 +50,15 @@ Useful knobs:
 | `NPM_IDENTITY` / `NPM_SECRET` | `admin@example.com` / `integration-secret` | Admin account |
 | `NPM_API_PORT` / `NPM_HTTP_PORT` | `8181` / `8180` | Published ports on 127.0.0.1 |
 | `KEEP_STACK=1` | — | Leave the stack running for inspection |
+| `NPM_FALLBACK_IDENTITY` / `NPM_FALLBACK_SECRET` | — | An additional account to try when the image ships an unknown default |
 
-The harness seeds the admin account from the environment and falls back to
-rotating the shipped default credentials, so it works on images that do not
-support `INITIAL_ADMIN_*`.
+The harness seeds the admin account from `INITIAL_ADMIN_EMAIL` /
+`INITIAL_ADMIN_PASSWORD`. When an image does not support those, it logs in with
+the account that image ships (`admin@example.com` for nginx-proxy-manager,
+`admin@example.org` for NPMplus), and as a last resort with the account the
+container announced in its log — then rotates it into the configured pair. A
+version that does none of this can be handled with `NPM_FALLBACK_IDENTITY` and
+`NPM_FALLBACK_SECRET` without touching the code.
 
 ## What is covered
 
@@ -49,6 +72,7 @@ support `INITIAL_ADMIN_*`.
 | Event stream, debouncing, readiness | `TestDaemonReactsToEvents` |
 | A typo must not delete a host | `TestTypoDoesNotDeleteTheHost` |
 | Changed `LABEL_PREFIX` | `TestPrefixChangeDoesNotDelete` |
+| The delete guard refusing a mass deletion | `TestDeleteGuardRefusesAMassDeletion` |
 | Two instances against one NPM | `TestTwoInstancesCoexist` |
 | `DRY_RUN` changes nothing, and shows a field diff | `TestDryRunChangesNothing` |
 | NPM restarted mid-run | `TestNPMRestartDoesNotDelete` |
