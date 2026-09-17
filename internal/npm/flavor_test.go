@@ -246,3 +246,104 @@ func TestSetEnabledUsesTheDedicatedEndpoints(t *testing.T) {
 		t.Errorf("requests = %v, want %v", paths, want)
 	}
 }
+
+func TestVersionAtLeast(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		version Version
+		major   int
+		minor   int
+		want    bool
+	}{
+		{Version{2, 11, 3}, 2, 12, false},
+		{Version{2, 12, 0}, 2, 12, true},
+		{Version{2, 12, 6}, 2, 12, true},
+		{Version{3, 0, 0}, 2, 12, true},
+		{Version{1, 99, 0}, 2, 12, false},
+		// Unknown counts as new enough - see AtLeast.
+		{Version{}, 2, 12, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.version.String(), func(t *testing.T) {
+			t.Parallel()
+			if got := tc.version.AtLeast(tc.major, tc.minor); got != tc.want {
+				t.Errorf("%v.AtLeast(%d, %d) = %v, want %v", tc.version, tc.major, tc.minor, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		raw  string
+		want Version
+	}{
+		{`{"major":2,"minor":11,"revision":3}`, Version{2, 11, 3}},
+		// NPMplus reports a string, which is not comparable.
+		{`"2026-07-24-r1-a30a954-2.15.1"`, Version{}},
+		{`null`, Version{}},
+		{``, Version{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.raw, func(t *testing.T) {
+			t.Parallel()
+			if got := parseVersion([]byte(tc.raw)); got != tc.want {
+				t.Errorf("parseVersion(%s) = %v, want %v", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+// NPM 2.11 rejects a body carrying a field it does not know, with a flat
+// "data should NOT have additional properties" - so the payload has to leave
+// those fields out entirely rather than send them as false/0.
+func TestPayloadOmitsFieldsOlderNPMDoesNotKnow(t *testing.T) {
+	t.Parallel()
+
+	proxy := &ProxyHost{
+		DomainNames: []string{"a.example.com"},
+		ForwardHost: "backend", ForwardPort: 80, ForwardScheme: "http",
+		TrustForwardedProto: true,
+	}
+	stream := &Stream{
+		IncomingPort: PortOf(8080), ForwardingHost: "backend", ForwardingPort: PortOf(80),
+		TCPForwarding: true, CertificateID: CertificateID{ID: 3},
+	}
+
+	tests := []struct {
+		name     string
+		dialect  Dialect
+		resource Resource
+		field    string
+		want     bool
+	}{
+		{"npm 2.11 drops trust_forwarded_proto", Dialect{FlavourNPM, Version{2, 11, 3}}, proxy, "trust_forwarded_proto", false},
+		{"npm 2.12 sends trust_forwarded_proto", Dialect{FlavourNPM, Version{2, 12, 6}}, proxy, "trust_forwarded_proto", true},
+		{"npmplus sends trust_forwarded_proto", Dialect{Flavour: FlavourNPMplus}, proxy, "trust_forwarded_proto", true},
+		{"npm 2.11 drops the stream certificate", Dialect{FlavourNPM, Version{2, 11, 3}}, stream, "certificate_id", false},
+		{"npm 2.12 sends the stream certificate", Dialect{FlavourNPM, Version{2, 12, 6}}, stream, "certificate_id", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			payload, err := tc.resource.Payload(tc.dialect)
+			if err != nil {
+				t.Fatalf("Payload() error: %v", err)
+			}
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if _, present := body[tc.field]; present != tc.want {
+				t.Errorf("%q present = %v, want %v in %s", tc.field, present, tc.want, raw)
+			}
+		})
+	}
+}

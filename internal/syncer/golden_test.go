@@ -33,7 +33,7 @@ func payloadOf(t *testing.T, c docker.Container, flavour npm.Flavour, list []npm
 		certificate = npm.NewCertificate()
 	}
 
-	payload, err := BuildResource(target, certificate, "", "npm").Payload(flavour)
+	payload, err := BuildResource(target, certificate, "", "npm").Payload(npm.Dialect{Flavour: flavour})
 	if err != nil {
 		t.Fatalf("payload: %v", err)
 	}
@@ -145,6 +145,10 @@ func TestGoldenMinimalProxyHost(t *testing.T) {
 
 // TestGoldenUpstreamNPMPayload shows the same host against upstream
 // nginx-proxy-manager: the NPMplus-only fields are simply absent.
+//
+// This host has no certificate, so http2_support is false here while the
+// certificate-bearing host above keeps it true - the server turns HTTP/2 off
+// without TLS, and normalizeSSL mirrors that.
 func TestGoldenUpstreamNPMPayload(t *testing.T) {
 	t.Parallel()
 
@@ -165,7 +169,7 @@ func TestGoldenUpstreamNPMPayload(t *testing.T) {
   "hsts_enabled": false,
   "hsts_subdomains": false,
   "trust_forwarded_proto": false,
-  "http2_support": true,
+  "http2_support": false,
   "block_exploits": true,
   "caching_enabled": false,
   "allow_websocket_upgrade": true,

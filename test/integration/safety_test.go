@@ -169,7 +169,7 @@ func TestDryRunChangesNothing(t *testing.T) {
 		t.Errorf("the dry run should show the field diff:\n%s", update.Output)
 	}
 	host := requireHost(t, c, npm.KindProxy, domain)
-	if proxy, ok := host.(*npm.ProxyHost); ok && !proxy.AllowWebsocketUpgrade {
+	if proxy, ok := host.(*npm.ProxyHost); ok && !bool(proxy.AllowWebsocketUpgrade) {
 		t.Error("the dry run wrote the change")
 	}
 }

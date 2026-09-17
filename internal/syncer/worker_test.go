@@ -1251,7 +1251,7 @@ func TestSSLNormalisationMatchesTheServer(t *testing.T) {
 			if !ok {
 				t.Fatal("BuildResource() did not return a proxy host")
 			}
-			if host.SSLForced != tt.wantForced || host.HSTSEnabled != tt.wantHSTS || host.HSTSSubdomains != tt.wantSub {
+			if bool(host.SSLForced) != tt.wantForced || bool(host.HSTSEnabled) != tt.wantHSTS || bool(host.HSTSSubdomains) != tt.wantSub {
 				t.Errorf("ssl_forced/hsts/hsts_subdomains = %t/%t/%t, want %t/%t/%t",
 					host.SSLForced, host.HSTSEnabled, host.HSTSSubdomains,
 					tt.wantForced, tt.wantHSTS, tt.wantSub)

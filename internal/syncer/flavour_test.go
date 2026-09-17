@@ -123,7 +123,7 @@ func TestUpstreamNPMPayloadIsStableAcrossRuns(t *testing.T) {
 	resource, _ := buildFrom(t, npm.KindProxy, baseLabels[npm.KindProxy])
 	npm.StripNPMplus(resource)
 
-	payload, err := resource.Payload(npm.FlavourNPM)
+	payload, err := resource.Payload(npm.Dialect{Flavour: npm.FlavourNPM})
 	if err != nil {
 		t.Fatalf("Payload(npm) error = %v", err)
 	}

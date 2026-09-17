@@ -84,7 +84,7 @@ type Resource interface {
 	// Payload returns the create/update request body for the given API
 	// flavour. It fails when the desired configuration uses a feature the
 	// flavour does not have.
-	Payload(flavour Flavour) (any, error)
+	Payload(dialect Dialect) (any, error)
 	// IsEnabled reports the desired (or, for a resource read back from the
 	// API, the live) enabled state.
 	IsEnabled() bool
@@ -110,36 +110,39 @@ type ProxyHost struct {
 	ModifiedOn  string `json:"modified_on,omitempty"`
 	OwnerUserID int    `json:"owner_user_id,omitempty"`
 
-	DomainNames           []string      `json:"domain_names"`
-	ForwardHost           string        `json:"forward_host"`
-	ForwardPort           int           `json:"forward_port"`
-	ForwardScheme         string        `json:"forward_scheme"`
-	CertificateID         CertificateID `json:"certificate_id"`
-	SSLForced             bool          `json:"ssl_forced"`
-	HSTSEnabled           bool          `json:"hsts_enabled"`
-	HSTSSubdomains        bool          `json:"hsts_subdomains"`
-	TrustForwardedProto   bool          `json:"trust_forwarded_proto"`
-	HTTP2Support          bool          `json:"http2_support"`
-	BlockExploits         bool          `json:"block_exploits"`
-	CachingEnabled        bool          `json:"caching_enabled"`
-	AllowWebsocketUpgrade bool          `json:"allow_websocket_upgrade"`
-	AdvancedConfig        string        `json:"advanced_config"`
-	Enabled               Flag          `json:"enabled"`
-	Locations             []Location    `json:"locations"`
-	Meta                  Meta          `json:"meta"`
+	DomainNames   []string      `json:"domain_names"`
+	ForwardHost   string        `json:"forward_host"`
+	ForwardPort   int           `json:"forward_port"`
+	ForwardScheme string        `json:"forward_scheme"`
+	CertificateID CertificateID `json:"certificate_id"`
+	// Every boolean the API hands back is read through Flag: NPM up to 2.11
+	// returns the switches as the SQLite integers they are stored as
+	// (`"ssl_forced": 1`), while 2.12 and NPMplus return real booleans.
+	SSLForced             Flag       `json:"ssl_forced"`
+	HSTSEnabled           Flag       `json:"hsts_enabled"`
+	HSTSSubdomains        Flag       `json:"hsts_subdomains"`
+	TrustForwardedProto   Flag       `json:"trust_forwarded_proto"`
+	HTTP2Support          Flag       `json:"http2_support"`
+	BlockExploits         Flag       `json:"block_exploits"`
+	CachingEnabled        Flag       `json:"caching_enabled"`
+	AllowWebsocketUpgrade Flag       `json:"allow_websocket_upgrade"`
+	AdvancedConfig        string     `json:"advanced_config"`
+	Enabled               Flag       `json:"enabled"`
+	Locations             []Location `json:"locations"`
+	Meta                  Meta       `json:"meta"`
 
 	// HTTP3Support is an NPMplus extension (`npmplus_http3_support`).
-	HTTP3Support bool `json:"npmplus_http3_support"`
+	HTTP3Support Flag `json:"npmplus_http3_support"`
 
 	// NPMplus extensions. The three Disable* switches are inverted in the
 	// API (`npmplus_crowdsec_appsec: true` turns the AppSec component off),
 	// which is why the model spells them out that way.
-	NoIndex                  bool   `json:"npmplus_noindex"`
-	DisableCrowdsecAppsec    bool   `json:"npmplus_crowdsec_appsec"`
-	DisableRequestBuffering  bool   `json:"npmplus_proxy_request_buffering"`
-	DisableResponseBuffering bool   `json:"npmplus_proxy_response_buffering"`
-	UpstreamCompression      bool   `json:"npmplus_upstream_compression"`
-	FancyIndex               bool   `json:"npmplus_fancyindex"`
+	NoIndex                  Flag   `json:"npmplus_noindex"`
+	DisableCrowdsecAppsec    Flag   `json:"npmplus_crowdsec_appsec"`
+	DisableRequestBuffering  Flag   `json:"npmplus_proxy_request_buffering"`
+	DisableResponseBuffering Flag   `json:"npmplus_proxy_response_buffering"`
+	UpstreamCompression      Flag   `json:"npmplus_upstream_compression"`
+	FancyIndex               Flag   `json:"npmplus_fancyindex"`
 	XFrameOptions            string `json:"npmplus_x_frame_options"`
 	AuthRequest              string `json:"npmplus_auth_request"`
 	AuthRequestUpstream      string `json:"npmplus_auth_request_upstream"`
@@ -242,26 +245,26 @@ func (h *ProxyHost) Fingerprint() string {
 		Host           string     `json:"host"`
 		Port           int        `json:"port"`
 		Certificate    string     `json:"certificate"`
-		SSLForced      bool       `json:"ssl_forced"`
-		HSTS           bool       `json:"hsts"`
-		HSTSSub        bool       `json:"hsts_subdomains"`
-		TrustProto     bool       `json:"trust_forwarded_proto"`
-		HTTP2          bool       `json:"http2"`
-		HTTP3          bool       `json:"http3"`
-		BlockExploits  bool       `json:"block_exploits"`
-		Caching        bool       `json:"caching"`
-		Websockets     bool       `json:"websockets"`
+		SSLForced      Flag       `json:"ssl_forced"`
+		HSTS           Flag       `json:"hsts"`
+		HSTSSub        Flag       `json:"hsts_subdomains"`
+		TrustProto     Flag       `json:"trust_forwarded_proto"`
+		HTTP2          Flag       `json:"http2"`
+		HTTP3          Flag       `json:"http3"`
+		BlockExploits  Flag       `json:"block_exploits"`
+		Caching        Flag       `json:"caching"`
+		Websockets     Flag       `json:"websockets"`
 		AccessLists    []int      `json:"access_lists"`
 		AccessListType string     `json:"access_list_type"`
 		Advanced       string     `json:"advanced"`
 		Locations      []Location `json:"locations"`
 
-		NoIndex             bool   `json:"noindex"`
-		CrowdsecOff         bool   `json:"crowdsec_appsec_off"`
-		RequestBufferingOff bool   `json:"request_buffering_off"`
-		ResponseBufferOff   bool   `json:"response_buffering_off"`
-		UpstreamCompression bool   `json:"upstream_compression"`
-		FancyIndex          bool   `json:"fancyindex"`
+		NoIndex             Flag   `json:"noindex"`
+		CrowdsecOff         Flag   `json:"crowdsec_appsec_off"`
+		RequestBufferingOff Flag   `json:"request_buffering_off"`
+		ResponseBufferOff   Flag   `json:"response_buffering_off"`
+		UpstreamCompression Flag   `json:"upstream_compression"`
+		FancyIndex          Flag   `json:"fancyindex"`
 		XFrameOptions       string `json:"x_frame_options"`
 		AuthRequest         string `json:"auth_request"`
 		AuthRequestUpstream string `json:"auth_request_upstream"`
@@ -325,14 +328,14 @@ type RedirectionHost struct {
 	ForwardScheme     string        `json:"forward_scheme"`
 	ForwardDomainName string        `json:"forward_domain_name"`
 	ForwardHTTPCode   int           `json:"forward_http_code"`
-	PreservePath      bool          `json:"preserve_path"`
+	PreservePath      Flag          `json:"preserve_path"`
 	CertificateID     CertificateID `json:"certificate_id"`
-	SSLForced         bool          `json:"ssl_forced"`
-	HSTSEnabled       bool          `json:"hsts_enabled"`
-	HSTSSubdomains    bool          `json:"hsts_subdomains"`
-	HTTP2Support      bool          `json:"http2_support"`
-	HTTP3Support      bool          `json:"npmplus_http3_support"`
-	BlockExploits     bool          `json:"block_exploits"`
+	SSLForced         Flag          `json:"ssl_forced"`
+	HSTSEnabled       Flag          `json:"hsts_enabled"`
+	HSTSSubdomains    Flag          `json:"hsts_subdomains"`
+	HTTP2Support      Flag          `json:"http2_support"`
+	HTTP3Support      Flag          `json:"npmplus_http3_support"`
+	BlockExploits     Flag          `json:"block_exploits"`
 	AdvancedConfig    string        `json:"advanced_config"`
 	Enabled           Flag          `json:"enabled"`
 	Meta              Meta          `json:"meta"`
@@ -391,14 +394,14 @@ func (h *RedirectionHost) Fingerprint() string {
 		Scheme        string   `json:"scheme"`
 		ForwardDomain string   `json:"forward_domain"`
 		HTTPCode      int      `json:"http_code"`
-		PreservePath  bool     `json:"preserve_path"`
+		PreservePath  Flag     `json:"preserve_path"`
 		Certificate   string   `json:"certificate"`
-		SSLForced     bool     `json:"ssl_forced"`
-		HSTS          bool     `json:"hsts"`
-		HSTSSub       bool     `json:"hsts_subdomains"`
-		HTTP2         bool     `json:"http2"`
-		HTTP3         bool     `json:"http3"`
-		BlockExploits bool     `json:"block_exploits"`
+		SSLForced     Flag     `json:"ssl_forced"`
+		HSTS          Flag     `json:"hsts"`
+		HSTSSub       Flag     `json:"hsts_subdomains"`
+		HTTP2         Flag     `json:"http2"`
+		HTTP3         Flag     `json:"http3"`
+		BlockExploits Flag     `json:"block_exploits"`
 		Advanced      string   `json:"advanced"`
 		ManagedBy     string   `json:"managed_by"`
 		Container     string   `json:"container"`
@@ -441,15 +444,15 @@ type Stream struct {
 	IncomingPort   Port          `json:"incoming_port"`
 	ForwardingHost string        `json:"forwarding_host"`
 	ForwardingPort Port          `json:"forwarding_port"`
-	TCPForwarding  bool          `json:"tcp_forwarding"`
-	UDPForwarding  bool          `json:"udp_forwarding"`
+	TCPForwarding  Flag          `json:"tcp_forwarding"`
+	UDPForwarding  Flag          `json:"udp_forwarding"`
 	CertificateID  CertificateID `json:"certificate_id"`
 	Enabled        Flag          `json:"enabled"`
 	Meta           Meta          `json:"meta"`
 
 	// NPMplus extensions.
 	ProxyProtocol  ProxyProtocolLevel `json:"npmplus_proxy_protocol_forwarding"`
-	ProxyTLS       bool               `json:"npmplus_proxy_tls"`
+	ProxyTLS       Flag               `json:"npmplus_proxy_tls"`
 	AdvancedConfig string             `json:"npmplus_advanced_config"`
 	Description    string             `json:"npmplus_description"`
 }
@@ -510,11 +513,11 @@ func (s *Stream) Fingerprint() string {
 		IncomingPort  string `json:"incoming_port"`
 		Host          string `json:"host"`
 		Port          string `json:"port"`
-		TCP           bool   `json:"tcp"`
-		UDP           bool   `json:"udp"`
+		TCP           Flag   `json:"tcp"`
+		UDP           Flag   `json:"udp"`
 		Certificate   string `json:"certificate"`
 		ProxyProtocol int    `json:"proxy_protocol"`
-		ProxyTLS      bool   `json:"proxy_tls"`
+		ProxyTLS      Flag   `json:"proxy_tls"`
 		Advanced      string `json:"advanced"`
 		Description   string `json:"description"`
 		ManagedBy     string `json:"managed_by"`
@@ -553,11 +556,11 @@ type DeadHost struct {
 
 	DomainNames    []string      `json:"domain_names"`
 	CertificateID  CertificateID `json:"certificate_id"`
-	SSLForced      bool          `json:"ssl_forced"`
-	HSTSEnabled    bool          `json:"hsts_enabled"`
-	HSTSSubdomains bool          `json:"hsts_subdomains"`
-	HTTP2Support   bool          `json:"http2_support"`
-	HTTP3Support   bool          `json:"npmplus_http3_support"`
+	SSLForced      Flag          `json:"ssl_forced"`
+	HSTSEnabled    Flag          `json:"hsts_enabled"`
+	HSTSSubdomains Flag          `json:"hsts_subdomains"`
+	HTTP2Support   Flag          `json:"http2_support"`
+	HTTP3Support   Flag          `json:"npmplus_http3_support"`
 	AdvancedConfig string        `json:"advanced_config"`
 	Enabled        Flag          `json:"enabled"`
 	Meta           Meta          `json:"meta"`
@@ -612,11 +615,11 @@ func (h *DeadHost) Fingerprint() string {
 		Kind        string   `json:"kind"`
 		Domains     []string `json:"domains"`
 		Certificate string   `json:"certificate"`
-		SSLForced   bool     `json:"ssl_forced"`
-		HSTS        bool     `json:"hsts"`
-		HSTSSub     bool     `json:"hsts_subdomains"`
-		HTTP2       bool     `json:"http2"`
-		HTTP3       bool     `json:"http3"`
+		SSLForced   Flag     `json:"ssl_forced"`
+		HSTS        Flag     `json:"hsts"`
+		HSTSSub     Flag     `json:"hsts_subdomains"`
+		HTTP2       Flag     `json:"http2"`
+		HTTP3       Flag     `json:"http3"`
 		Advanced    string   `json:"advanced"`
 		ManagedBy   string   `json:"managed_by"`
 		Container   string   `json:"container"`

@@ -59,7 +59,7 @@ func TestProxyHostLifecycle(t *testing.T) {
 	if updated.ResourceID() != id {
 		t.Errorf("the host was recreated (%d -> %d) instead of updated", id, updated.ResourceID())
 	}
-	if proxy, ok := updated.(*npm.ProxyHost); ok && proxy.AllowWebsocketUpgrade {
+	if proxy, ok := updated.(*npm.ProxyHost); ok && bool(proxy.AllowWebsocketUpgrade) {
 		t.Error("websockets should be off after the label change")
 	}
 
