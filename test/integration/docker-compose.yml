@@ -17,16 +17,28 @@ services:
       # version does not support these.
       INITIAL_ADMIN_EMAIL: ${NPM_IDENTITY:-admin@example.com}
       INITIAL_ADMIN_PASSWORD: ${NPM_SECRET:-integration-secret}
-      # NPMplus insists on an ACME account address even when nothing is issued.
-      ACME_EMAIL: ${NPM_IDENTITY:-admin@example.com}
+      # NPMplus registers an ACME account on its first boot and stays down
+      # when that fails, so this has to work even though the suite never issues
+      # a certificate. Production Let's Encrypt rejects the example.com address
+      # the harness logs in with ("believes admin@example.com is an invalid
+      # email address"), and a throwaway stack has no business creating
+      # production accounts either. An empty ACME_EMAIL makes launch.sh
+      # register with --register-unsafely-without-email, against staging.
+      # The cost: the stack needs to reach the ACME server to come up.
+      ACME_EMAIL: ""
+      ACME_SERVER: https://acme-staging-v02.api.letsencrypt.org/directory
       DISABLE_IPV6: "true"
       TZ: UTC
-    # Both images refuse to start without their data directories:
-    # jc21 wants /data *and* /etc/letsencrypt, NPMplus wants /data. Named
-    # volumes keep each run clean - `compose down -v` throws them away.
+    # Named volumes keep each run clean - `compose down -v` throws them away.
     volumes:
       - npm-data:/data
-      - npm-letsencrypt:/etc/letsencrypt
+      # jc21 refuses to start without /etc/letsencrypt ("ERROR: /etc/letsencrypt
+      # is not mounted!"), NPMplus refuses to start *with* it: its start.sh
+      # treats the mountpoint as a pending certbot migration, prints "please
+      # remove the /etc/letsencrypt mountpoint" and stops. The target is
+      # therefore a variable that the harness points somewhere harmless for
+      # NPMplus.
+      - npm-letsencrypt:${NPM_LETSENCRYPT_TARGET:-/etc/letsencrypt}
     ports:
       - "127.0.0.1:${NPM_API_PORT:-8181}:81"
       - "127.0.0.1:${NPM_HTTP_PORT:-8180}:80"

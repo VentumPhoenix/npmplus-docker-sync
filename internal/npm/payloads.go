@@ -377,17 +377,17 @@ func (h *RedirectionHost) stripPlus() { h.HTTP3Support = false }
 // NPMplus types the stream ports as strings (and accepts "8080-8090" or
 // "$server_port"), upstream NPM as integers.
 type streamPayloadNPMplus struct {
-	IncomingPort   string `json:"incoming_port"`
-	ForwardingHost string `json:"forwarding_host"`
-	ForwardingPort string `json:"forwarding_port"`
-	TCPForwarding  bool   `json:"tcp_forwarding"`
-	UDPForwarding  bool   `json:"udp_forwarding"`
-	CertificateID  int    `json:"certificate_id"`
-	ProxyProtocol  int    `json:"npmplus_proxy_protocol_forwarding"`
-	ProxyTLS       bool   `json:"npmplus_proxy_tls"`
-	AdvancedConfig string `json:"npmplus_advanced_config"`
-	Description    string `json:"npmplus_description"`
-	Meta           Meta   `json:"meta"`
+	IncomingPort   string             `json:"incoming_port"`
+	ForwardingHost string             `json:"forwarding_host"`
+	ForwardingPort string             `json:"forwarding_port"`
+	TCPForwarding  bool               `json:"tcp_forwarding"`
+	UDPForwarding  bool               `json:"udp_forwarding"`
+	CertificateID  int                `json:"certificate_id"`
+	ProxyProtocol  ProxyProtocolLevel `json:"npmplus_proxy_protocol_forwarding"`
+	ProxyTLS       bool               `json:"npmplus_proxy_tls"`
+	AdvancedConfig string             `json:"npmplus_advanced_config"`
+	Description    string             `json:"npmplus_description"`
+	Meta           Meta               `json:"meta"`
 }
 
 type streamPayloadNPM struct {

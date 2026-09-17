@@ -448,10 +448,10 @@ type Stream struct {
 	Meta           Meta          `json:"meta"`
 
 	// NPMplus extensions.
-	ProxyProtocol  int    `json:"npmplus_proxy_protocol_forwarding"`
-	ProxyTLS       bool   `json:"npmplus_proxy_tls"`
-	AdvancedConfig string `json:"npmplus_advanced_config"`
-	Description    string `json:"npmplus_description"`
+	ProxyProtocol  ProxyProtocolLevel `json:"npmplus_proxy_protocol_forwarding"`
+	ProxyTLS       bool               `json:"npmplus_proxy_tls"`
+	AdvancedConfig string             `json:"npmplus_advanced_config"`
+	Description    string             `json:"npmplus_description"`
 }
 
 // Kind implements Resource.
@@ -529,7 +529,7 @@ func (s *Stream) Fingerprint() string {
 		TCP:           s.TCPForwarding,
 		UDP:           s.UDPForwarding,
 		Certificate:   s.CertificateID.String(),
-		ProxyProtocol: s.ProxyProtocol,
+		ProxyProtocol: int(s.ProxyProtocol),
 		ProxyTLS:      s.ProxyTLS,
 		Advanced:      strings.TrimSpace(s.AdvancedConfig),
 		Description:   strings.TrimSpace(s.Description),

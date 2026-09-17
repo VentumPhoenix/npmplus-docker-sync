@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"mime/multipart"
 	"net/http"
+	"net/http/cookiejar"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +78,21 @@ func TestCertificateSelection(t *testing.T) {
 func TestCertificatePollPicksUpANewCertificate(t *testing.T) {
 	c := client(t)
 
+	// Cleanups run last-registered-first, and the order matters here: this
+	// test stops its daemon while the host it created still points at the
+	// certificate. Deleting the certificate first leaves NPMplus with a host
+	// referencing files that are gone, and it then refuses to reload nginx at
+	// all ("cannot load certificate .../fullchain.pem") - every later scenario
+	// fails with a 500. So: certificate cleanup registered first (runs last),
+	// then the sync that removes the host, then the container itself.
+	var certID int
+	t.Cleanup(func() {
+		if certID != 0 {
+			apiDelete(t, "/api/nginx/certificates/%d", certID)
+		}
+	})
+	t.Cleanup(func() { mustSync(t) })
+
 	stop := startDaemon(t, "CERTIFICATE_POLL_INTERVAL=5s", "DEBOUNCE_INTERVAL=1s")
 	defer stop()
 
@@ -88,8 +104,8 @@ func TestCertificatePollPicksUpANewCertificate(t *testing.T) {
 		return findByKey(resources(t, c, npm.KindProxy), "poll.certs.test") != nil
 	})
 
-	id := uploadCertificate(t, "poll", "*.certs.test")
-	t.Cleanup(func() { apiDelete(t, "/api/nginx/certificates/%d", id) })
+	certID = uploadCertificate(t, "poll", "*.certs.test")
+	id := certID
 
 	waitFor(t, "the certificate to be attached", 90*time.Second, func() bool {
 		host := findByKey(resources(t, c, npm.KindProxy), "poll.certs.test")
@@ -157,9 +173,9 @@ func uploadCertificate(t *testing.T, name string, domains ...string) int {
 	t.Helper()
 
 	certPEM, keyPEM := selfSigned(t, domains...)
-	token := apiToken(t)
+	session := apiLogin(t)
 
-	created := apiPost(t, token, "/api/nginx/certificates", map[string]any{
+	created := apiPost(t, session, "/api/nginx/certificates", map[string]any{
 		"provider":     "other",
 		"nice_name":    name,
 		"domain_names": domains,
@@ -193,10 +209,9 @@ func uploadCertificate(t *testing.T, name string, domains ...string) int {
 	if err != nil {
 		t.Fatalf("build upload request: %v", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := session.do(req)
 	if err != nil {
 		t.Fatalf("upload the certificate: %v", err)
 	}
@@ -212,13 +227,14 @@ func uploadCertificate(t *testing.T, name string, domains ...string) int {
 func createAccessList(t *testing.T, name string) int {
 	t.Helper()
 
-	created := apiPost(t, apiToken(t), "/api/nginx/access-lists", map[string]any{
+	created := apiPost(t, apiLogin(t), "/api/nginx/access-lists", map[string]any{
 		"name":        name,
 		"satisfy_any": true,
 		"pass_auth":   false,
 		"items":       []any{map[string]any{"username": "user", "password": "secret"}},
 		"clients":     []any{},
-		"meta":        map[string]any{},
+		// No `meta` here: unlike the certificate schema, the access-list one
+		// sets additionalProperties:false and rejects it with a 400.
 	})
 	id, ok := created["id"].(float64)
 	if !ok {
@@ -227,27 +243,64 @@ func createAccessList(t *testing.T, name string) int {
 	return int(id)
 }
 
-// apiToken logs in and returns a bearer token.
-func apiToken(t *testing.T) string {
+// apiSession is a logged-in client for the calls the typed client has no
+// method for. The two flavours hand out credentials differently: NPM returns a
+// bearer token in the body, NPMplus answers with `{"expires": ...}` and sets an
+// httpOnly cookie instead. A session carries both, so the caller does not have
+// to care - the same split internal/npm handles in production.
+type apiSession struct {
+	client *http.Client
+	token  string
+}
+
+// do sends a request with whatever credential the login produced.
+func (s apiSession) do(req *http.Request) (*http.Response, error) {
+	if s.token != "" {
+		req.Header.Set("Authorization", "Bearer "+s.token)
+	}
+	return s.client.Do(req)
+}
+
+// apiLogin logs in and returns a session. The cookie jar is what makes the
+// NPMplus case work: its token never appears in the body.
+func apiLogin(t *testing.T) apiSession {
 	t.Helper()
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookie jar: %v", err)
+	}
+	client := insecureClient(30 * time.Second)
+	client.Jar = jar
 
 	body, err := json.Marshal(map[string]string{"identity": npmIdentity, "secret": npmSecret})
 	if err != nil {
 		t.Fatalf("encode credentials: %v", err)
 	}
-	resp, err := http.Post(apiURL()+"/api/tokens", "application/json", bytes.NewReader(body)) //nolint:noctx // test helper
+	req, err := http.NewRequest(http.MethodPost, apiURL()+"/api/tokens", bytes.NewReader(body)) //nolint:noctx // test helper
+	if err != nil {
+		t.Fatalf("build the login request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode >= 300 {
+		t.Fatalf("login: %s %s", resp.Status, raw)
+	}
 
 	var decoded struct {
 		Token string `json:"token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		t.Fatalf("decode the token: %v", err)
+	// An empty token is not an error: NPMplus authenticates by cookie alone.
+	_ = json.Unmarshal(raw, &decoded)
+	if decoded.Token == "" && len(jar.Cookies(req.URL)) == 0 {
+		t.Fatalf("login returned neither a token nor a cookie: %s", raw)
 	}
-	return decoded.Token
+	return apiSession{client: client, token: decoded.Token}
 }
 
 // apiDelete removes a resource the client has no typed method for.
@@ -259,8 +312,7 @@ func apiDelete(t *testing.T, format string, id int) {
 		t.Logf("build the delete request: %v", err)
 		return
 	}
-	req.Header.Set("Authorization", "Bearer "+apiToken(t))
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := apiLogin(t).do(req)
 	if err != nil {
 		t.Logf("delete %s: %v", req.URL.Path, err)
 		return
@@ -270,7 +322,7 @@ func apiDelete(t *testing.T, format string, id int) {
 }
 
 // apiPost sends a JSON body and returns the decoded answer.
-func apiPost(t *testing.T, token, path string, payload any) map[string]any {
+func apiPost(t *testing.T, session apiSession, path string, payload any) map[string]any {
 	t.Helper()
 
 	body, err := json.Marshal(payload)
@@ -282,9 +334,8 @@ func apiPost(t *testing.T, token, path string, payload any) map[string]any {
 		t.Fatalf("build %s: %v", path, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := session.do(req)
 	if err != nil {
 		t.Fatalf("POST %s: %v", path, err)
 	}
@@ -311,8 +362,11 @@ func selfSigned(t *testing.T, domains ...string) (certPEM, keyPEM []byte) {
 		t.Fatalf("generate a key: %v", err)
 	}
 	template := x509.Certificate{
-		SerialNumber:          big.NewInt(time.Now().UnixNano()),
-		Subject:               pkix.Name{CommonName: domains[0], Organization: []string{"integration"}},
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		// Only the CN, no organisation: NPM derives `domain_names` from the
+		// subject with /(?:subject=)?[^=]+=\s*(\S+)/ and would store the first
+		// RDN it finds, so an O= entry ends up as the certificate domain.
+		Subject:               pkix.Name{CommonName: domains[0]},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,

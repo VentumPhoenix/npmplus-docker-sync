@@ -358,6 +358,50 @@ func (f *Flag) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// ProxyProtocolLevel is NPMplus' `npmplus_proxy_protocol_forwarding`. The two
+// generations of NPMplus disagree about its type: older ones declare an
+// integer with the enum [0, 1, 2] (off, v1, v2), while 2.15.1 declares a
+// boolean - it still coerces 0 and 1 on the way in, rejects 2 with
+// "must be boolean", and reports the stored value back as true/false.
+//
+// Decoding therefore has to accept both shapes; encoding stays numeric,
+// because that is what both generations take.
+type ProxyProtocolLevel int
+
+// MarshalJSON writes the numeric form.
+func (p ProxyProtocolLevel) MarshalJSON() ([]byte, error) { return json.Marshal(int(p)) }
+
+// UnmarshalJSON accepts 0/1/2, true/false and their string spellings.
+func (p *ProxyProtocolLevel) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	switch string(data) {
+	case "", "null":
+		*p = 0
+		return nil
+	case "true", `"true"`:
+		*p = 1
+		return nil
+	case "false", `"false"`:
+		*p = 0
+		return nil
+	}
+	var n int
+	if err := json.Unmarshal(data, &n); err == nil {
+		*p = ProxyProtocolLevel(n)
+		return nil
+	}
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		parsed, convErr := strconv.Atoi(strings.TrimSpace(str))
+		if convErr != nil {
+			return fmt.Errorf("npmplus_proxy_protocol_forwarding: %q is neither a number nor a boolean", str)
+		}
+		*p = ProxyProtocolLevel(parsed)
+		return nil
+	}
+	return fmt.Errorf("npmplus_proxy_protocol_forwarding: cannot read %s", data)
+}
+
 // tokenResponse is the payload returned by POST /api/tokens. Standard NPM
 // returns the JWT here; NPMplus sets an httpOnly cookie instead and may
 // return an empty body.

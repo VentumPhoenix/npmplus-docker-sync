@@ -1,6 +1,7 @@
 package npm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -93,7 +94,10 @@ func WithFlavour(f Flavour) Option {
 //  1. An existing proxy host: NPMplus serialises `npmplus_access_list_ids`,
 //     upstream NPM serialises `access_list_id`. This is authoritative because
 //     it is the very field the write payloads disagree about.
-//  2. GET /api/: upstream NPM reports a `version` object, NPMplus does not.
+//  2. GET /api/: both report a `version`, but in different shapes - upstream
+//     NPM an object ({major, minor, revision}), NPMplus a string
+//     ("2026-07-24-r1-a30a954-2.15.1"). Older NPMplus versions reported none
+//     at all, which stays inconclusive and lands on the default below.
 //
 // When neither is conclusive the detection falls back to NPMplus, which is
 // what this tool is named after, and says so in the log.
@@ -136,9 +140,31 @@ func (c *Client) probeFlavour(ctx context.Context) (flavour Flavour, how string,
 		Status  string          `json:"status"`
 		Version json.RawMessage `json:"version"`
 	}
-	if healthErr := c.do(ctx, http.MethodGet, "/api/", nil, &health); healthErr == nil && len(health.Version) > 0 {
-		return FlavourNPM, "GET /api/ version object", nil
+	if healthErr := c.do(ctx, http.MethodGet, "/api/", nil, &health); healthErr == nil {
+		switch versionShape(health.Version) {
+		case '{':
+			return FlavourNPM, "GET /api/ version object", nil
+		case '"':
+			return FlavourNPMplus, "GET /api/ version string", nil
+		}
 	}
 
 	return FlavourNPMplus, "default (no proxy host to inspect)", nil
+}
+
+// versionShape reports the first meaningful byte of the raw `version` value:
+// '{' for an object, '"' for a string, 0 when it is absent or something else.
+// The shape is the signal - checking only that the field is non-empty would
+// read NPMplus' string version as upstream NPM's object.
+func versionShape(raw json.RawMessage) byte {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return 0
+	}
+	switch trimmed[0] {
+	case '{', '"':
+		return trimmed[0]
+	default:
+		return 0
+	}
 }

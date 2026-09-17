@@ -81,7 +81,7 @@ func BuildResource(t *docker.Target, certificate npm.CertificateID, instance, pr
 			TCPForwarding:  t.TCPForwarding,
 			UDPForwarding:  t.UDPForwarding,
 			CertificateID:  certificate,
-			ProxyProtocol:  t.ProxyProtocol,
+			ProxyProtocol:  npm.ProxyProtocolLevel(t.ProxyProtocol),
 			ProxyTLS:       t.ProxyTLS,
 			AdvancedConfig: t.AdvancedConfig,
 			Description:    t.Description,
