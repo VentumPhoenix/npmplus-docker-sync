@@ -75,7 +75,7 @@ Use `tcp://docker-socket-proxy:2375` with a filtered socket proxy — see
 | `MIGRATE_FROM_REDTH` | `false` | Take over hosts created by [Redth/npm-docker-sync](https://github.com/Redth/npm-docker-sync). |
 | `NPM_ON_STOP` | `disable` | What happens to the resources of a stopped container: `disable`, `keep` or `delete`. |
 | `NPM_STOP_GRACE` | `1m` | How long a stopped container is ignored, so a restart produces no churn. |
-| `SYNC_INSTANCE_ID` | the Docker daemon id | Identifies this instance in the resource meta; resources of another instance are never touched (alias `NPM_INSTANCE_ID`). |
+| `SYNC_INSTANCE_ID` | the Docker daemon id | Identifies this instance in the resource meta; resources of another instance are never touched (alias `NPM_INSTANCE_ID`). Needs `INFO=1` on a socket proxy - without it there is no id, and every resource with our marker counts as ours. |
 | `DELETE_GUARD` | `0.5` | Largest share of the managed resources a single run may delete. Accepts `0.5`, `50%` or `off`. |
 | `DELETE_GUARD_MIN` | `3` | How many deletions a run needs before the share guard applies. |
 | `SYNC_KINDS` | all four | Resource types to manage, e.g. `proxy,stream` (alias `RESOURCE_KINDS`). Values: `proxy`, `redirect`, `stream`, `404` (and the spellings `proxies`, `redirection`, `dead`). |

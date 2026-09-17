@@ -385,7 +385,7 @@ npm.proxy.noindex: "true"
 | `MIGRATE_FROM_REDTH` | `false` | Take over hosts created by `npm-docker-sync`. |
 | `NPM_ON_STOP` | `disable` | Stopped container: `disable`, `keep` or `delete` its resources. |
 | `NPM_STOP_GRACE` | `1m` | Ignore a stopped container for this long (restarts, recreates). |
-| `SYNC_INSTANCE_ID` | Docker daemon id | Only resources of this instance are managed. |
+| `SYNC_INSTANCE_ID` | Docker daemon id | Only resources of this instance are managed (needs `INFO=1` on a socket proxy). |
 | `DELETE_GUARD` | `0.5` | Refuse a run that deletes more than this share (`off` disables). |
 | `DELETE_GUARD_MIN` | `3` | Deletions needed before the share guard applies. |
 | `DEBOUNCE_INTERVAL` | `3s` | Quiet period after the last event. |

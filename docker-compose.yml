@@ -15,6 +15,7 @@ services:
       EVENTS: 1     # GET /events
       PING: 1       # GET /_ping (connection check)
       VERSION: 1    # GET /version (API version negotiation)
+      INFO: 1       # GET /info (daemon id = default SYNC_INSTANCE_ID)
       POST: 0       # no write access at all
       # Explicitly denied (defaults, listed for auditability):
       AUTH: 0
@@ -24,7 +25,6 @@ services:
       DISTRIBUTION: 0
       EXEC: 0
       IMAGES: 0
-      INFO: 0
       NETWORKS: 0
       NODES: 0
       PLUGINS: 0

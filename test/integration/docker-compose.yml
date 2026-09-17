@@ -13,15 +13,20 @@ services:
     restart: "no"
     environment:
       # Both projects seed the first user from the environment; the harness
-      # falls back to rotating the default credentials when a version does
-      # not support these.
+      # falls back to the shipped default credentials and rotates them when a
+      # version does not support these.
       INITIAL_ADMIN_EMAIL: ${NPM_IDENTITY:-admin@example.com}
       INITIAL_ADMIN_PASSWORD: ${NPM_SECRET:-integration-secret}
-      # NPMplus needs an ACME account address even when nothing is issued.
+      # NPMplus insists on an ACME account address even when nothing is issued.
       ACME_EMAIL: ${NPM_IDENTITY:-admin@example.com}
       DISABLE_IPV6: "true"
-      PUID: "0"
-      PGID: "0"
+      TZ: UTC
+    # Both images refuse to start without their data directories:
+    # jc21 wants /data *and* /etc/letsencrypt, NPMplus wants /data. Named
+    # volumes keep each run clean - `compose down -v` throws them away.
+    volumes:
+      - npm-data:/data
+      - npm-letsencrypt:/etc/letsencrypt
     ports:
       - "127.0.0.1:${NPM_API_PORT:-8181}:81"
       - "127.0.0.1:${NPM_HTTP_PORT:-8180}:80"
@@ -29,12 +34,10 @@ services:
       - "127.0.0.1:${NPM_STREAM_PORT:-8543}:8543"
     networks:
       - npmsync-it
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:81/api/ >/dev/null 2>&1 || exit 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 20s
+    # No healthcheck on purpose: the two images differ in shell, tools and
+    # whether the admin API speaks http or https, so a container-side probe
+    # only ever breaks on the image it was not written for. The harness polls
+    # the API itself (waitForAPI) and can say *why* it gave up.
 
   whoami:
     image: traefik/whoami:latest
@@ -50,9 +53,12 @@ services:
     container_name: npmsync-it-socket-proxy
     restart: "no"
     environment:
+      # Exactly the endpoints SECURITY.md documents - the socket proxy test
+      # is what proves that list is complete.
       CONTAINERS: "1"
       EVENTS: "1"
       PING: "1"
+      VERSION: "1"
       INFO: "1"
       # Everything else stays denied, which is what the docs promise.
       POST: "0"
@@ -62,6 +68,10 @@ services:
       - "127.0.0.1:${SOCKET_PROXY_PORT:-8182}:2375"
     networks:
       - npmsync-it
+
+volumes:
+  npm-data:
+  npm-letsencrypt:
 
 networks:
   npmsync-it:

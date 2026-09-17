@@ -171,7 +171,10 @@ containers at all. `DELETE_GUARD=off` restores the unguarded behaviour.
 
 Every resource is now stamped with `managed_instance`. Resources carrying
 another instance's id are never touched, so several Docker hosts can drive one
-NPM. The id defaults to the Docker daemon id; `SYNC_INSTANCE_ID` overrides it.
+NPM. The id defaults to the Docker daemon id, which needs `INFO=1` on a socket
+proxy - the bundled `docker-compose.yml` enables it. Without an id nothing is
+scoped and every resource with our marker counts as ours, which is exactly the
+old behaviour; `SYNC_INSTANCE_ID` sets one explicitly.
 
 Existing resources have no stamp yet and are adopted by the first instance that
 sees them — so if you plan to run several, set `SYNC_INSTANCE_ID` on all of them

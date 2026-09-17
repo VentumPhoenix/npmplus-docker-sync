@@ -11,6 +11,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/system"
 )
 
 // mockAPI implements APIClient for tests.
@@ -415,5 +416,47 @@ func TestIPAddressSkipsInvalidAddresses(t *testing.T) {
 	}}
 	if got := c.IPAddress(nil, false); got != "10.0.0.4" {
 		t.Errorf("IPAddress() = %q, want the only valid IPv4 address", got)
+	}
+}
+
+// TestDaemonIDWithoutInfo: a socket proxy may deny /info. The answer must then
+// be empty - the host name would be the short container id, which changes on
+// every recreate, and an instance whose identity changes considers its own
+// resources to belong to somebody else.
+func TestDaemonIDWithoutInfo(t *testing.T) {
+	t.Parallel()
+
+	listener := NewListener(&mockAPI{}, ParseOptions{Prefix: "npm"}, nil)
+	if got := listener.DaemonID(context.Background()); got != "" {
+		t.Errorf("DaemonID() = %q, want empty when /info is unavailable", got)
+	}
+}
+
+// infoAPI is a mock that answers /info.
+type infoAPI struct {
+	*mockAPI
+	id  string
+	err error
+}
+
+func (a *infoAPI) Info(context.Context) (system.Info, error) {
+	if a.err != nil {
+		return system.Info{}, a.err
+	}
+	return system.Info{ID: a.id}, nil
+}
+
+func TestDaemonIDFromInfo(t *testing.T) {
+	t.Parallel()
+
+	listener := NewListener(&infoAPI{mockAPI: &mockAPI{}, id: "DAEMON-ID"}, ParseOptions{Prefix: "npm"}, nil)
+	if got := listener.DaemonID(context.Background()); got != "DAEMON-ID" {
+		t.Errorf("DaemonID() = %q, want the daemon id", got)
+	}
+
+	failing := NewListener(&infoAPI{mockAPI: &mockAPI{}, err: errors.New("forbidden")},
+		ParseOptions{Prefix: "npm"}, nil)
+	if got := failing.DaemonID(context.Background()); got != "" {
+		t.Errorf("DaemonID() = %q, want empty when /info is denied", got)
 	}
 }
