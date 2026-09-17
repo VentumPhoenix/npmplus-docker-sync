@@ -102,6 +102,11 @@ func WithFlavour(f Flavour) Option {
 // When neither is conclusive the detection falls back to NPMplus, which is
 // what this tool is named after, and says so in the log.
 func (c *Client) DetectFlavour(ctx context.Context) (Flavour, error) {
+	// Unconditionally, and before the pinned shortcut: the version decides
+	// which fields a payload may carry, and a pinned flavour says nothing
+	// about the release.
+	c.readVersion(ctx)
+
 	if f := c.Flavour(); f != FlavourAuto {
 		return f, nil
 	}
@@ -167,4 +172,75 @@ func versionShape(raw json.RawMessage) byte {
 	default:
 		return 0
 	}
+}
+
+// Version is what upstream NPM reports under `version` in GET /api/:
+// {"major":2,"minor":11,"revision":3}. NPMplus reports a string there, which
+// parses to the zero Version - "no version I can compare against".
+type Version struct {
+	Major    int `json:"major"`
+	Minor    int `json:"minor"`
+	Revision int `json:"revision"`
+}
+
+// IsZero reports whether the server gave no comparable version.
+func (v Version) IsZero() bool { return v == Version{} }
+
+// String implements fmt.Stringer.
+func (v Version) String() string {
+	if v.IsZero() {
+		return ""
+	}
+	return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Revision)
+}
+
+// AtLeast reports whether the version is at least major.minor.
+//
+// An unknown version counts as new enough. A server that reports none is
+// either NPMplus or something this tool has not seen, and assuming "old"
+// there would silently drop settings the user asked for; assuming "new" at
+// worst produces the server's own error message, which names the field.
+func (v Version) AtLeast(major, minor int) bool {
+	if v.IsZero() {
+		return true
+	}
+	if v.Major != major {
+		return v.Major > major
+	}
+	return v.Minor >= minor
+}
+
+// parseVersion reads the object form and ignores everything else.
+func parseVersion(raw json.RawMessage) Version {
+	if versionShape(raw) != '{' {
+		return Version{}
+	}
+	var v Version
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return Version{}
+	}
+	return v
+}
+
+// Dialect is everything a request body has to be written for: the flavour,
+// and - for upstream NPM - the version. Its request schemas set
+// `additionalProperties: false` and gained fields over releases, so a field
+// that 2.12 expects makes 2.11 reject the whole payload with
+// "data should NOT have additional properties".
+type Dialect struct {
+	Flavour Flavour
+	Version Version
+}
+
+// SupportsTrustForwardedProto reports whether proxy hosts accept
+// `trust_forwarded_proto`. Upstream NPM added it in 2.12; NPMplus has always
+// had it.
+func (d Dialect) SupportsTrustForwardedProto() bool {
+	return d.Flavour != FlavourNPM || d.Version.AtLeast(2, 12)
+}
+
+// SupportsStreamCertificate reports whether streams accept `certificate_id`.
+// Upstream NPM added stream certificates in 2.12; NPMplus has always had them.
+func (d Dialect) SupportsStreamCertificate() bool {
+	return d.Flavour != FlavourNPM || d.Version.AtLeast(2, 12)
 }

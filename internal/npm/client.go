@@ -92,6 +92,9 @@ type Client struct {
 	// apiVersion is the last version reported by GET /api/, used to notice an
 	// upgrade of the server while this process keeps running.
 	apiVersion string
+	// version is apiVersion parsed, for the payload builders. The zero value
+	// means the server reports none (NPMplus) or a form we cannot compare.
+	version Version
 	// lastProbe throttles re-detection after a schema rejection.
 	lastProbe time.Time
 
@@ -479,7 +482,9 @@ func (c *Client) payloadFor(resource Resource) (any, error) {
 	if flavour == FlavourAuto {
 		flavour = FlavourNPMplus
 	}
-	payload, err := resource.Payload(flavour)
+	dialect := c.Dialect()
+	dialect.Flavour = flavour
+	payload, err := resource.Payload(dialect)
 	if err != nil {
 		return nil, fmt.Errorf("npm: build %s payload for %s: %w", resource.Kind().Label(), flavour, err)
 	}
@@ -715,6 +720,7 @@ func (c *Client) Recheck(ctx context.Context) error {
 	c.mu.Lock()
 	previous := c.apiVersion
 	c.apiVersion = version
+	c.version = parseVersion(json.RawMessage(version))
 	c.mu.Unlock()
 
 	if previous == "" || previous == version {
@@ -732,6 +738,29 @@ func (c *Client) ServerVersion() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.apiVersion
+}
+
+// Dialect is what the payload builders write for: the detected flavour plus
+// the server version.
+func (c *Client) Dialect() Dialect {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return Dialect{Flavour: c.flavour, Version: c.version}
+}
+
+// readVersion reads GET /api/ and remembers the version it reports. It runs
+// before the first write, because which fields a payload may carry depends on
+// it - see Dialect.
+func (c *Client) readVersion(ctx context.Context) {
+	raw, err := c.serverVersion(ctx)
+	if err != nil {
+		c.log.Debug("could not read the server version", slog.String("error", err.Error()))
+		return
+	}
+	c.mu.Lock()
+	c.apiVersion = raw
+	c.version = parseVersion(json.RawMessage(raw))
+	c.mu.Unlock()
 }
 
 // serverVersion reads GET /api/ and renders whatever version it reports.

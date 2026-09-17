@@ -36,13 +36,13 @@ type locationPayloadNPMplus struct {
 	AccessListIDs  []int  `json:"npmplus_access_list_ids"`
 	AccessListType string `json:"npmplus_access_list_type"`
 
-	Enabled                  bool   `json:"npmplus_enabled"`
-	NoIndex                  bool   `json:"npmplus_noindex"`
-	DisableCrowdsecAppsec    bool   `json:"npmplus_crowdsec_appsec"`
-	DisableRequestBuffering  bool   `json:"npmplus_proxy_request_buffering"`
-	DisableResponseBuffering bool   `json:"npmplus_proxy_response_buffering"`
-	UpstreamCompression      bool   `json:"npmplus_upstream_compression"`
-	FancyIndex               bool   `json:"npmplus_fancyindex"`
+	Enabled                  Flag   `json:"npmplus_enabled"`
+	NoIndex                  Flag   `json:"npmplus_noindex"`
+	DisableCrowdsecAppsec    Flag   `json:"npmplus_crowdsec_appsec"`
+	DisableRequestBuffering  Flag   `json:"npmplus_proxy_request_buffering"`
+	DisableResponseBuffering Flag   `json:"npmplus_proxy_response_buffering"`
+	UpstreamCompression      Flag   `json:"npmplus_upstream_compression"`
+	FancyIndex               Flag   `json:"npmplus_fancyindex"`
 	XFrameOptions            string `json:"npmplus_x_frame_options,omitempty"`
 	AuthRequest              string `json:"npmplus_auth_request,omitempty"`
 	AuthRequestUpstream      string `json:"npmplus_auth_request_upstream"`
@@ -62,27 +62,27 @@ type proxyPayloadNPMplus struct {
 	ForwardHost           string                   `json:"forward_host"`
 	ForwardPort           int                      `json:"forward_port"`
 	CertificateID         CertificateID            `json:"certificate_id"`
-	SSLForced             bool                     `json:"ssl_forced"`
-	HSTSEnabled           bool                     `json:"hsts_enabled"`
-	HSTSSubdomains        bool                     `json:"hsts_subdomains"`
-	TrustForwardedProto   bool                     `json:"trust_forwarded_proto"`
-	HTTP2Support          bool                     `json:"http2_support"`
-	HTTP3Support          bool                     `json:"npmplus_http3_support"`
-	BlockExploits         bool                     `json:"block_exploits"`
-	CachingEnabled        bool                     `json:"caching_enabled"`
-	AllowWebsocketUpgrade bool                     `json:"allow_websocket_upgrade"`
+	SSLForced             Flag                     `json:"ssl_forced"`
+	HSTSEnabled           Flag                     `json:"hsts_enabled"`
+	HSTSSubdomains        Flag                     `json:"hsts_subdomains"`
+	TrustForwardedProto   Flag                     `json:"trust_forwarded_proto"`
+	HTTP2Support          Flag                     `json:"http2_support"`
+	HTTP3Support          Flag                     `json:"npmplus_http3_support"`
+	BlockExploits         Flag                     `json:"block_exploits"`
+	CachingEnabled        Flag                     `json:"caching_enabled"`
+	AllowWebsocketUpgrade Flag                     `json:"allow_websocket_upgrade"`
 	AccessListIDs         []int                    `json:"npmplus_access_list_ids"`
 	AccessListType        string                   `json:"npmplus_access_list_type"`
 	AdvancedConfig        string                   `json:"advanced_config"`
 	LocationConfig        string                   `json:"npmplus_location_config"`
 	Locations             []locationPayloadNPMplus `json:"locations"`
 
-	NoIndex                  bool   `json:"npmplus_noindex"`
-	DisableCrowdsecAppsec    bool   `json:"npmplus_crowdsec_appsec"`
-	DisableRequestBuffering  bool   `json:"npmplus_proxy_request_buffering"`
-	DisableResponseBuffering bool   `json:"npmplus_proxy_response_buffering"`
-	UpstreamCompression      bool   `json:"npmplus_upstream_compression"`
-	FancyIndex               bool   `json:"npmplus_fancyindex"`
+	NoIndex                  Flag   `json:"npmplus_noindex"`
+	DisableCrowdsecAppsec    Flag   `json:"npmplus_crowdsec_appsec"`
+	DisableRequestBuffering  Flag   `json:"npmplus_proxy_request_buffering"`
+	DisableResponseBuffering Flag   `json:"npmplus_proxy_response_buffering"`
+	UpstreamCompression      Flag   `json:"npmplus_upstream_compression"`
+	FancyIndex               Flag   `json:"npmplus_fancyindex"`
 	XFrameOptions            string `json:"npmplus_x_frame_options,omitempty"`
 	AuthRequest              string `json:"npmplus_auth_request,omitempty"`
 	AuthRequestUpstream      string `json:"npmplus_auth_request_upstream"`
@@ -91,19 +91,23 @@ type proxyPayloadNPMplus struct {
 }
 
 type proxyPayloadNPM struct {
-	DomainNames           []string             `json:"domain_names"`
-	ForwardScheme         string               `json:"forward_scheme"`
-	ForwardHost           string               `json:"forward_host"`
-	ForwardPort           int                  `json:"forward_port"`
-	CertificateID         CertificateID        `json:"certificate_id"`
-	SSLForced             bool                 `json:"ssl_forced"`
-	HSTSEnabled           bool                 `json:"hsts_enabled"`
-	HSTSSubdomains        bool                 `json:"hsts_subdomains"`
-	TrustForwardedProto   bool                 `json:"trust_forwarded_proto"`
-	HTTP2Support          bool                 `json:"http2_support"`
-	BlockExploits         bool                 `json:"block_exploits"`
-	CachingEnabled        bool                 `json:"caching_enabled"`
-	AllowWebsocketUpgrade bool                 `json:"allow_websocket_upgrade"`
+	DomainNames    []string      `json:"domain_names"`
+	ForwardScheme  string        `json:"forward_scheme"`
+	ForwardHost    string        `json:"forward_host"`
+	ForwardPort    int           `json:"forward_port"`
+	CertificateID  CertificateID `json:"certificate_id"`
+	SSLForced      Flag          `json:"ssl_forced"`
+	HSTSEnabled    Flag          `json:"hsts_enabled"`
+	HSTSSubdomains Flag          `json:"hsts_subdomains"`
+	// A pointer so it can be left out entirely: NPM added the field in 2.12
+	// and 2.11 rejects the whole body over it. Sending `false` is not the
+	// same as omitting it - on an update, an omitted field keeps its stored
+	// value - so this is nil only where the server has no such field at all.
+	TrustForwardedProto   *bool                `json:"trust_forwarded_proto,omitempty"`
+	HTTP2Support          Flag                 `json:"http2_support"`
+	BlockExploits         Flag                 `json:"block_exploits"`
+	CachingEnabled        Flag                 `json:"caching_enabled"`
+	AllowWebsocketUpgrade Flag                 `json:"allow_websocket_upgrade"`
 	AccessListID          int                  `json:"access_list_id"`
 	AdvancedConfig        string               `json:"advanced_config"`
 	Locations             []locationPayloadNPM `json:"locations"`
@@ -111,7 +115,8 @@ type proxyPayloadNPM struct {
 }
 
 // Payload implements Resource.
-func (h *ProxyHost) Payload(flavour Flavour) (any, error) {
+func (h *ProxyHost) Payload(dialect Dialect) (any, error) {
+	flavour := dialect.Flavour
 	if err := checkScheme(flavour, h.ForwardScheme); err != nil {
 		return nil, err
 	}
@@ -141,6 +146,11 @@ func (h *ProxyHost) Payload(flavour Flavour) (any, error) {
 		if len(ids) == 1 {
 			accessListID = ids[0]
 		}
+		var trustProto *bool
+		if dialect.SupportsTrustForwardedProto() {
+			value := bool(h.TrustForwardedProto)
+			trustProto = &value
+		}
 		return &proxyPayloadNPM{
 			DomainNames:           NormalizeDomains(h.DomainNames),
 			ForwardScheme:         h.ForwardScheme,
@@ -150,7 +160,7 @@ func (h *ProxyHost) Payload(flavour Flavour) (any, error) {
 			SSLForced:             h.SSLForced,
 			HSTSEnabled:           h.HSTSEnabled,
 			HSTSSubdomains:        h.HSTSSubdomains,
-			TrustForwardedProto:   h.TrustForwardedProto,
+			TrustForwardedProto:   trustProto,
 			HTTP2Support:          h.HTTP2Support,
 			BlockExploits:         h.BlockExploits,
 			CachingEnabled:        h.CachingEnabled,
@@ -182,7 +192,7 @@ func (h *ProxyHost) Payload(flavour Flavour) (any, error) {
 			LocationConfig:           l.LocationConfig,
 			AccessListIDs:            idList(locationIDs),
 			AccessListType:           listType,
-			Enabled:                  l.IsEnabled(),
+			Enabled:                  Flag(l.IsEnabled()),
 			NoIndex:                  l.NoIndex,
 			DisableCrowdsecAppsec:    l.DisableCrowdsecAppsec,
 			DisableRequestBuffering:  l.DisableRequestBuffering,
@@ -320,20 +330,21 @@ type redirectPayload struct {
 	ForwardScheme     string        `json:"forward_scheme"`
 	ForwardDomainName string        `json:"forward_domain_name"`
 	ForwardHTTPCode   int           `json:"forward_http_code"`
-	PreservePath      bool          `json:"preserve_path"`
+	PreservePath      Flag          `json:"preserve_path"`
 	CertificateID     CertificateID `json:"certificate_id"`
-	SSLForced         bool          `json:"ssl_forced"`
-	HSTSEnabled       bool          `json:"hsts_enabled"`
-	HSTSSubdomains    bool          `json:"hsts_subdomains"`
-	HTTP2Support      bool          `json:"http2_support"`
-	HTTP3Support      *bool         `json:"npmplus_http3_support,omitempty"`
-	BlockExploits     bool          `json:"block_exploits"`
+	SSLForced         Flag          `json:"ssl_forced"`
+	HSTSEnabled       Flag          `json:"hsts_enabled"`
+	HSTSSubdomains    Flag          `json:"hsts_subdomains"`
+	HTTP2Support      Flag          `json:"http2_support"`
+	HTTP3Support      *Flag         `json:"npmplus_http3_support,omitempty"`
+	BlockExploits     Flag          `json:"block_exploits"`
 	AdvancedConfig    string        `json:"advanced_config"`
 	Meta              Meta          `json:"meta"`
 }
 
 // Payload implements Resource.
-func (h *RedirectionHost) Payload(flavour Flavour) (any, error) {
+func (h *RedirectionHost) Payload(dialect Dialect) (any, error) {
+	flavour := dialect.Flavour
 	if err := checkLetsEncrypt(flavour, h.CertificateID, h.Meta); err != nil {
 		return nil, err
 	}
@@ -380,32 +391,40 @@ type streamPayloadNPMplus struct {
 	IncomingPort   string             `json:"incoming_port"`
 	ForwardingHost string             `json:"forwarding_host"`
 	ForwardingPort string             `json:"forwarding_port"`
-	TCPForwarding  bool               `json:"tcp_forwarding"`
-	UDPForwarding  bool               `json:"udp_forwarding"`
+	TCPForwarding  Flag               `json:"tcp_forwarding"`
+	UDPForwarding  Flag               `json:"udp_forwarding"`
 	CertificateID  int                `json:"certificate_id"`
 	ProxyProtocol  ProxyProtocolLevel `json:"npmplus_proxy_protocol_forwarding"`
-	ProxyTLS       bool               `json:"npmplus_proxy_tls"`
+	ProxyTLS       Flag               `json:"npmplus_proxy_tls"`
 	AdvancedConfig string             `json:"npmplus_advanced_config"`
 	Description    string             `json:"npmplus_description"`
 	Meta           Meta               `json:"meta"`
 }
 
 type streamPayloadNPM struct {
-	IncomingPort   int           `json:"incoming_port"`
-	ForwardingHost string        `json:"forwarding_host"`
-	ForwardingPort int           `json:"forwarding_port"`
-	TCPForwarding  bool          `json:"tcp_forwarding"`
-	UDPForwarding  bool          `json:"udp_forwarding"`
-	CertificateID  CertificateID `json:"certificate_id"`
-	Meta           Meta          `json:"meta"`
+	IncomingPort   int    `json:"incoming_port"`
+	ForwardingHost string `json:"forwarding_host"`
+	ForwardingPort int    `json:"forwarding_port"`
+	TCPForwarding  Flag   `json:"tcp_forwarding"`
+	UDPForwarding  Flag   `json:"udp_forwarding"`
+	// Same reasoning as trust_forwarded_proto above: stream certificates
+	// arrived in NPM 2.12, and 2.11 rejects the body over the field.
+	CertificateID *CertificateID `json:"certificate_id,omitempty"`
+	Meta          Meta           `json:"meta"`
 }
 
 // Payload implements Resource.
-func (s *Stream) Payload(flavour Flavour) (any, error) {
+func (s *Stream) Payload(dialect Dialect) (any, error) {
+	flavour := dialect.Flavour
 	if flavour == FlavourNPM {
 		if s.IncomingPort.Int() == 0 || s.ForwardingPort.Int() == 0 {
 			return nil, fmt.Errorf("upstream nginx-proxy-manager needs numeric stream ports, got %q -> %q",
 				s.IncomingPort, s.ForwardingPort)
+		}
+		var certificate *CertificateID
+		if dialect.SupportsStreamCertificate() {
+			value := s.CertificateID
+			certificate = &value
 		}
 		return &streamPayloadNPM{
 			IncomingPort:   s.IncomingPort.Int(),
@@ -413,7 +432,7 @@ func (s *Stream) Payload(flavour Flavour) (any, error) {
 			ForwardingPort: s.ForwardingPort.Int(),
 			TCPForwarding:  s.TCPForwarding,
 			UDPForwarding:  s.UDPForwarding,
-			CertificateID:  s.CertificateID,
+			CertificateID:  certificate,
 			Meta:           s.Meta,
 		}, nil
 	}
@@ -475,17 +494,18 @@ func (s *Stream) stripPlus() {
 type deadPayload struct {
 	DomainNames    []string      `json:"domain_names"`
 	CertificateID  CertificateID `json:"certificate_id"`
-	SSLForced      bool          `json:"ssl_forced"`
-	HSTSEnabled    bool          `json:"hsts_enabled"`
-	HSTSSubdomains bool          `json:"hsts_subdomains"`
-	HTTP2Support   bool          `json:"http2_support"`
-	HTTP3Support   *bool         `json:"npmplus_http3_support,omitempty"`
+	SSLForced      Flag          `json:"ssl_forced"`
+	HSTSEnabled    Flag          `json:"hsts_enabled"`
+	HSTSSubdomains Flag          `json:"hsts_subdomains"`
+	HTTP2Support   Flag          `json:"http2_support"`
+	HTTP3Support   *Flag         `json:"npmplus_http3_support,omitempty"`
 	AdvancedConfig string        `json:"advanced_config"`
 	Meta           Meta          `json:"meta"`
 }
 
 // Payload implements Resource.
-func (h *DeadHost) Payload(flavour Flavour) (any, error) {
+func (h *DeadHost) Payload(dialect Dialect) (any, error) {
+	flavour := dialect.Flavour
 	if err := checkLetsEncrypt(flavour, h.CertificateID, h.Meta); err != nil {
 		return nil, err
 	}

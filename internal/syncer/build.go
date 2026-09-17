@@ -23,15 +23,15 @@ func BuildResource(t *docker.Target, certificate npm.CertificateID, instance, pr
 			ForwardHost:           t.ForwardHost,
 			ForwardPort:           t.ForwardPort,
 			CertificateID:         certificate,
-			SSLForced:             ssl.forced,
-			HSTSEnabled:           ssl.hsts,
-			HSTSSubdomains:        ssl.hstsSubdomains,
-			TrustForwardedProto:   t.TrustForwardedProto,
-			HTTP2Support:          t.HTTP2Support,
-			HTTP3Support:          t.HTTP3Support,
-			BlockExploits:         t.BlockExploits,
-			CachingEnabled:        t.Caching,
-			AllowWebsocketUpgrade: t.Websockets,
+			SSLForced:             npm.Flag(ssl.forced),
+			HSTSEnabled:           npm.Flag(ssl.hsts),
+			HSTSSubdomains:        npm.Flag(ssl.hstsSubdomains),
+			TrustForwardedProto:   npm.Flag(t.TrustForwardedProto),
+			HTTP2Support:          npm.Flag(ssl.http2),
+			HTTP3Support:          npm.Flag(t.HTTP3Support),
+			BlockExploits:         npm.Flag(t.BlockExploits),
+			CachingEnabled:        npm.Flag(t.Caching),
+			AllowWebsocketUpgrade: npm.Flag(t.Websockets),
 			AccessListIDs:         t.AccessListIDs,
 			AccessListNames:       t.AccessListNames,
 			AccessListType:        t.AccessListType,
@@ -43,12 +43,12 @@ func BuildResource(t *docker.Target, certificate npm.CertificateID, instance, pr
 
 			// The three inverted NPMplus switches: the label is positive
 			// ("crowdsec_appsec: true" = active), the API field disables.
-			NoIndex:                  t.NoIndex,
-			DisableCrowdsecAppsec:    !t.CrowdsecAppsec,
-			DisableRequestBuffering:  !t.RequestBuffering,
-			DisableResponseBuffering: !t.ResponseBuffering,
-			UpstreamCompression:      t.UpstreamCompression,
-			FancyIndex:               t.FancyIndex,
+			NoIndex:                  npm.Flag(t.NoIndex),
+			DisableCrowdsecAppsec:    npm.Flag(!t.CrowdsecAppsec),
+			DisableRequestBuffering:  npm.Flag(!t.RequestBuffering),
+			DisableResponseBuffering: npm.Flag(!t.ResponseBuffering),
+			UpstreamCompression:      npm.Flag(t.UpstreamCompression),
+			FancyIndex:               npm.Flag(t.FancyIndex),
 			XFrameOptions:            t.XFrameOptions,
 			AuthRequest:              t.AuthRequest,
 			AuthRequestUpstream:      t.AuthRequestUpstream,
@@ -60,14 +60,14 @@ func BuildResource(t *docker.Target, certificate npm.CertificateID, instance, pr
 			ForwardScheme:     t.ForwardScheme,
 			ForwardDomainName: t.ForwardDomainName,
 			ForwardHTTPCode:   t.ForwardHTTPCode,
-			PreservePath:      t.PreservePath,
+			PreservePath:      npm.Flag(t.PreservePath),
 			CertificateID:     certificate,
-			SSLForced:         ssl.forced,
-			HSTSEnabled:       ssl.hsts,
-			HSTSSubdomains:    ssl.hstsSubdomains,
-			HTTP2Support:      t.HTTP2Support,
-			HTTP3Support:      t.HTTP3Support,
-			BlockExploits:     t.BlockExploits,
+			SSLForced:         npm.Flag(ssl.forced),
+			HSTSEnabled:       npm.Flag(ssl.hsts),
+			HSTSSubdomains:    npm.Flag(ssl.hstsSubdomains),
+			HTTP2Support:      npm.Flag(ssl.http2),
+			HTTP3Support:      npm.Flag(t.HTTP3Support),
+			BlockExploits:     npm.Flag(t.BlockExploits),
 			AdvancedConfig:    t.AdvancedConfig,
 			Enabled:           npm.Flag(t.Enabled),
 			Meta:              meta,
@@ -78,11 +78,11 @@ func BuildResource(t *docker.Target, certificate npm.CertificateID, instance, pr
 			IncomingPort:   npm.PortOf(t.IncomingPort),
 			ForwardingHost: t.ForwardingHost,
 			ForwardingPort: npm.PortOf(t.ForwardingPort),
-			TCPForwarding:  t.TCPForwarding,
-			UDPForwarding:  t.UDPForwarding,
+			TCPForwarding:  npm.Flag(t.TCPForwarding),
+			UDPForwarding:  npm.Flag(t.UDPForwarding),
 			CertificateID:  certificate,
 			ProxyProtocol:  npm.ProxyProtocolLevel(t.ProxyProtocol),
-			ProxyTLS:       t.ProxyTLS,
+			ProxyTLS:       npm.Flag(t.ProxyTLS),
 			AdvancedConfig: t.AdvancedConfig,
 			Description:    t.Description,
 			Enabled:        npm.Flag(t.Enabled),
@@ -93,11 +93,11 @@ func BuildResource(t *docker.Target, certificate npm.CertificateID, instance, pr
 		return &npm.DeadHost{
 			DomainNames:    npm.NormalizeDomains(t.DomainNames),
 			CertificateID:  certificate,
-			SSLForced:      ssl.forced,
-			HSTSEnabled:    ssl.hsts,
-			HSTSSubdomains: ssl.hstsSubdomains,
-			HTTP2Support:   t.HTTP2Support,
-			HTTP3Support:   t.HTTP3Support,
+			SSLForced:      npm.Flag(ssl.forced),
+			HSTSEnabled:    npm.Flag(ssl.hsts),
+			HSTSSubdomains: npm.Flag(ssl.hstsSubdomains),
+			HTTP2Support:   npm.Flag(ssl.http2),
+			HTTP3Support:   npm.Flag(t.HTTP3Support),
 			AdvancedConfig: t.AdvancedConfig,
 			Enabled:        npm.Flag(t.Enabled),
 			Meta:           meta,
@@ -113,14 +113,23 @@ type sslSettings struct {
 	forced         bool
 	hsts           bool
 	hstsSubdomains bool
+	http2          bool
 }
 
 // normalizeSSL applies the same cascade the server does before storing a host
 // (NPMplus: internalHost.cleanSslHstsData):
 //
 //	no certificate     -> ssl_forced      = false
+//	no certificate     -> http2_support   = false
 //	no ssl_forced      -> hsts_enabled    = false
 //	no hsts_enabled    -> hsts_subdomains = false
+//
+// The two upstream releases disagree about the http2 half of that rule even
+// though they ship the same cleanSslHstsData: NPM 2.11 stores 0 for a host
+// without a certificate, 2.12 stores what it was sent. Applying the rule here
+// converges against both - and against whichever way a later release settles,
+// because the tool then already asks for what the rule prescribes. HTTP/2
+// needs TLS, so a certificate-less host loses nothing by it.
 //
 // Without this the fingerprint is taken over the raw label values while the
 // API stores the cleaned ones, the two never match, and every Docker event and
@@ -137,9 +146,11 @@ func normalizeSSL(t *docker.Target, certificate npm.CertificateID) sslSettings {
 		forced:         forced,
 		hsts:           t.HSTSEnabled,
 		hstsSubdomains: t.HSTSSubdomains,
+		http2:          t.HTTP2Support,
 	}
 	if certificate.IsZero() {
 		s.forced = false
+		s.http2 = false
 	}
 	if !s.forced {
 		s.hsts = false

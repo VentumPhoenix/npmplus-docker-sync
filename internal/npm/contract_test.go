@@ -186,7 +186,9 @@ func validateAgainst(t *testing.T, flavour Flavour, ref string) {
 
 				// NPMplus stream payloads only exist with a numeric
 				// certificate reference, which the sample has.
-				payload, err := resource.Payload(flavour)
+				// The vendored schemas are the newest refs, so no version is
+				// pinned here: an unknown version means "new enough".
+				payload, err := resource.Payload(Dialect{Flavour: flavour})
 				if err != nil {
 					t.Fatalf("Payload(%s) error: %v", flavour, err)
 				}
@@ -231,7 +233,7 @@ func TestPayloadsOmitWriteProtectedFields(t *testing.T) {
 	for _, flavour := range []Flavour{FlavourNPMplus, FlavourNPM} {
 		resources := sampleResources(t)
 		for _, kind := range Kinds {
-			payload, err := resources[kind].Payload(flavour)
+			payload, err := resources[kind].Payload(Dialect{Flavour: flavour})
 			if err != nil {
 				t.Fatalf("Payload(%s, %s) error: %v", flavour, kind, err)
 			}
@@ -261,7 +263,7 @@ func TestPayloadsOmitWriteProtectedFields(t *testing.T) {
 
 func assertField(t *testing.T, flavour Flavour, kind Kind, field string, want bool) {
 	t.Helper()
-	payload, err := sampleResources(t)[kind].Payload(flavour)
+	payload, err := sampleResources(t)[kind].Payload(Dialect{Flavour: flavour})
 	if err != nil {
 		t.Fatalf("Payload(%s, %s) error: %v", flavour, kind, err)
 	}
@@ -314,7 +316,7 @@ func TestUnsupportedFeaturesAreRejected(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := tt.resource.Payload(tt.flavour); err == nil {
+			if _, err := tt.resource.Payload(Dialect{Flavour: tt.flavour}); err == nil {
 				t.Fatalf("Payload(%s) = nil error, want a rejection", tt.flavour)
 			}
 		})
@@ -331,7 +333,7 @@ func TestNPMplusOnlyFieldsAreDroppedNotRejected(t *testing.T) {
 		DomainNames: []string{"a.example.com"}, ForwardScheme: "http", ForwardHost: "a", ForwardPort: 80,
 		HTTP3Support: true, NoIndex: true, XFrameOptions: "DENY",
 	}
-	payload, err := host.Payload(FlavourNPM)
+	payload, err := host.Payload(Dialect{Flavour: FlavourNPM})
 	if err != nil {
 		t.Fatalf("Payload(npm) error = %v, want the npmplus fields to be dropped", err)
 	}

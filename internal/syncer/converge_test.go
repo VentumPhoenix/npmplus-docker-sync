@@ -40,7 +40,7 @@ func (s *serverAPI) Update(ctx context.Context, id int, resource npm.Resource) (
 // roundTrip sends a resource through its request payload and back, which is
 // exactly what the server stores and returns.
 func (s *serverAPI) roundTrip(resource npm.Resource) (npm.Resource, error) {
-	payload, err := resource.Payload(s.flavour)
+	payload, err := resource.Payload(npm.Dialect{Flavour: s.flavour})
 	if err != nil {
 		return nil, err
 	}

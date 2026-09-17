@@ -198,12 +198,12 @@ type Location struct {
 	// Enabled is nil when the server did not report it; a location without
 	// the flag is enabled.
 	Enabled                  *bool  `json:"npmplus_enabled,omitempty"`
-	NoIndex                  bool   `json:"npmplus_noindex"`
-	DisableCrowdsecAppsec    bool   `json:"npmplus_crowdsec_appsec"`
-	DisableRequestBuffering  bool   `json:"npmplus_proxy_request_buffering"`
-	DisableResponseBuffering bool   `json:"npmplus_proxy_response_buffering"`
-	UpstreamCompression      bool   `json:"npmplus_upstream_compression"`
-	FancyIndex               bool   `json:"npmplus_fancyindex"`
+	NoIndex                  Flag   `json:"npmplus_noindex"`
+	DisableCrowdsecAppsec    Flag   `json:"npmplus_crowdsec_appsec"`
+	DisableRequestBuffering  Flag   `json:"npmplus_proxy_request_buffering"`
+	DisableResponseBuffering Flag   `json:"npmplus_proxy_response_buffering"`
+	UpstreamCompression      Flag   `json:"npmplus_upstream_compression"`
+	FancyIndex               Flag   `json:"npmplus_fancyindex"`
 	XFrameOptions            string `json:"npmplus_x_frame_options,omitempty"`
 	AuthRequest              string `json:"npmplus_auth_request,omitempty"`
 	AuthRequestUpstream      string `json:"npmplus_auth_request_upstream,omitempty"`
