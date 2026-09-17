@@ -52,11 +52,36 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # -coverpkg makes a package count the lines it exercises in *other*
+      # packages, which is what the real coverage of this code base looks
+      # like: main and the client are driven through the syncer tests.
       - name: Test
-        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+        run: go test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -n 1 >> "$GITHUB_STEP_SUMMARY"
+
+      # A pull request may not quietly lower the coverage of a tool that
+      # deletes things for a living.
+      - name: Coverage threshold
+        if: matrix.go == env.GO_VERSION
+        env:
+          MINIMUM: "75.0"
+        run: |
+          total=$(go tool cover -func=coverage.out | tail -n 1 | awk '{print $3}' | tr -d '%')
+          echo "total coverage: ${total}% (minimum ${MINIMUM}%)"
+          awk -v total="$total" -v min="$MINIMUM" 'BEGIN { exit (total+0 >= min+0) ? 0 : 1 }' || {
+            echo "::error::coverage ${total}% is below the minimum ${MINIMUM}%"
+            exit 1
+          }
+
+      # The fuzz targets run as seed-corpus tests in every other job; here
+      # they get a short real run, which is where new inputs come from.
+      - name: Fuzz the label parser
+        if: matrix.go == env.GO_VERSION
+        run: |
+          go test ./internal/docker/ -run=XXX -fuzz=FuzzSplitLabel -fuzztime=30s
+          go test ./internal/docker/ -run=XXX -fuzz=FuzzParse -fuzztime=30s
 
       - name: Upload coverage artifact
         if: matrix.go == env.GO_VERSION

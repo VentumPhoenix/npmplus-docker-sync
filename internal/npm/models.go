@@ -14,9 +14,17 @@ import (
 
 // Meta keys written into every resource this tool owns.
 const (
-	MetaManagedBy   = "managed_by"
-	MetaContainer   = "managed_container"
-	MetaIndex       = "managed_index"
+	MetaManagedBy = "managed_by"
+	MetaContainer = "managed_container"
+	MetaIndex     = "managed_index"
+	// MetaContainerID pins the resource to a container id as well as a name,
+	// so a renamed container is still recognised as the owner.
+	MetaContainerID = "managed_container_id"
+	// MetaInstance names the sync instance that created the resource. Several
+	// instances can drive one NPM without treating each other's hosts as
+	// orphans.
+	MetaInstance    = "managed_instance"
+	MetaPrefix      = "managed_prefix"
 	ManagedByValue  = "npmplus-docker-sync"
 	CertificateNew  = "new"
 	certificateNone = 0
@@ -56,6 +64,15 @@ func IsManaged(m Meta) bool {
 
 // IsRedth reports whether the resource was created by Redth/npm-docker-sync.
 func IsRedth(m Meta) bool { return m.ManagedBy(RedthManagedByValue) }
+
+// OwnedByInstance reports whether a resource of ours belongs to this sync
+// instance. A resource without an instance stamp was written by a release
+// that did not have them yet and is adopted once; a resource carrying another
+// instance's id belongs to that instance and is never touched.
+func OwnedByInstance(m Meta, instance string) bool {
+	stamped := m.Instance()
+	return stamped == "" || instance == "" || stamped == instance
+}
 
 // Owner returns the tool named in the ownership marker, "" for a resource
 // created by hand.
@@ -101,11 +118,23 @@ func (m Meta) ManagedBy(value string) bool {
 }
 
 // Container returns the container name recorded in the marker, if any.
-func (m Meta) Container() string {
+func (m Meta) Container() string { return m.text(MetaContainer) }
+
+// ContainerID returns the container id recorded in the marker, if any.
+func (m Meta) ContainerID() string { return m.text(MetaContainerID) }
+
+// Instance returns the sync instance that created the resource. An empty
+// string means the resource predates instance stamping.
+func (m Meta) Instance() string { return m.text(MetaInstance) }
+
+// Prefix returns the label namespace the resource was created from.
+func (m Meta) Prefix() string { return m.text(MetaPrefix) }
+
+func (m Meta) text(key string) string {
 	if m == nil {
 		return ""
 	}
-	v, _ := m[MetaContainer].(string)
+	v, _ := m[key].(string)
 	return v
 }
 
@@ -178,6 +207,23 @@ type Location struct {
 	XFrameOptions            string `json:"npmplus_x_frame_options,omitempty"`
 	AuthRequest              string `json:"npmplus_auth_request,omitempty"`
 	AuthRequestUpstream      string `json:"npmplus_auth_request_upstream,omitempty"`
+}
+
+// stripPlus removes the NPMplus-only settings of a location block.
+func (l *Location) stripPlus() {
+	l.LocationType = ""
+	l.LocationConfig = ""
+	l.AccessListIDs = nil
+	l.AccessListType = ""
+	l.NoIndex = false
+	l.DisableCrowdsecAppsec = false
+	l.DisableRequestBuffering = false
+	l.DisableResponseBuffering = false
+	l.UpstreamCompression = false
+	l.FancyIndex = false
+	l.XFrameOptions = ""
+	l.AuthRequest = ""
+	l.AuthRequestUpstream = ""
 }
 
 // IsEnabled reports whether the location is active.
@@ -411,19 +457,20 @@ func fingerprint(shape any) string {
 }
 
 // ownership extracts the marker fields shared by every fingerprint shape.
-func ownership(m Meta) (managedBy, container string, index int) {
+func ownership(m Meta) (managedBy, container string, index int, instance string) {
 	if m == nil {
-		return "", "", 0
+		return "", "", 0, ""
 	}
 	managedBy, _ = m[MetaManagedBy].(string)
 	container, _ = m[MetaContainer].(string)
+	instance, _ = m[MetaInstance].(string)
 	switch v := m[MetaIndex].(type) {
 	case int:
 		index = v
 	case float64: // JSON round-trip
 		index = int(v)
 	}
-	return managedBy, container, index
+	return managedBy, container, index, instance
 }
 
 // ---------------------------------------------------------------------------

@@ -36,6 +36,7 @@ var autoCert = certs.Spec{Mode: certs.ModeAuto, Raw: fields.Auto}
 func proxyTarget(name string, mutate func(*Target)) *Target {
 	t := &Target{
 		Kind:          npm.KindProxy,
+		Running:       true,
 		ContainerID:   name + "-id",
 		ContainerName: name,
 		Certificate:   autoCert,
@@ -174,6 +175,7 @@ func TestParseProxy(t *testing.T) {
 				t.CrowdsecAppsec = false
 				t.XFrameOptions = "SAMEORIGIN"
 				t.AuthRequest = "authelia"
+				t.ExplicitPlus = []string{"auth_request", "crowdsec_appsec", "noindex", "ssl.http3", "x_frame_options"}
 			})},
 		},
 		{
@@ -206,6 +208,7 @@ func TestParseProxy(t *testing.T) {
 				t.ForwardPort = 80
 				t.CrowdsecAppsec = false
 				t.RequestBuffering = false
+				t.ExplicitPlus = []string{"crowdsec_appsec", "request_buffering"}
 			})},
 		},
 		{
@@ -695,5 +698,104 @@ func TestEnableSemantics(t *testing.T) {
 				tc.check(t, res.Targets)
 			}
 		})
+	}
+}
+
+// TestScanProtectsBrokenContainers is the parser half of the "a typo must not
+// delete a host" guarantee: a container whose labels cannot be read is
+// reported, so the reconcile loop can leave its resources alone.
+func TestScanProtectsBrokenContainers(t *testing.T) {
+	t.Parallel()
+
+	containers := []Container{
+		withPorts(withLabels("good", map[string]string{"npm.proxy.domains": "good.example.com"}), 80),
+		withLabels("broken", map[string]string{
+			"npm.proxy.domains": "broken.example.com",
+			"npm.proxy.port":    "80a", // the typo from the bug report
+		}),
+	}
+
+	snapshot, res := Scan(containers, opts("npm"))
+	if len(res.Errors) != 1 {
+		t.Fatalf("errors = %v, want exactly one", res.Errors)
+	}
+	if len(snapshot.Targets) != 1 || snapshot.Targets[0].ContainerName != "good" {
+		t.Fatalf("targets = %s, want only the valid container", dump(snapshot.Targets))
+	}
+	if !snapshot.IsProtected("broken", "broken-id") {
+		t.Error("the container with the broken label must be protected from deletion")
+	}
+	if snapshot.IsProtected("good", "good-id") {
+		t.Error("a healthy container must not be protected")
+	}
+	if snapshot.Containers != 2 {
+		t.Errorf("Containers = %d, want 2", snapshot.Containers)
+	}
+}
+
+// A stopped container still produces its resources - without an address and
+// without ports, which is exactly what marks them as "do not reconfigure".
+func TestStoppedContainerStillYieldsTargets(t *testing.T) {
+	t.Parallel()
+
+	c := withLabels("web", map[string]string{"npm.proxy.domains": "web.example.com"})
+	c.State = "exited"
+
+	res := Parse(c, opts("npm"))
+	if len(res.Errors) != 0 {
+		t.Fatalf("a stopped container must not produce errors: %v", res.Errors)
+	}
+	if len(res.Targets) != 1 {
+		t.Fatalf("targets = %d, want 1", len(res.Targets))
+	}
+	target := res.Targets[0]
+	if target.Running {
+		t.Error("the target should know its container is stopped")
+	}
+	if target.Complete() {
+		t.Error("a stopped container has no address, so the target is incomplete")
+	}
+	if target.Key() != "web.example.com" {
+		t.Errorf("Key() = %q, want the identity to survive", target.Key())
+	}
+}
+
+func TestContainerRunning(t *testing.T) {
+	t.Parallel()
+
+	for state, want := range map[string]bool{
+		"running": true, "restarting": true, "paused": true, "": true,
+		"exited": false, "created": false, "dead": false, "removing": false,
+	} {
+		if got := (Container{State: state}).Running(); got != want {
+			t.Errorf("Running(%q) = %t, want %t", state, got, want)
+		}
+	}
+}
+
+// location_config is a field of the proxy host, not a location block - the two
+// only look alike after separator normalisation.
+func TestLocationConfigIsNotALocationBlock(t *testing.T) {
+	t.Parallel()
+
+	res := Parse(withLabels("app", map[string]string{
+		"npm.proxy.domains":         "app.example.com",
+		"npm.proxy.port":            "80",
+		"npm.proxy.location_config": "add_header X-Test 1;",
+		"npm.proxy.location.0.path": "/api",
+	}), opts("npm"))
+
+	if len(res.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", res.Errors)
+	}
+	if len(res.Warnings) > 0 {
+		t.Fatalf("unexpected warnings: %v", res.Warnings)
+	}
+	target := res.Targets[0]
+	if target.LocationConfig != "add_header X-Test 1;" {
+		t.Errorf("LocationConfig = %q", target.LocationConfig)
+	}
+	if len(target.Locations) != 1 || target.Locations[0].Path != "/api" {
+		t.Errorf("locations = %+v, want exactly the /api block", target.Locations)
 	}
 }

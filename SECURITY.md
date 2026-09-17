@@ -44,18 +44,45 @@ npmplus-docker-sync ──tcp──▶ docker-socket-proxy ──unix, ro──�
 
 Endpoints this tool needs, and nothing else:
 
-| Endpoint | Proxy flag | Purpose |
-|---|---|---|
-| `GET /containers/json` | `CONTAINERS=1` | read labels of running containers |
-| `GET /events` | `EVENTS=1` | react to lifecycle changes |
-| `GET /_ping` | `PING=1` | startup connectivity check |
-| `GET /version` | `VERSION=1` | API version negotiation |
+| Endpoint | Proxy flag | Required | Purpose |
+|---|---|---|---|
+| `GET /containers/json` | `CONTAINERS=1` | yes | read the labels, networks, ports and state of every container |
+| `GET /events` | `EVENTS=1` | yes | react to lifecycle changes |
+| `GET /_ping` | `PING=1` | yes | startup connectivity check |
+| `GET /version` | `VERSION=1` | yes | API version negotiation |
+| `GET /info` | `INFO=1` | no | the daemon id, used as the default `SYNC_INSTANCE_ID`; without it the host name is used |
 
-With `POST=0` the proxy rejects every write call, so a compromised
-`npmplus-docker-sync` cannot create, modify, start or stop containers. The tool
-additionally applies **server-side event filters** (`type=container`,
-`event=start,die,stop,destroy,rename,update,health_status`), so it never even
-receives unrelated event data.
+Everything else stays at `0`. In particular:
+
+* `POST=0` — the proxy rejects every write call, so a compromised
+  `npmplus-docker-sync` cannot create, modify, start or stop containers.
+* `EXEC`, `IMAGES`, `NETWORKS`, `VOLUMES`, `SECRETS`, `SERVICES`, `SWARM`,
+  `SYSTEM`, `AUTH`, `BUILD`, `COMMIT`, `CONFIGS`, `DISTRIBUTION`, `NODES`,
+  `PLUGINS`, `SESSION`, `TASKS` — all unused. The tool never calls them.
+
+Note that `CONTAINERS=1` is enough to read the labels *and* the environment of
+every container on the host. That is not specific to this tool, but it is worth
+knowing before you point it at a daemon with secrets in `environment:`.
+
+The tool additionally applies **server-side event filters** (`type=container`,
+`event=start,die,stop,destroy,rename,update`), so it never even receives
+unrelated event data.
+
+Minimal proxy configuration:
+
+```yaml
+docker-socket-proxy:
+  image: tecnativa/docker-socket-proxy
+  environment:
+    CONTAINERS: "1"
+    EVENTS: "1"
+    PING: "1"
+    VERSION: "1"
+    INFO: "1"    # optional, for the instance id
+    POST: "0"
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock:ro
+```
 
 If you accept the risk and mount the socket directly
 (`docker-compose.simple.yml`), keep it read-only, drop all capabilities and

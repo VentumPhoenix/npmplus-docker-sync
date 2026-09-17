@@ -133,3 +133,53 @@ Run once with `DRY_RUN=true` to see exactly what would change.
 NPMplus-only fields used to be refused when talking to upstream
 nginx-proxy-manager. They are now dropped from the request and reported once
 per resource, so the new defaults do not break that flavour.
+
+## From v1.0.0-beta.3 to v1.0.0-beta.4
+
+Nothing to change: no labels or variables were renamed. What changed is *when
+resources are deleted*, and all of it is in your favour.
+
+### Stopped containers no longer lose their host
+
+A container that is stopped or crash-looping used to have its resources
+deleted, because only running containers were listed. Now `NPM_ON_STOP`
+decides:
+
+| Value | Behaviour |
+|---|---|
+| `disable` (default) | The host is disabled and keeps its id. |
+| `keep` | Nothing happens at all. |
+| `delete` | The old behaviour. |
+
+`NPM_STOP_GRACE` (default `1m`) swallows a restart or a `docker compose up`
+recreate entirely, so neither produces a disable/enable cycle.
+
+Set `NPM_ON_STOP=delete` and `NPM_STOP_GRACE=0` to keep the beta.3 behaviour.
+
+### A broken label no longer deletes anything
+
+A container whose labels cannot be parsed is now protected: its resources are
+kept and the problem is logged. See [DELETION.md](DELETION.md).
+
+### New: the delete guard
+
+`DELETE_GUARD` (default `0.5`) stops a run that would delete more than half of
+the managed resources, and any run that would delete all of them or that saw no
+containers at all. `DELETE_GUARD=off` restores the unguarded behaviour.
+
+### New: sync instances
+
+Every resource is now stamped with `managed_instance`. Resources carrying
+another instance's id are never touched, so several Docker hosts can drive one
+NPM. The id defaults to the Docker daemon id; `SYNC_INSTANCE_ID` overrides it.
+
+Existing resources have no stamp yet and are adopted by the first instance that
+sees them — so if you plan to run several, set `SYNC_INSTANCE_ID` on all of them
+*before* the first run, and let each one see only its own containers.
+
+### New subcommands
+
+```bash
+npmplus-docker-sync validate   # parse the labels, report, never write
+npmplus-docker-sync sync       # one reconcile, then exit with a status code
+```

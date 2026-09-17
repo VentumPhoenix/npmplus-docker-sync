@@ -73,6 +73,8 @@ func (f *fakeAPI) ListAccessLists(ctx context.Context) ([]npm.AccessList, error)
 	return append([]npm.AccessList(nil), f.accessLists...), nil
 }
 
+func (f *fakeAPI) Recheck(context.Context) error { return nil }
+
 func (f *fakeAPI) Flavour() npm.Flavour {
 	if f.flavour == "" {
 		return npm.FlavourNPMplus
@@ -263,15 +265,44 @@ func (f *fakeAPI) count(kind npm.Kind) int {
 
 // fakeSource returns a fixed set of targets.
 type fakeSource struct {
-	mu      sync.Mutex
-	targets []*docker.Target
-	err     error
+	mu         sync.Mutex
+	targets    []*docker.Target
+	err        error
+	protected  map[string]struct{}
+	containers int
 }
 
-func (s *fakeSource) Targets(context.Context) ([]*docker.Target, error) {
+func (s *fakeSource) Snapshot(context.Context) (docker.Snapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.targets, s.err
+	if s.err != nil {
+		return docker.Snapshot{}, s.err
+	}
+	containers := s.containers
+	switch {
+	case containers < 0:
+		// The caller asked for "docker reported nothing at all".
+		containers = 0
+	case containers == 0:
+		// Every fixture that does not care pretends each target has its own
+		// container, so the delete guard sees a plausible world.
+		containers = len(s.targets) + 1
+	}
+	return docker.Snapshot{
+		Targets:    s.targets,
+		Protected:  s.protected,
+		Containers: containers,
+	}, nil
+}
+
+// protect marks a container as unparsable for the next runs.
+func (s *fakeSource) protect(names ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.protected = make(map[string]struct{}, len(names))
+	for _, name := range names {
+		s.protected[name] = struct{}{}
+	}
 }
 
 // newFakeSource returns a source serving the given targets.
@@ -292,6 +323,7 @@ func (s *fakeSource) set(targets ...*docker.Target) {
 func proxyTarget(name, domain string, port int) *docker.Target {
 	return &docker.Target{
 		Kind:          npm.KindProxy,
+		Running:       true,
 		ContainerID:   name + "-id",
 		ContainerName: name,
 		DomainNames:   []string{domain},
@@ -307,6 +339,7 @@ func proxyTarget(name, domain string, port int) *docker.Target {
 func redirectTarget(name, from, to string) *docker.Target {
 	return &docker.Target{
 		Kind:              npm.KindRedirect,
+		Running:           true,
 		ContainerID:       name + "-id",
 		ContainerName:     name,
 		DomainNames:       []string{from},
@@ -322,6 +355,7 @@ func redirectTarget(name, from, to string) *docker.Target {
 func streamTarget(name string, incoming, forward int) *docker.Target {
 	return &docker.Target{
 		Kind:           npm.KindStream,
+		Running:        true,
 		ContainerID:    name + "-id",
 		ContainerName:  name,
 		IncomingPort:   incoming,
@@ -335,6 +369,7 @@ func streamTarget(name string, incoming, forward int) *docker.Target {
 func deadTarget(name, domain string) *docker.Target {
 	return &docker.Target{
 		Kind:          npm.KindDead,
+		Running:       true,
 		ContainerID:   name + "-id",
 		ContainerName: name,
 		DomainNames:   []string{domain},
@@ -344,7 +379,7 @@ func deadTarget(name, domain string) *docker.Target {
 
 // managed builds a live resource as this tool would have created it.
 func managed(id int, target *docker.Target) npm.Resource {
-	r := BuildResource(target, targetCertificate(target))
+	r := BuildResource(target, targetCertificate(target), "", "npm")
 	r.SetResourceID(id)
 	return r
 }
@@ -363,7 +398,12 @@ func targetCertificate(t *docker.Target) npm.CertificateID {
 }
 
 func defaultOptions() Options {
-	return Options{DeleteOrphans: true, AdoptExisting: true, Kinds: npm.Kinds}
+	return Options{
+		DeleteOrphans: true, AdoptExisting: true, Kinds: npm.Kinds,
+		// The guard is part of the default behaviour, so the suite runs with
+		// it on; tests that want to delete a lot turn it off explicitly.
+		DeleteGuard: 0.5,
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -885,7 +925,7 @@ func TestBuildResourceStampsOwnership(t *testing.T) {
 		deadTarget("parked", "parked.example.com"),
 	} {
 		t.Run(string(target.Kind), func(t *testing.T) {
-			resource := BuildResource(target, targetCertificate(target))
+			resource := BuildResource(target, targetCertificate(target), "", "npm")
 			if resource == nil {
 				t.Fatal("BuildResource() = nil")
 			}
@@ -920,7 +960,7 @@ func TestBuildResourceLetsEncryptMeta(t *testing.T) {
 	target.DNSCredentials = "dns_cloudflare_api_token=secret"
 	target.PropagationSeconds = 60
 
-	meta := BuildResource(target, targetCertificate(target)).ResourceMeta()
+	meta := BuildResource(target, targetCertificate(target), "", "npm").ResourceMeta()
 	if meta["letsencrypt_email"] != "admin@example.com" || meta["letsencrypt_agree"] != true {
 		t.Errorf("meta = %+v, want the letsencrypt label values", meta)
 	}
@@ -936,7 +976,7 @@ func TestReconcileRedthOwnership(t *testing.T) {
 	t.Parallel()
 
 	redth := func(id int, target *docker.Target) npm.Resource {
-		r := BuildResource(target, targetCertificate(target))
+		r := BuildResource(target, targetCertificate(target), "", "npm")
 		r.SetResourceID(id)
 		meta := r.ResourceMeta()
 		meta[npm.MetaManagedBy] = npm.RedthManagedByValue
@@ -1202,7 +1242,7 @@ func TestSSLNormalisationMatchesTheServer(t *testing.T) {
 			forced := tt.forced
 			target.SSLForced, target.HSTSEnabled, target.HSTSSubdomains = &forced, tt.hsts, tt.hstsSub
 
-			host, ok := BuildResource(target, tt.certificate).(*npm.ProxyHost)
+			host, ok := BuildResource(target, tt.certificate, "", "npm").(*npm.ProxyHost)
 			if !ok {
 				t.Fatal("BuildResource() did not return a proxy host")
 			}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/certs"
+	"github.com/VentumPhoenix/npmplus-docker-sync/internal/docker"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/fields"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/npm"
 )
@@ -30,6 +31,12 @@ const (
 	// changes, so a certificate created in the UI reaches its hosts without a
 	// restart.
 	DefaultCertificatePoll = time.Minute
+	// DefaultStopGrace covers a restart or a `docker compose up` recreate, so
+	// neither produces a disable/enable cycle.
+	DefaultStopGrace = time.Minute
+	// DefaultDeleteGuard is the largest share of the managed resources a
+	// single run may delete before it is stopped and reported.
+	DefaultDeleteGuard = 0.5
 )
 
 // Config is the fully resolved runtime configuration.
@@ -77,6 +84,20 @@ type Config struct {
 	CertificatePoll time.Duration
 	// MigrateFromRedth takes over hosts created by Redth/npm-docker-sync.
 	MigrateFromRedth bool
+	// OnStop decides what happens to the resources of a container that is
+	// stopped but still exists.
+	OnStop docker.OnStop
+	// StopGrace is how long a stopped container is ignored, so a restart does
+	// not produce a disable/enable cycle.
+	StopGrace time.Duration
+	// InstanceID identifies this sync instance in the resource meta.
+	InstanceID string
+	// DeleteGuard is the largest share of the managed resources one run may
+	// delete; 0 disables the guard.
+	DeleteGuard float64
+	// DeleteGuardMin is how many deletions a run needs before the share guard
+	// applies at all.
+	DeleteGuardMin   int
 	Kinds            []npm.Kind
 	DebounceInterval time.Duration
 	DebounceMaxWait  time.Duration
@@ -107,6 +128,17 @@ type Getenv func(string) string
 // process environment. Pass os.Getenv and os.Environ() in production code;
 // environ is only read to warn about misspelled NPM_<KIND>_<FIELD> variables.
 func Load(getenv Getenv, environ []string) (*Config, error) {
+	return load(getenv, environ, true)
+}
+
+// LoadForCheck is Load without the NPM credentials, for the `validate`
+// subcommand: a pre-deploy check reads labels and never talks to the API, so
+// demanding an URL and a password would only stand in its way.
+func LoadForCheck(getenv Getenv, environ []string) (*Config, error) {
+	return load(getenv, environ, false)
+}
+
+func load(getenv Getenv, environ []string, requireAPI bool) (*Config, error) {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
@@ -117,7 +149,7 @@ func Load(getenv Getenv, environ []string) (*Config, error) {
 	var notices []string
 	// alias resolves the first variable that is set and records when it was
 	// not the canonical one.
-	alias := func(fallback string, keys ...string) string {
+	alias := func(keys ...string) string {
 		for i, key := range keys {
 			v := strings.TrimSpace(getenv(key))
 			if v == "" {
@@ -129,19 +161,19 @@ func Load(getenv Getenv, environ []string) (*Config, error) {
 			}
 			return v
 		}
-		return fallback
+		return ""
 	}
 
 	cfg := &Config{
-		NPMURL:      strings.TrimRight(alias("", "NPM_URL", "NPM_BASE_URL"), "/"),
-		NPMIdentity: alias("", "NPM_IDENTITY", "NPM_EMAIL", "NPM_USER"),
+		NPMURL:      strings.TrimRight(alias("NPM_URL", "NPM_BASE_URL"), "/"),
+		NPMIdentity: alias("NPM_IDENTITY", "NPM_EMAIL", "NPM_USER"),
 		DockerHost:  str(getenv, DefaultDockerHost, "DOCKER_HOST"),
 		LabelPrefix: strings.TrimSuffix(str(getenv, DefaultLabelPrefix, "LABEL_PREFIX"), "."),
-		NPMNetwork:  alias("", "NPM_NETWORK", "NPM_DOCKER_NETWORK"),
+		NPMNetwork:  alias("NPM_NETWORK", "NPM_DOCKER_NETWORK"),
 		LogFormat:   strings.ToLower(str(getenv, "text", "LOG_FORMAT")),
 		HealthAddr:  str(getenv, "", "HEALTH_ADDR"),
 		// Redth spells it NPM_CONTAINER_NAME.
-		NPMContainer: alias("", "NPM_CONTAINER", "NPM_CONTAINER_NAME"),
+		NPMContainer: alias("NPM_CONTAINER", "NPM_CONTAINER_NAME"),
 	}
 
 	secret, err := secretValue(getenv, "NPM_SECRET", "NPM_PASSWORD")
@@ -210,6 +242,18 @@ func Load(getenv Getenv, environ []string) (*Config, error) {
 	cfg.PortPreference, err = portPreference(str(getenv, "", "NPM_PORT_PREFERENCE"))
 	collect(err)
 
+	cfg.OnStop, err = docker.ParseOnStop(str(getenv, "", "NPM_ON_STOP"))
+	if err != nil {
+		collect(fmt.Errorf("NPM_ON_STOP: %w", err))
+	}
+	cfg.StopGrace, err = duration(getenv, DefaultStopGrace, "NPM_STOP_GRACE")
+	collect(err)
+	cfg.InstanceID = str(getenv, "", "SYNC_INSTANCE_ID", "NPM_INSTANCE_ID")
+	cfg.DeleteGuard, err = guardRatio(str(getenv, "", "DELETE_GUARD"))
+	collect(err)
+	cfg.DeleteGuardMin, err = integer(getenv, DefaultDeleteGuardMin, "DELETE_GUARD_MIN")
+	collect(err)
+
 	// The per-field defaults (NPM_PROXY_*, NPM_DEFAULT_*) are resolved from
 	// the same table the labels are parsed with, so the two cannot drift.
 	defaults, warnings, defaultsErr := fields.LoadDefaults(getenv, environ)
@@ -220,7 +264,7 @@ func Load(getenv Getenv, environ []string) (*Config, error) {
 	}
 
 	cfg.Notices = notices
-	collect(cfg.validate())
+	collect(cfg.validate(requireAPI))
 
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
@@ -228,13 +272,15 @@ func Load(getenv Getenv, environ []string) (*Config, error) {
 	return cfg, nil
 }
 
-func (c *Config) validate() error {
+func (c *Config) validate(requireAPI bool) error {
 	var errs []error
 
 	//nolint:staticcheck
 	switch {
 	case c.NPMURL == "":
-		errs = append(errs, errors.New("NPM_URL is required (e.g. http://npm:81)"))
+		if requireAPI {
+			errs = append(errs, errors.New("NPM_URL is required (e.g. http://npm:81)"))
+		}
 	default:
 		u, err := url.Parse(c.NPMURL)
 		//nolint:gocritic
@@ -247,10 +293,10 @@ func (c *Config) validate() error {
 		}
 	}
 
-	if c.NPMIdentity == "" {
+	if requireAPI && c.NPMIdentity == "" {
 		errs = append(errs, errors.New("NPM_IDENTITY is required (the NPM admin e-mail)"))
 	}
-	if c.NPMSecret == "" {
+	if requireAPI && c.NPMSecret == "" {
 		errs = append(errs, errors.New("NPM_SECRET is required (use NPM_SECRET_FILE for Docker secrets)"))
 	}
 
@@ -312,6 +358,10 @@ func (c *Config) LogValue() slog.Value {
 		slog.Duration("certificate_poll", c.CertificatePoll),
 		slog.Bool("migrate_from_redth", c.MigrateFromRedth),
 		slog.Bool("delete_orphans", c.DeleteOrphans),
+		slog.String("on_stop", string(c.OnStop)),
+		slog.Duration("stop_grace", c.StopGrace),
+		slog.String("sync_instance_id", c.InstanceID),
+		slog.Float64("delete_guard", c.DeleteGuard),
 		slog.Bool("adopt_existing", c.AdoptExisting),
 		slog.Bool("dry_run", c.DryRun),
 	)
@@ -441,6 +491,52 @@ func fileAware(getenv Getenv) Getenv {
 		}
 		return getenv(key)
 	}
+}
+
+// DefaultDeleteGuardMin is how many deletions a run needs before the share
+// guard applies.
+const DefaultDeleteGuardMin = 3
+
+// guardRatio parses DELETE_GUARD, which accepts a share ("0.5"), a percentage
+// ("50%", "50") or "off".
+func guardRatio(raw string) (float64, error) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	switch value {
+	case "":
+		return DefaultDeleteGuard, nil
+	case "off", "none", "disabled", "false":
+		return 0, nil
+	}
+
+	percent := strings.HasSuffix(value, "%")
+	value = strings.TrimSuffix(value, "%")
+	number, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, fmt.Errorf("DELETE_GUARD: %q is not a share (0.5), a percentage (50%%) or \"off\"", raw)
+	}
+	if percent || number > 1 {
+		number /= 100
+	}
+	if number < 0 || number > 1 {
+		return 0, fmt.Errorf("DELETE_GUARD: %q is out of range (0 to 1, or 0%% to 100%%)", raw)
+	}
+	return number, nil
+}
+
+// integer reads a whole number from the first key that is set.
+func integer(getenv Getenv, fallback int, keys ...string) (int, error) {
+	for _, key := range keys {
+		raw := strings.TrimSpace(getenv(key))
+		if raw == "" {
+			continue
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			return fallback, fmt.Errorf("%s: %q is not a number", key, raw)
+		}
+		return n, nil
+	}
+	return fallback, nil
 }
 
 // certificatePartial reads NPM_CERTIFICATE_PARTIAL.

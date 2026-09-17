@@ -46,6 +46,9 @@ type Result struct {
 	Targets  []*Target
 	Errors   []error
 	Warnings []string
+	// Skipped marks a container whose resource was dropped because of an
+	// unknown label under STRICT_LABELS.
+	Skipped bool
 }
 
 // Managed reports whether a container is synchronised, and why not when it is
@@ -125,6 +128,8 @@ type Summary struct {
 	Managed   int
 	OptedOut  int
 	Unlabeled int
+	// Stopped counts managed containers that are not running.
+	Stopped int
 }
 
 // Classify counts managed, opted out and unlabelled containers for the
@@ -135,6 +140,9 @@ func Classify(containers []Container, opts ParseOptions) Summary {
 		switch managed, reason := Managed(c, opts); {
 		case managed:
 			s.Managed++
+			if !c.Running() {
+				s.Stopped++
+			}
 		case reason == "opted out":
 			s.OptedOut++
 		default:
@@ -177,6 +185,7 @@ func Parse(c Container, opts ParseOptions) Result {
 			res.Warnings = append(res.Warnings,
 				fmt.Sprintf("%s#%d %s: skipped because of an unknown label (STRICT_LABELS)",
 					displayName(c), key.index, key.kind))
+			res.Skipped = true
 			continue
 		}
 		target, err := buildTarget(c, opts, key, f)
@@ -204,6 +213,42 @@ func ParseAll(containers []Container, opts ParseOptions) Result {
 		}
 	}
 	return res
+}
+
+// Scan parses every container into the snapshot one reconcile run works from.
+//
+// A container whose labels could not be parsed is recorded as *protected*: its
+// resources are still in NPM, the tool simply cannot tell what they should
+// look like right now. Deleting them because of a typo in one label would turn
+// a warning into an outage.
+func Scan(containers []Container, opts ParseOptions) (Snapshot, Result) {
+	snapshot := Snapshot{
+		Protected:  make(map[string]struct{}),
+		Containers: len(containers),
+	}
+	var res Result
+
+	for _, c := range containers {
+		one := Parse(c, opts)
+		snapshot.Targets = append(snapshot.Targets, one.Targets...)
+		for _, err := range one.Errors {
+			res.Errors = append(res.Errors, fmt.Errorf("container %s: %w", displayName(c), err))
+		}
+		for _, warning := range one.Warnings {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("container %s: %s", displayName(c), warning))
+		}
+		if len(one.Errors) > 0 || (one.Skipped && opts.StrictLabels) {
+			if c.Name != "" {
+				snapshot.Protected[c.Name] = struct{}{}
+			}
+			if c.ID != "" {
+				snapshot.Protected[c.ID] = struct{}{}
+			}
+		}
+	}
+
+	snapshot.Summary = Classify(containers, opts)
+	return snapshot, res
 }
 
 // entryKey identifies one resource definition inside a container.
@@ -328,11 +373,13 @@ func groupLabels(c Container, opts ParseOptions) (map[entryKey]fieldSet, map[int
 // second return value reports an explicit "disable_x" alias of an inverted
 // field, whose value has to be negated.
 func resolveField(kind npm.Kind, field string) (canonical string, inverted, known bool) {
-	if strings.HasPrefix(field, fields.Location+".") {
-		return locationField(field)
-	}
+	// The table comes first: "location_config" normalises to "location.config"
+	// and would otherwise look like a malformed location block.
 	if f, ok := fields.Lookup(kind, field); ok {
 		return fields.Normalize(f.Name), false, true
+	}
+	if strings.HasPrefix(field, fields.Location+".") {
+		return locationField(field)
 	}
 	if positive, ok := fields.IsInverseAlias(field); ok {
 		if f, found := fields.Lookup(kind, positive); found {
@@ -366,7 +413,7 @@ func locationField(field string) (canonical string, inverted, known bool) {
 
 // suggest returns a "did you mean" hint for an unknown field.
 func suggest(kind npm.Kind, field string) string {
-	if strings.HasPrefix(field, fields.Location+".") {
+	if strings.HasPrefix(field, fields.Location+".") && looksLikeLocationBlock(field) {
 		rest := strings.TrimPrefix(field, fields.Location+".")
 		if _, sub, ok := strings.Cut(rest, "."); ok {
 			if hint := fields.SuggestLocation(sub); hint != "" {
@@ -376,6 +423,19 @@ func suggest(kind npm.Kind, field string) string {
 		return ""
 	}
 	return fields.Suggest(kind, field)
+}
+
+// looksLikeLocationBlock reports whether a field name is
+// "location.<n>.<something>" rather than a field that merely starts with
+// "location" (such as location_config).
+func looksLikeLocationBlock(field string) bool {
+	rest := strings.TrimPrefix(field, fields.Location+".")
+	number, _, ok := strings.Cut(rest, ".")
+	if !ok {
+		return false
+	}
+	_, err := strconv.Atoi(number)
+	return err == nil
 }
 
 func kindOrder(kind npm.Kind) int {
@@ -568,11 +628,29 @@ func (f fieldSet) enum(field string) (string, error) {
 func (f fieldSet) domains(field string) ([]string, error) {
 	domains := npm.NormalizeDomains(splitList(f.string(field)))
 	for _, d := range domains {
-		if strings.ContainsAny(d, " /\\:") {
-			return nil, fmt.Errorf("%s: %q is not a valid domain name", f.source(field), d)
+		if err := validDomain(d); err != nil {
+			return nil, fmt.Errorf("%s: %w", f.source(field), err)
 		}
 	}
 	return domains, nil
+}
+
+// validDomain rejects what NPM would reject anyway - and, more importantly,
+// what would normalise away to nothing and leave a resource without an
+// identity.
+func validDomain(domain string) error {
+	if domain == "" {
+		return fmt.Errorf("%q is not a valid domain name", domain)
+	}
+	if strings.ContainsAny(domain, " /\\:") {
+		return fmt.Errorf("%q is not a valid domain name", domain)
+	}
+	for _, label := range strings.Split(domain, ".") {
+		if label == "" {
+			return fmt.Errorf("%q is not a valid domain name (empty label)", domain)
+		}
+	}
+	return nil
 }
 
 // splitList splits a comma, semicolon or whitespace separated label value.

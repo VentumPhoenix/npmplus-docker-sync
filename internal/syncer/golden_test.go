@@ -33,7 +33,7 @@ func payloadOf(t *testing.T, c docker.Container, flavour npm.Flavour, list []npm
 		certificate = npm.NewCertificate()
 	}
 
-	payload, err := BuildResource(target, certificate).Payload(flavour)
+	payload, err := BuildResource(target, certificate, "", "npm").Payload(flavour)
 	if err != nil {
 		t.Fatalf("payload: %v", err)
 	}
@@ -133,7 +133,9 @@ func TestGoldenMinimalProxyHost(t *testing.T) {
   "meta": {
     "managed_by": "npmplus-docker-sync",
     "managed_container": "homepage",
-    "managed_index": 0
+    "managed_container_id": "homepage-id",
+    "managed_index": 0,
+    "managed_prefix": "npm"
   }
 }`
 	if got := string(payloadOf(t, c, npm.FlavourNPMplus, list)); got != want {
@@ -173,7 +175,9 @@ func TestGoldenUpstreamNPMPayload(t *testing.T) {
   "meta": {
     "managed_by": "npmplus-docker-sync",
     "managed_container": "homepage",
-    "managed_index": 0
+    "managed_container_id": "homepage-id",
+    "managed_index": 0,
+    "managed_prefix": "npm"
   }
 }`
 	if got := string(payloadOf(t, c, npm.FlavourNPM, nil)); got != want {
@@ -210,7 +214,9 @@ func TestGoldenStream(t *testing.T) {
   "meta": {
     "managed_by": "npmplus-docker-sync",
     "managed_container": "db",
-    "managed_index": 0
+    "managed_container_id": "db-id",
+    "managed_index": 0,
+    "managed_prefix": "npm"
   }
 }`
 	if got := string(payloadOf(t, c, npm.FlavourNPMplus, list)); got != want {

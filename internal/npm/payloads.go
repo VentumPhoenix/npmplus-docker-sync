@@ -274,10 +274,39 @@ func (h *ProxyHost) npmplusOnly() []string {
 	if h.AuthRequest != "" && h.AuthRequest != "none" {
 		out = append(out, "auth_request")
 	}
+	if h.AuthRequestUpstream != "" {
+		out = append(out, "auth_request_upstream")
+	}
 	if h.LocationConfig != "" {
 		out = append(out, "location_config")
 	}
+	if h.AccessListType != "" {
+		out = append(out, "access_list_type")
+	}
 	return out
+}
+
+// stripPlus removes every NPMplus-only setting.
+//
+// Against upstream nginx-proxy-manager those fields are not just unsendable,
+// they must not take part in the comparison either: the server never returns
+// them, so a desired state that still carries them would differ from the live
+// one on every single run.
+func (h *ProxyHost) stripPlus() {
+	h.HTTP3Support = false
+	h.NoIndex = false
+	h.DisableCrowdsecAppsec = false
+	h.DisableRequestBuffering = false
+	h.DisableResponseBuffering = false
+	h.UpstreamCompression = false
+	h.FancyIndex = false
+	h.XFrameOptions = ""
+	h.AuthRequest = ""
+	h.AuthRequestUpstream = ""
+	h.LocationConfig = ""
+	for i := range h.Locations {
+		h.Locations[i].stripPlus()
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -337,6 +366,9 @@ func (h *RedirectionHost) npmplusOnly() []string {
 	}
 	return nil
 }
+
+// stripPlus implements the plusStripper interface.
+func (h *RedirectionHost) stripPlus() { h.HTTP3Support = false }
 
 // ---------------------------------------------------------------------------
 // Streams
@@ -428,6 +460,14 @@ func (s *Stream) npmplusOnly() []string {
 	return out
 }
 
+// stripPlus implements the plusStripper interface.
+func (s *Stream) stripPlus() {
+	s.ProxyProtocol = 0
+	s.ProxyTLS = false
+	s.AdvancedConfig = ""
+	s.Description = ""
+}
+
 // ---------------------------------------------------------------------------
 // Dead (404) hosts
 // ---------------------------------------------------------------------------
@@ -474,6 +514,9 @@ func (h *DeadHost) npmplusOnly() []string {
 	return nil
 }
 
+// stripPlus implements the plusStripper interface.
+func (h *DeadHost) stripPlus() { h.HTTP3Support = false }
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -482,6 +525,21 @@ func (h *DeadHost) npmplusOnly() []string {
 // NPMplus-only settings.
 type unsupportedFields interface {
 	npmplusOnly() []string
+}
+
+// plusStripper is implemented by every resource that can carry NPMplus-only
+// settings.
+type plusStripper interface {
+	stripPlus()
+}
+
+// StripNPMplus removes every NPMplus-only setting from a resource, so the
+// desired state matches what upstream nginx-proxy-manager can store and
+// return. Call it once the flavour is known, before fingerprinting.
+func StripNPMplus(r Resource) {
+	if s, ok := r.(plusStripper); ok {
+		s.stripPlus()
+	}
 }
 
 // UnsupportedByNPM returns the NPMplus-only fields the resource uses. Against

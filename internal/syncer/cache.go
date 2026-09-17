@@ -20,6 +20,11 @@ type Entry struct {
 	// tracked separately from Hash because it is not part of the write
 	// payload: both APIs toggle it through /enable and /disable.
 	Enabled bool
+	// Certificate is the certificate id attached to the resource, reported by
+	// the /status endpoint.
+	Certificate int
+	// Running mirrors the container state at the time of the last run.
+	Running bool
 }
 
 // Cache is the in-memory state cache guarding the API against redundant

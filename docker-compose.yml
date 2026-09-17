@@ -88,6 +88,15 @@ services:
       # NPM_PROXY_WEBSOCKETS: "true"
       # Take over hosts created by Redth/npm-docker-sync (docs/MIGRATION.md):
       # MIGRATE_FROM_REDTH: "false"
+      # A stopped container keeps its host; it is disabled, not deleted.
+      NPM_ON_STOP: disable
+      NPM_STOP_GRACE: 1m
+      # Refuse a run that would delete more than half of the managed hosts.
+      # See docs/DELETION.md for every rule around deletion.
+      DELETE_GUARD: "0.5"
+      # Several sync instances against one NPM: defaults to the docker daemon
+      # id, set it explicitly when the daemon id is not stable for you.
+      # SYNC_INSTANCE_ID: homelab-a
       LOG_LEVEL: info
       LOG_FORMAT: json
       HEALTH_ADDR: ":8080"

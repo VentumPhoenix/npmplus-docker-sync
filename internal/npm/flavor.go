@@ -80,6 +80,7 @@ func WithFlavour(f Flavour) Option {
 	return func(c *Client) {
 		if f != FlavourAuto {
 			c.flavour = f
+			c.flavourPinned = true
 		}
 	}
 }
