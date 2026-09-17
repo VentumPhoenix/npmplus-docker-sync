@@ -92,14 +92,9 @@ func TestAllKindsRoundTrip(t *testing.T) {
 	requireHost(t, c, npm.KindStream, streamPort)
 
 	// The redirect answers with the status code the label asked for.
-	status, _ := getThroughNPM(t, "kinds-redirect.test")
-	if status != http.StatusPermanentRedirect {
-		t.Errorf("redirect status = %d, want 308", status)
-	}
+	requireStatus(t, "kinds-redirect.test", http.StatusPermanentRedirect)
 	// The 404 host answers, but not with the backend.
-	if status, _ := getThroughNPM(t, "kinds-parked.test"); status != http.StatusNotFound {
-		t.Errorf("404 host status = %d, want 404", status)
-	}
+	requireStatus(t, "kinds-parked.test", http.StatusNotFound)
 
 	removeContainer("it-kinds")
 	mustSync(t)

@@ -60,9 +60,24 @@ func TestDetectFlavour(t *testing.T) {
 			want:       FlavourNPM,
 		},
 		{
+			// Current NPMplus reports a version too, as a string. Only the
+			// shape tells the two apart, so a "is the field there" check would
+			// read this as upstream NPM and send it the wrong payloads.
+			name:       "npmplus reports its version as a string",
+			proxyHosts: `[]`,
+			health:     `{"status":"OK","setup":true,"version":"2026-07-24-r1-a30a954-2.15.1","password":true,"oidc":false}`,
+			want:       FlavourNPMplus,
+		},
+		{
 			name:       "nothing to go on defaults to npmplus",
 			proxyHosts: `[]`,
 			health:     `{"status":"OK","setup":true}`,
+			want:       FlavourNPMplus,
+		},
+		{
+			name:       "a null version is inconclusive",
+			proxyHosts: `[]`,
+			health:     `{"status":"OK","setup":true,"version":null}`,
 			want:       FlavourNPMplus,
 		},
 		{

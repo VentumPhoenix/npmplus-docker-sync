@@ -45,7 +45,26 @@ var (
 	streamPort  = env("NPM_STREAM_PORT", "8543")
 	network     = "npmsync-it"
 	project     = "npmsync-it"
+
+	// letsEncryptTarget is where the letsencrypt volume is mounted. See
+	// defaultLetsEncryptTarget for why this is not a constant.
+	letsEncryptTarget = env("NPM_LETSENCRYPT_TARGET", defaultLetsEncryptTarget(npmImage))
 )
+
+// defaultLetsEncryptTarget decides where the letsencrypt volume goes, because
+// the two images want the opposite of each other: jc21 exits with "ERROR:
+// /etc/letsencrypt is not mounted!", while NPMplus' start.sh stops when that
+// mountpoint exists, asking for it to be removed to finish the certbot
+// migration. Unlike the admin API scheme this cannot be probed - the mount has
+// to be decided before the container starts - so the image name it is.
+// NPM_LETSENCRYPT_TARGET overrides the guess for an image this does not
+// recognise; anything outside /etc/letsencrypt keeps NPMplus happy.
+func defaultLetsEncryptTarget(image string) string {
+	if strings.Contains(strings.ToLower(image), "npmplus") {
+		return "/mnt/unused-letsencrypt"
+	}
+	return "/etc/letsencrypt"
+}
 
 // shippedCredentials are the accounts the two projects ship with. When an
 // image does not seed the first user from the environment, the harness logs in
@@ -91,6 +110,12 @@ func insecureClient(timeout time.Duration) *http.Client {
 		Timeout: timeout,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // a throwaway test stack
+		},
+		// Redirects are never followed: the admin API does not use them, so a
+		// 3xx means the request went to the wrong scheme. Following it would
+		// hide that - see reachable.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
 		},
 	}
 }
@@ -179,6 +204,7 @@ func run(ctx context.Context, stdin, name string, args ...string) (string, error
 		"NPM_API_PORT="+apiPort,
 		"NPM_HTTP_PORT="+httpPort,
 		"NPM_STREAM_PORT="+streamPort,
+		"NPM_LETSENCRYPT_TARGET="+letsEncryptTarget,
 	)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -435,6 +461,14 @@ func reachable(ctx context.Context, client *http.Client, base string) bool {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	// A redirect means this scheme points at the API without serving it:
+	// NPMplus answers http on the admin port with a 301 to https. Accepting it
+	// would pin apiBase to a scheme every later request has to be redirected
+	// away from - and a redirected request lands on a self-signed certificate
+	// that only the insecure client tolerates.
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return false
+	}
 	return resp.StatusCode < 500
 }
 
@@ -658,6 +692,17 @@ func getThroughNPM(t *testing.T, host string) (int, string) {
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 	return resp.StatusCode, string(body)
+}
+
+// requireStatus asserts that nginx eventually answers for a host with a given
+// status. NPM writes its config and reloads asynchronously, so a single probe
+// right after a sync can still hit the default site.
+func requireStatus(t *testing.T, host string, want int) {
+	t.Helper()
+	waitFor(t, fmt.Sprintf("nginx to answer %d for %s", want, host), 30*time.Second, func() bool {
+		status, _ := getThroughNPM(t, host)
+		return status == want
+	})
 }
 
 // requireServed asserts that nginx answers for a host with the whoami backend.

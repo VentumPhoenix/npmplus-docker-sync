@@ -27,10 +27,14 @@ that runs the daemon.
 Two details the two server images disagree about, and how the harness deals
 with them:
 
-* **Data directories.** Both images refuse to start without them: jc21 wants
-  `/data` *and* `/etc/letsencrypt`, NPMplus wants `/data`. The compose file
-  mounts named volumes for both, and `down -v` throws them away, so every run
-  starts from an empty database.
+* **Data directories.** Both want `/data`, and they want the opposite of each
+  other for `/etc/letsencrypt`: jc21 exits with `ERROR: /etc/letsencrypt is not
+  mounted!`, while NPMplus stops when that mountpoint exists and asks for it to
+  be removed to finish its certbot migration. The compose file therefore mounts
+  the second volume at `NPM_LETSENCRYPT_TARGET`, which the harness derives from
+  the image name - the mount has to be decided before the container starts, so
+  it cannot be probed the way the API scheme is. Both are named volumes, and
+  `down -v` throws them away, so every run starts from an empty database.
 * **The admin API scheme.** NPMplus serves it over https with a self-signed
   certificate, upstream NPM over plain http. The harness probes both and uses
   whichever answers, and the tool is run with `NPM_INSECURE_SKIP_VERIFY=true`.
@@ -49,6 +53,7 @@ Useful knobs:
 | `NPM_IMAGE` | `jc21/nginx-proxy-manager:latest` | Which server to test against |
 | `NPM_IDENTITY` / `NPM_SECRET` | `admin@example.com` / `integration-secret` | Admin account |
 | `NPM_API_PORT` / `NPM_HTTP_PORT` | `8181` / `8180` | Published ports on 127.0.0.1 |
+| `NPM_LETSENCRYPT_TARGET` | `/etc/letsencrypt`, `/mnt/unused-letsencrypt` for NPMplus | Where the letsencrypt volume is mounted |
 | `KEEP_STACK=1` | — | Leave the stack running for inspection |
 | `NPM_FALLBACK_IDENTITY` / `NPM_FALLBACK_SECRET` | — | An additional account to try when the image ships an unknown default |
 
