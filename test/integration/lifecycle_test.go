@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -280,6 +281,19 @@ func TestRedthMigration(t *testing.T) {
 	}
 }
 
+// readyz asks the daemon's readiness endpoint and returns status and body.
+func readyz(t *testing.T) (int, string) {
+	t.Helper()
+
+	resp, err := http.Get("http://127.0.0.1:18080/readyz") //nolint:noctx // short test request
+	if err != nil {
+		return 0, err.Error()
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	return resp.StatusCode, strings.TrimSpace(string(body))
+}
+
 // The daemon path: no `sync --once`, but the event stream and the debouncer.
 func TestDaemonReactsToEvents(t *testing.T) {
 	c := client(t)
@@ -298,13 +312,21 @@ func TestDaemonReactsToEvents(t *testing.T) {
 	requireServed(t, domain)
 
 	// The readiness endpoint has to be green while the stream is connected.
-	resp, err := http.Get("http://127.0.0.1:18080/readyz") //nolint:noctx // short test request
-	if err != nil {
-		t.Fatalf("GET /readyz: %v", err)
+	// It is polled rather than probed once: readiness flips when the worker
+	// records the result of a run, which happens on its own goroutine after
+	// the host is already in NPM - so a single shot right after the host
+	// appears can legitimately still see "no reconciliation yet". The body is
+	// carried into the failure message, because the three 503 reasons need
+	// very different fixes.
+	status, body := http.StatusServiceUnavailable, "not probed"
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
+		if status, body = readyz(t); status == http.StatusOK {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("/readyz = %d, want 200", resp.StatusCode)
+	if status != http.StatusOK {
+		t.Errorf("/readyz = %d, want 200: %s", status, body)
 	}
 
 	removeContainer("it-daemon")
