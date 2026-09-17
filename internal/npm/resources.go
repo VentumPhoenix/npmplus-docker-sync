@@ -233,7 +233,7 @@ func (h *ProxyHost) AdoptServerState(current Resource) {
 
 // Fingerprint implements Resource.
 func (h *ProxyHost) Fingerprint() string {
-	managedBy, container, index := ownership(h.Meta)
+	managedBy, container, index, instance := ownership(h.Meta)
 	ids, listType := h.accessLists()
 	return fingerprint(struct {
 		Kind           string     `json:"kind"`
@@ -270,6 +270,7 @@ func (h *ProxyHost) Fingerprint() string {
 		ManagedBy string `json:"managed_by"`
 		Container string `json:"container"`
 		Index     int    `json:"index"`
+		Instance  string `json:"instance"`
 	}{
 		Kind:           string(KindProxy),
 		Domains:        NormalizeDomains(h.DomainNames),
@@ -305,6 +306,7 @@ func (h *ProxyHost) Fingerprint() string {
 		ManagedBy: managedBy,
 		Container: container,
 		Index:     index,
+		Instance:  instance,
 	})
 }
 
@@ -382,7 +384,7 @@ func (h *RedirectionHost) AdoptServerState(current Resource) {
 
 // Fingerprint implements Resource.
 func (h *RedirectionHost) Fingerprint() string {
-	managedBy, container, index := ownership(h.Meta)
+	managedBy, container, index, instance := ownership(h.Meta)
 	return fingerprint(struct {
 		Kind          string   `json:"kind"`
 		Domains       []string `json:"domains"`
@@ -401,6 +403,7 @@ func (h *RedirectionHost) Fingerprint() string {
 		ManagedBy     string   `json:"managed_by"`
 		Container     string   `json:"container"`
 		Index         int      `json:"index"`
+		Instance      string   `json:"instance"`
 	}{
 		Kind:          string(KindRedirect),
 		Domains:       NormalizeDomains(h.DomainNames),
@@ -419,6 +422,7 @@ func (h *RedirectionHost) Fingerprint() string {
 		ManagedBy:     managedBy,
 		Container:     container,
 		Index:         index,
+		Instance:      instance,
 	})
 }
 
@@ -500,7 +504,7 @@ func (s *Stream) AdoptServerState(current Resource) {
 
 // Fingerprint implements Resource.
 func (s *Stream) Fingerprint() string {
-	managedBy, container, index := ownership(s.Meta)
+	managedBy, container, index, instance := ownership(s.Meta)
 	return fingerprint(struct {
 		Kind          string `json:"kind"`
 		IncomingPort  string `json:"incoming_port"`
@@ -516,6 +520,7 @@ func (s *Stream) Fingerprint() string {
 		ManagedBy     string `json:"managed_by"`
 		Container     string `json:"container"`
 		Index         int    `json:"index"`
+		Instance      string `json:"instance"`
 	}{
 		Kind:          string(KindStream),
 		IncomingPort:  s.IncomingPort.String(),
@@ -531,6 +536,7 @@ func (s *Stream) Fingerprint() string {
 		ManagedBy:     managedBy,
 		Container:     container,
 		Index:         index,
+		Instance:      instance,
 	})
 }
 
@@ -601,7 +607,7 @@ func (h *DeadHost) AdoptServerState(current Resource) {
 
 // Fingerprint implements Resource.
 func (h *DeadHost) Fingerprint() string {
-	managedBy, container, index := ownership(h.Meta)
+	managedBy, container, index, instance := ownership(h.Meta)
 	return fingerprint(struct {
 		Kind        string   `json:"kind"`
 		Domains     []string `json:"domains"`
@@ -615,6 +621,7 @@ func (h *DeadHost) Fingerprint() string {
 		ManagedBy   string   `json:"managed_by"`
 		Container   string   `json:"container"`
 		Index       int      `json:"index"`
+		Instance    string   `json:"instance"`
 	}{
 		Kind:        string(KindDead),
 		Domains:     NormalizeDomains(h.DomainNames),
@@ -628,6 +635,7 @@ func (h *DeadHost) Fingerprint() string {
 		ManagedBy:   managedBy,
 		Container:   container,
 		Index:       index,
+		Instance:    instance,
 	})
 }
 

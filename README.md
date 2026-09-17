@@ -20,7 +20,12 @@ no clicking, no drift.
 ---
 
 > [!IMPORTANT]
-> **v1.0.0-beta.3 changes what `host` means.** It is now the upstream target,
+> **v1.0.0-beta.4 hardens deletion.** A stopped container no longer loses its
+> host, a typo in a label can no longer delete one, several instances can share
+> one NPM, and a run that would remove an implausible share of your hosts is
+> refused. See [docs/DELETION.md](docs/DELETION.md).
+>
+> **v1.0.0-beta.3 changed what `host` means.** It is now the upstream target,
 > as in [Redth/npm-docker-sync](https://github.com/Redth/npm-docker-sync); the
 > domain is `domains`. Containers no longer need `npm.enable`, and certificates
 > are selected automatically. See
@@ -52,6 +57,9 @@ auth) — the auth mode is detected at login, nothing to configure.
 | 🔁 **Event driven** | Reacts to `start` / `stop` / `die` / `destroy` within seconds |
 | 🧠 **Idempotent** | Per-kind fingerprint cache: no API call when nothing changed |
 | 🧹 **Self cleaning** | Removes resources whose container is gone — and only those it created |
+| 🛡️ **Hard to lose data** | A stopped container is disabled, not deleted; a broken label protects its hosts; a mass deletion is refused |
+| 👥 **Multi-instance** | Several Docker hosts can drive one NPM without fighting over resources |
+| 📊 **Observable** | `/healthz`, `/readyz`, `/status` (JSON) and `/metrics` (Prometheus) |
 | 🔐 **Socket-proxy ready** | Talks to Docker over TCP, so the raw socket never enters the container |
 | 🔑 **Dual auth** | NPM (Bearer JWT) and NPMplus (httpOnly cookie), auto-detected |
 | 🧊 **Debounced** | A `docker compose up` of 20 services triggers *one* reconcile |
@@ -122,6 +130,19 @@ labels:
 Labels without an index belong to index `0`, so `npm.proxy.domains` and
 `npm.0.proxy.domains` are the same thing. The index may also follow the kind
 (`npm.proxy.1.domains`), which is how Redth writes it.
+
+### Check before you deploy
+
+```bash
+npmplus-docker-sync validate              # check the labels of the running containers
+docker compose config --format json > stack.json
+npmplus-docker-sync validate stack.json   # check a stack before it even starts
+npmplus-docker-sync sync                  # exactly one reconcile, then exit
+```
+
+`validate` never contacts NPM — with a file it does not need Docker either —
+and exits non-zero when a label set is broken, which makes it a useful step in
+a pipeline before the stack goes live.
 
 ### Without compose
 
@@ -362,6 +383,11 @@ npm.proxy.noindex: "true"
 | `NPM_<KIND>_<FIELD>` / `NPM_DEFAULT_<FIELD>` | — | Default for any label field, e.g. `NPM_PROXY_WEBSOCKETS`. |
 | `STRICT_LABELS` | `false` | Skip a resource that carries an unknown label. |
 | `MIGRATE_FROM_REDTH` | `false` | Take over hosts created by `npm-docker-sync`. |
+| `NPM_ON_STOP` | `disable` | Stopped container: `disable`, `keep` or `delete` its resources. |
+| `NPM_STOP_GRACE` | `1m` | Ignore a stopped container for this long (restarts, recreates). |
+| `SYNC_INSTANCE_ID` | Docker daemon id | Only resources of this instance are managed. |
+| `DELETE_GUARD` | `0.5` | Refuse a run that deletes more than this share (`off` disables). |
+| `DELETE_GUARD_MIN` | `3` | Deletions needed before the share guard applies. |
 | `DEBOUNCE_INTERVAL` | `3s` | Quiet period after the last event. |
 | `DEBOUNCE_MAX_WAIT` | `30s` | Hard cap for a continuous event stream. |
 | `RESYNC_INTERVAL` | `5m` | Periodic full reconcile (`0` disables it). |
@@ -432,6 +458,18 @@ Every resource created by this tool is stamped with
 * A domain that another, foreign host already serves is reported as a conflict
   (with that host's id and owner) and the own host is not created, instead of
   letting the API answer `domain already in use`.
+* Resources carrying **another sync instance's** id (`managed_instance`) are
+  never touched, so several Docker hosts can drive one NPM.
+* A container whose labels cannot be parsed **protects** its resources for that
+  run: a typo must never take a host down.
+* A container that is merely **stopped** keeps its host (`NPM_ON_STOP`), with
+  its id, so a restart or an update changes nothing but the enabled flag.
+* A run that would delete an implausible share of the managed resources is
+  **refused** (`DELETE_GUARD`), as is any run that saw no containers at all or
+  that finds resources created with a different `LABEL_PREFIX`.
+
+The full list of what deletes and what protects is in
+[docs/DELETION.md](docs/DELETION.md).
 * Resources **with** the marker are deleted as soon as no labelled container
   claims their key any more.
 * If a labelled key already exists as an unmanaged resource, it is adopted and
@@ -497,6 +535,21 @@ npmplus-docker-sync ──tcp──▶ docker-socket-proxy ──unix, ro──�
 
 Details, threat model and the mount-the-socket fallback:
 [SECURITY.md](SECURITY.md).
+
+## Status and metrics
+
+`HEALTH_ADDR` also serves `/status` and `/metrics`:
+
+```bash
+curl -s localhost:8080/status | jq '.resources[] | {key, id, enabled, certificate_id}'
+curl -s localhost:8080/metrics | grep npmsync_
+```
+
+`/status` lists every managed resource with its container, id, certificate,
+enabled state and - when the API rejected it - the last error and when it will
+be retried. `/metrics` exposes runs, errors, created/updated/deleted counters,
+blocked deletions, managed resources per kind, the certificate match classes
+and whether the Docker event stream is connected.
 
 ## Health checks
 
@@ -671,6 +724,25 @@ and use `npm.proxy.certificate: "none"` to keep a host on plain HTTP.
 </details>
 
 <details>
+<summary><b>A host disappeared after a container was stopped</b></summary>
+
+Since v1.0.0-beta.4 it should not: a stopped container has its host *disabled*,
+not deleted (`NPM_ON_STOP`). If it still happens, check whether
+`NPM_ON_STOP=delete` is set, and read
+[docs/DELETION.md](docs/DELETION.md) — it lists every situation in which
+something is removed, and every safeguard that stops one.
+</details>
+
+<details>
+<summary><b>"refusing to delete: ..." in the log</b></summary>
+
+The delete guard stopped a run that would have removed an implausible share of
+your hosts. The message says why: a changed `LABEL_PREFIX`, an empty container
+list, or simply too many at once. Fix the cause, or - when the deletion really
+is intended - run once with `DELETE_GUARD=off`.
+</details>
+
+<details>
 <summary><b>A host is skipped with "domain already used by another host"</b></summary>
 
 Another host in NPM — created by hand or by a different tool — already serves
@@ -689,7 +761,9 @@ internal/certs/             certificate matching and selection
 internal/npm/               API client and the four resource models
 internal/docker/            event listener, indexed label parser, IP resolution
 internal/syncer/            debouncer, per-kind state cache, reconcile worker
-docs/                       architecture, labels (generated), configuration, migration
+test/integration/           the suite that runs against real NPM containers
+docs/                       architecture, fields (generated), labels, configuration,
+                            deletion rules, migration, compatibility
 ```
 
 ## Contributing
@@ -700,19 +774,25 @@ a test, and commits follow [Conventional Commits](https://www.conventionalcommit
 
 ## Roadmap
 
-Shipped in v1.0.0-beta.3: Redth label compatibility, automatic certificate
+Shipped in **v1.0.0-beta.3**: Redth label compatibility, automatic certificate
 selection, global field defaults, opt-out instead of opt-in, port detection,
 the NPMplus feature set and access lists by name.
 
-Next (v1.0.0-beta.4):
+Shipped in **v1.0.0-beta.4**: the deletion safeguards above, sync instances,
+`/status` and `/metrics`, the `validate` and `sync` subcommands, a field diff in
+dry-run and drift reports, plus an integration suite that runs against real NPM
+and NPMplus containers.
 
-- [ ] Upstream modes: container name, host IP with published ports, Swarm VIPs
-- [ ] Stopped vs. removed containers (`NPM_ON_STOP`, grace period, health gating)
-- [ ] Multi-instance ownership (`SYNC_INSTANCE_ID`)
-- [ ] `/status` and Prometheus `/metrics`
-- [ ] Field diff in dry-run output
+On the way to **1.0.0**:
+
+- [ ] A release candidate that runs in a real homelab for a few weeks
+- [ ] Upstream modes: container name, host IP with published ports
+- [ ] Health-gated activation (`NPM_WAIT_HEALTHY`)
 - [ ] Runtime schema check against `/api/schema`
 - [ ] Docker Swarm service labels
+
+From 1.0.0 onwards, labels, environment variables and the resource meta follow
+semantic versioning — see [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 ## Acknowledgements
 

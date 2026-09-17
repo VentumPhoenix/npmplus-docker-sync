@@ -11,8 +11,8 @@ import (
 // The certificate is passed in because it is resolved against the live
 // certificate list first (see certificates.go): "auto" only becomes an id once
 // the reconcile loop knows what exists.
-func BuildResource(t *docker.Target, certificate npm.CertificateID) npm.Resource {
-	meta := buildMeta(t, certificate)
+func BuildResource(t *docker.Target, certificate npm.CertificateID, instance, prefix string) npm.Resource {
+	meta := buildMeta(t, certificate, instance, prefix)
 	ssl := normalizeSSL(t, certificate)
 
 	switch t.Kind {
@@ -165,11 +165,20 @@ func locations(t *docker.Target) []npm.Location {
 // NPMplus takes the ACME account from its own ACME_EMAIL and ignores
 // letsencrypt_email/letsencrypt_agree, so they are only written when the
 // labels actually set them.
-func buildMeta(t *docker.Target, certificate npm.CertificateID) npm.Meta {
+func buildMeta(t *docker.Target, certificate npm.CertificateID, instance, prefix string) npm.Meta {
 	meta := npm.Meta{
 		npm.MetaManagedBy: npm.ManagedByValue,
 		npm.MetaContainer: t.ContainerName,
 		npm.MetaIndex:     t.Index,
+	}
+	if t.ContainerID != "" {
+		meta[npm.MetaContainerID] = t.ContainerID
+	}
+	if instance != "" {
+		meta[npm.MetaInstance] = instance
+	}
+	if prefix != "" {
+		meta[npm.MetaPrefix] = prefix
 	}
 	if certificate.New || t.LetsEncryptEmail != "" {
 		if t.LetsEncryptEmail != "" {

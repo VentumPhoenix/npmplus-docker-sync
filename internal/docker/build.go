@@ -18,6 +18,8 @@ func buildTarget(c Container, opts ParseOptions, key entryKey, f fieldSet) (*Tar
 		Index:         key.index,
 		ContainerID:   c.ID,
 		ContainerName: c.Name,
+		Running:       c.Running(),
+		ExplicitPlus:  explicitPlus(key.kind, f),
 	}
 
 	var err error
@@ -77,6 +79,21 @@ func buildTarget(c Container, opts ParseOptions, key entryKey, f fieldSet) (*Tar
 		return nil, err
 	}
 	return t, nil
+}
+
+// explicitPlus lists the NPMplus-only fields the labels set explicitly, in
+// canonical spelling. Defaults do not count: a warning has to mean the user
+// asked for something the server cannot do.
+func explicitPlus(kind npm.Kind, f fieldSet) []string {
+	var out []string
+	for name := range f.values {
+		definition, ok := fields.Lookup(kind, name)
+		if ok && definition.Plus {
+			out = append(out, definition.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func buildProxy(t *Target, c Container, opts ParseOptions, f fieldSet) error {
@@ -254,7 +271,9 @@ func parseAccessList(f fieldSet, defaultType string) (ids []int, names []string,
 func parseLocations(t *Target, f fieldSet) ([]npm.Location, error) {
 	groups := make(map[int]map[string]string)
 	for field := range f.values {
-		if !strings.HasPrefix(field, fields.Location+".") {
+		// "location_config" normalises into this namespace but is a field of
+		// the host, not a location block.
+		if !strings.HasPrefix(field, fields.Location+".") || !looksLikeLocationBlock(field) {
 			continue
 		}
 		parts := strings.SplitN(strings.TrimPrefix(field, fields.Location+"."), ".", 2)
@@ -596,6 +615,8 @@ func resolvePort(c Container, opts ParseOptions, f fieldSet, field string, fallb
 		return port, nil
 	case port == 0 && fallback > 0:
 		return fallback, nil
+	case port == 0 && (!c.Running() || opts.Offline):
+		return 0, nil
 	case port == 0:
 		return 0, fmt.Errorf("%s is required for a %s", f.name(field), f.kind.Label())
 	}
@@ -606,6 +627,12 @@ func resolvePort(c Container, opts ParseOptions, f fieldSet, field string, fallb
 	}
 	if fallback > 0 {
 		return fallback, nil
+	}
+	if !c.Running() || opts.Offline {
+		// A stopped container reports no ports, and a compose file does not
+		// have them at all. The host either exists already (and is only
+		// enabled or disabled from here on) or this is a dry check.
+		return 0, nil
 	}
 	if ports := c.ExposedPorts(); len(ports) > 0 {
 		return 0, fmt.Errorf("cannot pick an upstream port: the container exposes %s, "+
@@ -643,6 +670,12 @@ func resolveForwardHost(c Container, opts ParseOptions, f fieldSet) (string, err
 		PreferNetworks: opts.PreferNetworks,
 		StrictNetworks: opts.StrictNetworks,
 	})
+	if host == "" && (!c.Running() || opts.Offline) {
+		// A stopped container has no address. Reporting that as an error
+		// would mark the container as broken and, worse, hide the fact that
+		// its host is merely idle.
+		return "", nil
+	}
 	if host == "" {
 		if opts.StrictNetworks {
 			return "", fmt.Errorf("container is not attached to %s (attached to: %s); "+

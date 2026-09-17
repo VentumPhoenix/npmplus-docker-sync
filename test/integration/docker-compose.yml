@@ -1,0 +1,68 @@
+# Infrastructure for the integration tests: a real NPM (or NPMplus), a socket
+# proxy and a workload container. The sync tool itself is *not* part of this
+# stack - the tests run the freshly built binary with `sync --once`, which
+# makes every scenario deterministic instead of waiting for a debounce window.
+#
+# Bring it up with: make integration
+name: npmsync-it
+
+services:
+  npm:
+    image: ${NPM_IMAGE:-jc21/nginx-proxy-manager:latest}
+    container_name: npmsync-it-npm
+    restart: "no"
+    environment:
+      # Both projects seed the first user from the environment; the harness
+      # falls back to rotating the default credentials when a version does
+      # not support these.
+      INITIAL_ADMIN_EMAIL: ${NPM_IDENTITY:-admin@example.com}
+      INITIAL_ADMIN_PASSWORD: ${NPM_SECRET:-integration-secret}
+      # NPMplus needs an ACME account address even when nothing is issued.
+      ACME_EMAIL: ${NPM_IDENTITY:-admin@example.com}
+      DISABLE_IPV6: "true"
+      PUID: "0"
+      PGID: "0"
+    ports:
+      - "127.0.0.1:${NPM_API_PORT:-8181}:81"
+      - "127.0.0.1:${NPM_HTTP_PORT:-8180}:80"
+      # A stream test needs NPM to actually listen on the port it forwards.
+      - "127.0.0.1:${NPM_STREAM_PORT:-8543}:8543"
+    networks:
+      - npmsync-it
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:81/api/ >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  whoami:
+    image: traefik/whoami:latest
+    container_name: npmsync-it-whoami
+    restart: "no"
+    networks:
+      - npmsync-it
+    # Deliberately unlabelled: every test attaches its own container with the
+    # labels it wants to exercise.
+
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: npmsync-it-socket-proxy
+    restart: "no"
+    environment:
+      CONTAINERS: "1"
+      EVENTS: "1"
+      PING: "1"
+      INFO: "1"
+      # Everything else stays denied, which is what the docs promise.
+      POST: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "127.0.0.1:${SOCKET_PROXY_PORT:-8182}:2375"
+    networks:
+      - npmsync-it
+
+networks:
+  npmsync-it:
+    name: npmsync-it

@@ -1,0 +1,15 @@
+{
+  "_comment": [
+    "Which upstream refs the contract test validates against.",
+    "A ref is a release tag or a branch; the vendoring script tries tags first.",
+    "Add the release tags of every NPM/NPMplus version this project supports -",
+    "development branches are an early warning, not what users run.",
+    "Re-vendor with: make schemas"
+  ],
+  "npmplus": [
+    "develop"
+  ],
+  "npm": [
+    "master"
+  ]
+}

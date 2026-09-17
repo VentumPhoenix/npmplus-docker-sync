@@ -609,12 +609,18 @@ func IsInverseAlias(name string) (string, bool) {
 // and lower-cases the result, so ssl.hsts.subdomains, ssl.hsts_subdomains and
 // ssl-hsts-subdomains are the same field.
 func normalize(name string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
-	name = strings.NewReplacer("_", ".", "-", ".").Replace(name)
-	for strings.Contains(name, "..") {
-		name = strings.ReplaceAll(name, "..", ".")
+	name = strings.NewReplacer("_", ".", "-", ".").Replace(strings.ToLower(name))
+	parts := strings.Split(name, ".")
+	out := parts[:0]
+	for _, part := range parts {
+		// Trimming per segment keeps the result idempotent: "npm. proxy" and
+		// "npm.proxy" have to normalise to the same field, or a lookup and
+		// the key it was stored under drift apart.
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
 	}
-	return strings.Trim(name, ".")
+	return strings.Join(out, ".")
 }
 
 // Normalize exposes the label-name normalisation used for lookups.

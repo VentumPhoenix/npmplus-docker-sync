@@ -52,6 +52,10 @@ func (m AuthMode) String() string {
 	}
 }
 
+// probeCooldown throttles flavour re-detection: a run that rejects fifty
+// hosts must not probe fifty times.
+const probeCooldown = 30 * time.Second
+
 // refreshWindow is how long before the reported expiry the client renews
 // its session proactively.
 const refreshWindow = 5 * time.Minute
@@ -82,6 +86,14 @@ type Client struct {
 	token   string
 	expires time.Time
 	flavour Flavour
+	// flavourPinned records that the operator chose the dialect; it is then
+	// never re-probed, whatever the server answers.
+	flavourPinned bool
+	// apiVersion is the last version reported by GET /api/, used to notice an
+	// upgrade of the server while this process keeps running.
+	apiVersion string
+	// lastProbe throttles re-detection after a schema rejection.
+	lastProbe time.Time
 
 	loginMu sync.Mutex // serialises (re-)logins
 }
@@ -205,11 +217,20 @@ func (c *Client) Login(ctx context.Context) error {
 	return c.login(ctx)
 }
 
+// credentials returns the current identity and secret. They are mutable
+// because UpdateOwnCredentials can rotate them.
+func (c *Client) credentials() (identity, secret string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.identity, c.secret
+}
+
 // login performs the actual request. Callers must hold loginMu.
 func (c *Client) login(ctx context.Context) error {
+	identity, secret := c.credentials()
 	payload, err := json.Marshal(map[string]string{
-		"identity": c.identity,
-		"secret":   c.secret,
+		"identity": identity,
+		"secret":   secret,
 	})
 	if err != nil {
 		return fmt.Errorf("npm: encode credentials: %w", err)
@@ -514,6 +535,39 @@ func (c *Client) ListCertificates(ctx context.Context) ([]Certificate, error) {
 	return certs, nil
 }
 
+// UpdateOwnCredentials changes the e-mail address and the password of the
+// logged-in user.
+//
+// Both projects ship a default account that has to be rotated before the API
+// is usable; this is what the integration harness uses to do that on images
+// which do not seed the first user from the environment.
+func (c *Client) UpdateOwnCredentials(ctx context.Context, email, currentSecret, newSecret string) error {
+	profile := map[string]any{
+		"email":    email,
+		"name":     "Administrator",
+		"nickname": "Admin",
+	}
+	if err := c.do(ctx, http.MethodPut, "/api/users/me", profile, nil); err != nil {
+		return fmt.Errorf("npm: update the profile: %w", err)
+	}
+
+	credentials := map[string]any{
+		"type":    "password",
+		"current": currentSecret,
+		"secret":  newSecret,
+	}
+	if err := c.do(ctx, http.MethodPut, "/api/users/me/auth", credentials, nil); err != nil {
+		return fmt.Errorf("npm: update the password: %w", err)
+	}
+
+	// The old session belongs to the old password.
+	c.invalidate()
+	c.mu.Lock()
+	c.identity, c.secret = email, newSecret
+	c.mu.Unlock()
+	return nil
+}
+
 // ListAccessLists returns the access lists stored in NPM, so labels can name
 // them instead of pinning an id that differs between instances.
 func (c *Client) ListAccessLists(ctx context.Context) ([]AccessList, error) {
@@ -605,6 +659,93 @@ func (c *Client) Ping(ctx context.Context) error {
 	return c.do(ctx, http.MethodGet, "/api/", nil, nil)
 }
 
+// schemaRejection reports whether an error is the flavour mismatch both
+// servers answer with when a body carries a property their schema forbids.
+func schemaRejection(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest {
+		return false
+	}
+	return strings.Contains(strings.ToLower(apiErr.Message), "additional propert")
+}
+
+// reprobeFlavour re-runs the dialect detection after the server rejected a
+// body its schema should have accepted - which is what an upgrade from NPM to
+// NPMplus (or the other way round) looks like from here. The request that
+// triggered it is *not* retried: its body was built for the old dialect, so
+// the next reconcile is the first one that can succeed.
+func (c *Client) reprobeFlavour(ctx context.Context, reason string) {
+	c.mu.Lock()
+	if c.flavourPinned || c.now().Sub(c.lastProbe) < probeCooldown {
+		c.mu.Unlock()
+		return
+	}
+	previous := c.flavour
+	c.lastProbe = c.now()
+	c.mu.Unlock()
+
+	flavour, how, err := c.probeFlavour(ctx)
+	if err != nil {
+		c.log.Debug("could not re-probe the api flavour", slog.String("error", err.Error()))
+		return
+	}
+	if flavour == previous {
+		return
+	}
+
+	c.mu.Lock()
+	c.flavour = flavour
+	c.mu.Unlock()
+	c.log.Warn("npm api flavour changed, switching dialect",
+		slog.String("from", previous.String()),
+		slog.String("to", string(flavour)),
+		slog.String("detected_from", how),
+		slog.String("reason", reason))
+}
+
+// Recheck notices a server upgrade: when GET /api/ reports a different
+// version than before, the dialect is probed again. It is cheap enough to run
+// on every periodic resync.
+func (c *Client) Recheck(ctx context.Context) error {
+	version, err := c.serverVersion(ctx)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	previous := c.apiVersion
+	c.apiVersion = version
+	c.mu.Unlock()
+
+	if previous == "" || previous == version {
+		return nil
+	}
+	c.log.Info("npm server version changed",
+		slog.String("from", previous), slog.String("to", version))
+	c.reprobeFlavour(ctx, "server version changed")
+	return nil
+}
+
+// ServerVersion returns the version last reported by the API, "" when the
+// server does not report one (NPMplus).
+func (c *Client) ServerVersion() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.apiVersion
+}
+
+// serverVersion reads GET /api/ and renders whatever version it reports.
+func (c *Client) serverVersion(ctx context.Context) (string, error) {
+	var health struct {
+		Status  string          `json:"status"`
+		Version json.RawMessage `json:"version"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/", nil, &health); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(health.Version)), nil
+}
+
 // do executes an authenticated API call, retrying once after a 401/403 with a
 // fresh session (covers server restarts and revoked tokens).
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
@@ -624,6 +765,12 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	for attempt := 0; attempt < 2; attempt++ {
 		staleSession, err := c.attempt(ctx, method, path, payload, out)
 		if !staleSession {
+			if err != nil && schemaRejection(err) {
+				// Either the payload is genuinely wrong or the server is no
+				// longer the flavour it was at startup. Find out now; the
+				// next reconcile then writes the right dialect.
+				c.reprobeFlavour(ctx, fmt.Sprintf("%s %s rejected the payload", method, path))
+			}
 			return err
 		}
 		if attempt == 1 {

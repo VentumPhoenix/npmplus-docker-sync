@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -40,6 +42,7 @@ var (
 const eventBuffer = 256
 
 func main() {
+	mode := modeDaemon
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "version", "-v", "--version":
@@ -50,17 +53,56 @@ func main() {
 			return
 		case "healthcheck":
 			os.Exit(healthcheck(os.Getenv("HEALTH_ADDR")))
+		case "validate":
+			// Reads labels and reports what they would produce. Never writes,
+			// and never even needs the NPM API, so it can run in CI. With a
+			// file argument it does not even need Docker.
+			mode = modeValidate
+			if len(os.Args) > 2 {
+				validateTarget = os.Args[2]
+			}
+		case "sync", "once", "--once":
+			// One reconcile, then exit with a status a pipeline can read.
+			mode = modeOnce
+		default:
+			fmt.Fprintf(os.Stderr, "unknown command %q\n\n", os.Args[1])
+			usage()
+			os.Exit(2)
 		}
 	}
+	if mode == modeOnce && len(os.Args) > 2 && os.Args[2] != "--once" { //nolint:staticcheck // explicit is clearer here
+		fmt.Fprintf(os.Stderr, "unknown argument %q\n", os.Args[2])
+		os.Exit(2)
+	}
 
-	if err := run(); err != nil {
+	if err := run(mode); err != nil {
 		slog.Error("fatal", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	cfg, err := config.Load(os.Getenv, os.Environ())
+// validateTarget is the rendered compose configuration `validate` was pointed
+// at, empty when it should read the running containers instead.
+var validateTarget string
+
+// runMode is what this process was asked to do.
+type runMode int
+
+const (
+	// modeDaemon watches Docker until it is told to stop.
+	modeDaemon runMode = iota
+	// modeOnce performs a single reconcile and exits.
+	modeOnce
+	// modeValidate parses the labels and reports, without touching NPM.
+	modeValidate
+)
+
+func run(mode runMode) error {
+	load := config.Load
+	if mode == modeValidate {
+		load = config.LoadForCheck
+	}
+	cfg, err := load(os.Getenv, os.Environ())
 	if err != nil {
 		return fmt.Errorf("configuration error:\n%w", err)
 	}
@@ -83,6 +125,17 @@ func run() error {
 	// component drains, and the worker flushes its state to the API.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// `validate <file>` works entirely offline: no Docker, no NPM.
+	if mode == modeValidate && validateTarget != "" {
+		return validateFile(validateTarget, docker.ParseOptions{
+			Prefix:           cfg.LabelPrefix,
+			Defaults:         cfg.Defaults,
+			ExposedByDefault: cfg.ExposedByDefault,
+			StrictLabels:     cfg.StrictLabels,
+			PortPreference:   cfg.PortPreference,
+		}, log)
+	}
 
 	dockerClient, err := docker.NewClient(cfg.DockerHost)
 	if err != nil {
@@ -130,9 +183,24 @@ func run() error {
 	if summary, err := listener.Summarize(ctx); err == nil {
 		log.Info("container overview",
 			slog.Int("managed", summary.Managed),
+			slog.Int("stopped", summary.Stopped),
 			slog.Int("opted_out", summary.OptedOut),
 			slog.Int("without_labels", summary.Unlabeled))
 	}
+
+	// validate never touches NPM: it is the pre-deploy check, and a broken
+	// API must not make it fail.
+	if mode == modeValidate {
+		return validate(ctx, listener)
+	}
+
+	// Several sync instances may share one NPM. The daemon id is stable per
+	// Docker host and needs no configuration; SYNC_INSTANCE_ID overrides it.
+	instanceID := cfg.InstanceID
+	if instanceID == "" {
+		instanceID = listener.DaemonID(ctx)
+	}
+	log.Info("sync instance", slog.String("id", instanceID))
 	log.Debug("upstream host resolution",
 		slog.Bool("resolve_ip", cfg.ResolveIP),
 		slog.Bool("strict_networks", parseOpts.StrictNetworks),
@@ -149,7 +217,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := loginWithRetry(ctx, npmClient, log); err != nil {
+	if err := loginWithRetry(ctx, npmClient, log, time.Second); err != nil {
 		return err
 	}
 	// NPM and NPMplus disagree about which properties a write payload may
@@ -170,7 +238,20 @@ func run() error {
 		CertificateAutoCreate: cfg.CertificateAutoCreate,
 		CertificatePoll:       cfg.CertificatePoll,
 		MigrateFromRedth:      cfg.MigrateFromRedth,
+		OnStop:                cfg.OnStop,
+		StopGrace:             cfg.StopGrace,
+		InstanceID:            instanceID,
+		LabelPrefix:           cfg.LabelPrefix,
+		DeleteGuard:           cfg.DeleteGuard,
+		DeleteGuardMin:        cfg.DeleteGuardMin,
 	}, log.With(slog.String("component", "sync")))
+
+	// One reconcile, then exit: the form a pipeline or a test harness wants.
+	if mode == modeOnce {
+		res, err := worker.Reconcile(ctx)
+		log.Info("single reconcile finished", slog.Any("result", res))
+		return err
+	}
 
 	events := make(chan docker.Event, eventBuffer)
 	batches := make(chan []docker.Event, 1)
@@ -203,7 +284,7 @@ func run() error {
 		}
 	}()
 
-	shutdownHealth := startHealthServer(cfg, worker, log)
+	shutdownHealth := startHealthServer(cfg, worker, instanceID, log)
 
 	<-ctx.Done()
 	log.Info("shutdown signal received, draining")
@@ -215,11 +296,32 @@ func run() error {
 	return workerErr
 }
 
+// validate parses the labels of the running containers and reports what they
+// would produce. It writes nothing and never contacts NPM, so it can run
+// before a deploy - or in CI against a compose stack that was just started.
+func validate(ctx context.Context, listener *docker.Listener) error {
+	containers, err := listener.Containers(ctx)
+	if err != nil {
+		return err
+	}
+	return report(docker.Scan(containers, listener.Options()))
+}
+
+// loginClient is the slice of the NPM client the login retry needs, so the
+// wait loop can be tested without a server that sleeps.
+type loginClient interface {
+	Login(ctx context.Context) error
+	BaseURL() string
+	AuthMode() npm.AuthMode
+}
+
 // loginWithRetry waits for NPM to become available; the container is often
 // started in parallel with NPM itself.
-func loginWithRetry(ctx context.Context, client *npm.Client, log *slog.Logger) error {
+func loginWithRetry(ctx context.Context, client loginClient, log *slog.Logger, backoff time.Duration) error {
 	const maxAttempts = 10
-	backoff := time.Second
+	if backoff <= 0 {
+		backoff = time.Second
+	}
 
 	for attempt := 1; ; attempt++ {
 		err := client.Login(ctx)
@@ -251,41 +353,16 @@ func loginWithRetry(ctx context.Context, client *npm.Client, log *slog.Logger) e
 	}
 }
 
-// startHealthServer exposes /healthz and /readyz when HEALTH_ADDR is set.
-// It returns a shutdown function.
-func startHealthServer(cfg *config.Config, worker *syncer.Worker, log *slog.Logger) func() {
+// startHealthServer exposes /healthz, /readyz, /status and /metrics when
+// HEALTH_ADDR is set. It returns a shutdown function.
+func startHealthServer(cfg *config.Config, worker *syncer.Worker, instance string, log *slog.Logger) func() {
 	if cfg.HealthAddr == "" {
 		return func() {}
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte("ok\n"))
-	})
-	// Readiness tracks the dependencies, not the workload: a single resource
-	// NPM rejected (a typo in one label, say) leaves every other host in sync,
-	// and restarting the container would not fix it. Those are reported as a
-	// counter in the body instead.
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		status := worker.Status()
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		switch {
-		case status.LastRun.IsZero():
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte("no reconciliation yet\n"))
-		case status.Err != nil:
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = fmt.Fprintf(w, "docker or the npm api is unreachable: %v\n", status.Err)
-		default:
-			_, _ = fmt.Fprintf(w, "ok: %d managed hosts, %d failed, last sync %s\n",
-				status.Managed, status.Failed, status.LastRun.UTC().Format(time.RFC3339))
-		}
-	})
-
 	srv := &http.Server{
 		Addr:              cfg.HealthAddr,
-		Handler:           mux,
+		Handler:           healthMux(cfg, worker, instance, log),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
@@ -300,6 +377,165 @@ func startHealthServer(cfg *config.Config, worker *syncer.Worker, log *slog.Logg
 		defer cancel()
 		_ = srv.Shutdown(ctx)
 	}
+}
+
+// healthMux builds the observability endpoints. It is separate from the server
+// so the handlers can be exercised without binding a port.
+func healthMux(cfg *config.Config, worker *syncer.Worker, instance string, log *slog.Logger) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	// Readiness tracks the dependencies, not the workload: a single resource
+	// NPM rejected (a typo in one label, say) leaves every other host in sync,
+	// and restarting the container would not fix it. Those are reported as a
+	// counter in the body instead. A Docker event stream that has been down
+	// for minutes *is* a readiness problem: from then on the tool only reacts
+	// on the periodic resync.
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		status := worker.Status()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		down := status.Stream.Down(time.Now())
+		switch {
+		case status.LastRun.IsZero():
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("no reconciliation yet\n"))
+		case status.Err != nil:
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = fmt.Fprintf(w, "docker or the npm api is unreachable: %v\n", status.Err)
+		case down > syncer.StreamDownGrace:
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = fmt.Fprintf(w, "docker event stream has been down for %s: %s\n",
+				down.Round(time.Second), status.Stream.LastError)
+		default:
+			_, _ = fmt.Fprintf(w, "ok: %d managed hosts, %d failed, last sync %s\n",
+				status.Managed, status.Failed, status.LastRun.UTC().Format(time.RFC3339))
+			if status.Blocked != "" {
+				_, _ = fmt.Fprintf(w, "deletions blocked: %s\n", status.Blocked)
+			}
+		}
+	})
+	mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if err := json.NewEncoder(w).Encode(statusDocument(worker, cfg, instance)); err != nil {
+			log.Debug("status response failed", slog.String("error", err.Error()))
+		}
+	})
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		_, _ = w.Write([]byte(renderMetrics(worker.Metrics(), worker.Status())))
+	})
+
+	return mux
+}
+
+// statusReport is the JSON document served by /status.
+type statusReport struct {
+	Version   string                  `json:"version"`
+	Instance  string                  `json:"instance"`
+	DryRun    bool                    `json:"dry_run"`
+	LastRun   *time.Time              `json:"last_run,omitempty"`
+	Managed   int                     `json:"managed"`
+	Failed    int                     `json:"failed"`
+	Error     string                  `json:"error,omitempty"`
+	Blocked   string                  `json:"deletions_blocked,omitempty"`
+	Stream    streamReport            `json:"event_stream"`
+	Resources []syncer.ResourceStatus `json:"resources"`
+}
+
+// streamReport describes the Docker event subscription.
+type streamReport struct {
+	Connected bool   `json:"connected"`
+	Since     string `json:"since,omitempty"`
+	LastError string `json:"last_error,omitempty"`
+}
+
+// statusDocument assembles the /status payload.
+func statusDocument(worker *syncer.Worker, cfg *config.Config, instance string) statusReport {
+	status := worker.Status()
+	report := statusReport{
+		Version:   version,
+		Instance:  instance,
+		DryRun:    cfg.DryRun,
+		Managed:   status.Managed,
+		Failed:    status.Failed,
+		Blocked:   status.Blocked,
+		Resources: worker.Resources(),
+		Stream: streamReport{
+			Connected: status.Stream.Connected,
+			LastError: status.Stream.LastError,
+		},
+	}
+	if !status.LastRun.IsZero() {
+		last := status.LastRun.UTC()
+		report.LastRun = &last
+	}
+	if !status.Stream.Since.IsZero() {
+		report.Stream.Since = status.Stream.Since.UTC().Format(time.RFC3339)
+	}
+	if status.Err != nil {
+		report.Error = status.Err.Error()
+	}
+	if report.Resources == nil {
+		report.Resources = []syncer.ResourceStatus{}
+	}
+	return report
+}
+
+// renderMetrics formats the worker counters as a Prometheus exposition.
+func renderMetrics(m syncer.Metrics, status syncer.Status) string {
+	var sb strings.Builder
+	counter := func(name, help string, value uint64) {
+		fmt.Fprintf(&sb, "# HELP %s %s\n# TYPE %s counter\n%s %d\n", name, help, name, name, value)
+	}
+	gauge := func(name, help string, value float64) {
+		fmt.Fprintf(&sb, "# HELP %s %s\n# TYPE %s gauge\n%s %g\n", name, help, name, name, value)
+	}
+
+	counter("npmsync_reconcile_runs_total", "Reconcile runs performed.", m.Runs)
+	counter("npmsync_reconcile_errors_total", "Reconcile runs that reported an error.", m.RunErrors)
+	counter("npmsync_resources_created_total", "Resources created in NPM.", m.Created)
+	counter("npmsync_resources_updated_total", "Resources updated in NPM.", m.Updated)
+	counter("npmsync_resources_deleted_total", "Resources deleted from NPM.", m.Deleted)
+	counter("npmsync_resources_failed_total", "Resource operations the API rejected.", m.Failed)
+	counter("npmsync_resources_skipped_total", "Resources skipped (not ours, in backoff, protected).", m.Skipped)
+	counter("npmsync_deletions_blocked_total", "Deletions the safety guard refused.", m.DeletionsBlocked)
+
+	gauge("npmsync_managed_resources", "Resources currently under management.", float64(m.Managed))
+	gauge("npmsync_event_stream_connected", "1 when the Docker event stream is subscribed.",
+		boolGauge(status.Stream.Connected))
+	gauge("npmsync_last_run_duration_seconds", "Duration of the most recent reconcile run.",
+		m.LastDuration.Seconds())
+	if !m.LastRun.IsZero() {
+		gauge("npmsync_last_run_timestamp_seconds", "Unix time of the most recent reconcile run.",
+			float64(m.LastRun.Unix()))
+	}
+
+	sb.WriteString("# HELP npmsync_managed_resources_by_kind Resources under management per collection.\n")
+	sb.WriteString("# TYPE npmsync_managed_resources_by_kind gauge\n")
+	for _, kind := range npm.Kinds {
+		fmt.Fprintf(&sb, "npmsync_managed_resources_by_kind{kind=%q} %d\n", kind, m.ManagedByKind[kind])
+	}
+
+	sb.WriteString("# HELP npmsync_certificate_selections_total Certificates chosen, by match class.\n")
+	sb.WriteString("# TYPE npmsync_certificate_selections_total counter\n")
+	classes := make([]string, 0, len(m.CertificateClass))
+	for class := range m.CertificateClass {
+		classes = append(classes, class)
+	}
+	sort.Strings(classes)
+	for _, class := range classes {
+		fmt.Fprintf(&sb, "npmsync_certificate_selections_total{match=%q} %d\n", class, m.CertificateClass[class])
+	}
+	return sb.String()
+}
+
+func boolGauge(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // healthcheck is the container HEALTHCHECK probe: the runtime image is built
@@ -381,6 +617,14 @@ Exclude a container with npm.enable=false.
 
 Usage:
   npmplus-docker-sync            run the sync daemon (configured via environment)
+  npmplus-docker-sync sync       perform one reconcile and exit
+  npmplus-docker-sync validate [file]
+                                 parse the labels of the running containers -
+                                 or of a rendered compose configuration
+                                 (docker compose config --format json) - and
+                                 report what they would produce. Writes
+                                 nothing, never contacts NPM, exits non-zero
+                                 on an invalid label set.
   npmplus-docker-sync version    print version information
   npmplus-docker-sync healthcheck
                                  probe HEALTH_ADDR/readyz; exit 0 when ready
@@ -404,6 +648,10 @@ Optional environment:
   NPM_CERTIFICATE_AUTO_CREATE  request a certificate when none matches (default false)
   CERTIFICATE_POLL_INTERVAL    how often to look for new certificates (default 1m)
   MIGRATE_FROM_REDTH     take over hosts created by npm-docker-sync (default false)
+  NPM_ON_STOP            stopped container: disable (default), keep or delete
+  NPM_STOP_GRACE         ignore a stopped container for this long (default 1m)
+  SYNC_INSTANCE_ID       only manage the resources of this instance
+  DELETE_GUARD           refuse a run deleting more than this share (default 0.5)
   STRICT_LABELS          skip a resource that carries an unknown label (default false)
   DOCKER_HOST            unix:///var/run/docker.sock (default) or tcp://docker-socket-proxy:2375
   LABEL_PREFIX           label namespace (default "npm")

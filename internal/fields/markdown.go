@@ -75,6 +75,25 @@ ends up in.
 	}
 
 	sb.WriteString(`
+## NPMplus-only fields
+
+These exist only in NPMplus. Against upstream nginx-proxy-manager they are left
+out of the request and reported once per resource - but only when a label set
+them, never because of a default.
+
+| Kind | Label | API field |
+|---|---|---|
+`)
+	for _, kind := range npm.Kinds {
+		for _, f := range List(kind) {
+			if !f.Plus {
+				continue
+			}
+			fmt.Fprintf(&sb, "| `%s` | `%s` | `%s` |\n", kind, f.Name, f.APIField)
+		}
+	}
+
+	sb.WriteString(`
 ## Inverted switches
 
 NPMplus spells three settings as "disable X". The labels are positive, and the

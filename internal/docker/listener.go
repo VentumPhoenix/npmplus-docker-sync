@@ -9,12 +9,14 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/client"
 )
 
@@ -25,6 +27,13 @@ type APIClient interface {
 	Events(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error)
 	Ping(ctx context.Context) (types.Ping, error)
 	Close() error
+}
+
+// InfoClient is the optional part of the Docker API used to identify the
+// daemon. A socket proxy may well refuse /info, which is why it is separate:
+// the sync instance id then falls back to the host name.
+type InfoClient interface {
+	Info(ctx context.Context) (system.Info, error)
 }
 
 // reconnectBackoff controls how fast the event stream is re-established.
@@ -43,6 +52,54 @@ type Listener struct {
 	// to itself can change what any other container wants from NPM, and its
 	// own health flapping would otherwise trigger a reconcile every time.
 	selfID string
+
+	// streamMu guards the event stream health, which the readiness probe
+	// reports: a silently disconnected stream means the tool only reacts on
+	// the periodic resync, and that must not look healthy.
+	streamMu    sync.RWMutex
+	streamUp    bool
+	streamSince time.Time
+	streamErr   string
+}
+
+// StreamStatus describes the health of the Docker event subscription.
+type StreamStatus struct {
+	// Connected reports whether the event stream is currently subscribed.
+	Connected bool
+	// Since is when the current state began.
+	Since time.Time
+	// LastError is why the stream dropped, if it did.
+	LastError string
+}
+
+// Down reports how long the stream has been disconnected, 0 while it is up.
+func (s StreamStatus) Down(now time.Time) time.Duration {
+	if s.Connected || s.Since.IsZero() {
+		return 0
+	}
+	return now.Sub(s.Since)
+}
+
+// StreamStatus returns the health of the Docker event subscription.
+func (l *Listener) StreamStatus() StreamStatus {
+	l.streamMu.RLock()
+	defer l.streamMu.RUnlock()
+	return StreamStatus{Connected: l.streamUp, Since: l.streamSince, LastError: l.streamErr}
+}
+
+// setStreamStatus records a state change of the event stream.
+func (l *Listener) setStreamStatus(up bool, reason string) {
+	l.streamMu.Lock()
+	defer l.streamMu.Unlock()
+	if l.streamUp != up || l.streamSince.IsZero() {
+		l.streamSince = time.Now()
+	}
+	l.streamUp = up
+	if !up {
+		l.streamErr = reason
+	} else {
+		l.streamErr = ""
+	}
 }
 
 // NewClient builds a Docker SDK client for the given host. Both
@@ -95,10 +152,15 @@ func (l *Listener) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Containers returns all running containers as parser input, including their
-// network endpoints so the upstream IP can be resolved.
+// Containers returns all containers as parser input, including their network
+// endpoints so the upstream IP can be resolved.
+//
+// Stopped containers are included on purpose: "the container is gone" and
+// "the container is stopped" are very different situations, and only the
+// first one may ever remove a host (NPM_ON_STOP decides what the second one
+// does).
 func (l *Listener) Containers(ctx context.Context) ([]Container, error) {
-	summaries, err := l.api.ContainerList(ctx, container.ListOptions{})
+	summaries, err := l.api.ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("docker: list containers: %w", err)
 	}
@@ -116,27 +178,41 @@ func (l *Listener) Containers(ctx context.Context) ([]Container, error) {
 	return out, nil
 }
 
-// Targets returns the desired NPM resources of all running containers.
-// Invalid definitions are logged and skipped so one broken label set cannot
-// stall the whole sync.
-func (l *Listener) Targets(ctx context.Context) ([]*Target, error) {
+// Snapshot returns the desired NPM resources of all containers, plus the
+// containers whose labels could not be parsed. Invalid definitions are logged
+// and skipped so one broken label set cannot stall the whole sync - and their
+// containers are marked protected so the broken definition cannot delete
+// anything either.
+func (l *Listener) Snapshot(ctx context.Context) (Snapshot, error) {
 	containers, err := l.Containers(ctx)
 	if err != nil {
-		return nil, err
+		return Snapshot{}, err
 	}
 	opts := l.opts
 	opts.SelfID = l.selfID
-	res := ParseAll(containers, opts)
+
+	snapshot, res := Scan(containers, opts)
 	for _, parseErr := range res.Errors {
-		l.log.Warn("ignoring invalid label definition", slog.String("error", parseErr.Error()))
+		l.log.Warn("ignoring invalid label definition (its hosts are protected from deletion)",
+			slog.String("error", parseErr.Error()))
 	}
 	for _, warning := range res.Warnings {
 		l.log.Warn(warning)
 	}
-	return res.Targets, nil
+	return snapshot, nil
 }
 
-// Summarize classifies the running containers for the start-up overview.
+// Targets returns only the desired resources. It is the convenience form used
+// by tests and the validate subcommand.
+func (l *Listener) Targets(ctx context.Context) ([]*Target, error) {
+	snapshot, err := l.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return snapshot.Targets, nil
+}
+
+// Summarize classifies the containers for the start-up overview.
 func (l *Listener) Summarize(ctx context.Context) (Summary, error) {
 	containers, err := l.Containers(ctx)
 	if err != nil {
@@ -202,6 +278,26 @@ func (l *Listener) NetworksOfContainer(ctx context.Context, name string) []strin
 	return nil
 }
 
+// DaemonID returns the id of the Docker daemon, which is the natural default
+// for the sync instance id: it is stable across restarts of this container and
+// different for every Docker host.
+//
+// It falls back to the host name when the endpoint does not expose /info - a
+// filtered socket proxy usually does not.
+func (l *Listener) DaemonID(ctx context.Context) string {
+	if client, ok := l.api.(InfoClient); ok {
+		if info, err := client.Info(ctx); err == nil && info.ID != "" {
+			return info.ID
+		} else if err != nil {
+			l.log.Debug("could not read the docker daemon id", slog.String("error", err.Error()))
+		}
+	}
+	if name, err := os.Hostname(); err == nil && name != "" {
+		return name
+	}
+	return ""
+}
+
 // Watch streams relevant container events into trigger. It reconnects with
 // exponential backoff until ctx is cancelled, then returns nil.
 //
@@ -215,6 +311,7 @@ func (l *Listener) Watch(ctx context.Context, trigger chan<- Event) error {
 		}
 
 		msgs, errs := l.api.Events(ctx, events.ListOptions{Filters: EventFilters()})
+		l.setStreamStatus(true, "")
 		l.log.Debug("subscribed to docker events")
 
 	stream:
@@ -224,6 +321,7 @@ func (l *Listener) Watch(ctx context.Context, trigger chan<- Event) error {
 				return nil
 			case msg, ok := <-msgs:
 				if !ok {
+					l.setStreamStatus(false, "event stream closed")
 					break stream
 				}
 				backoff = reconnectMin
@@ -245,11 +343,14 @@ func (l *Listener) Watch(ctx context.Context, trigger chan<- Event) error {
 				}
 			case err, ok := <-errs:
 				if !ok {
+					l.setStreamStatus(false, "event stream closed")
 					break stream
 				}
 				if err == nil || errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
+					l.setStreamStatus(false, "event stream ended")
 					break stream
 				}
+				l.setStreamStatus(false, err.Error())
 				l.log.Warn("docker event stream failed, reconnecting",
 					slog.String("error", err.Error()),
 					slog.Duration("retry_in", backoff))

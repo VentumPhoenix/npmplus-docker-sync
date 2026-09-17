@@ -148,6 +148,33 @@ Location blocks belong to a proxy host and inherit every switch from it.
 | `auth_request` | `auth` | `none`, `anubis`, `tinyauth`, `oauth2proxy`, `voidauth`, `authelia`, `authentik`, `authentik-send-basic-auth` | — | `npmplus_auth_request` | + |
 | `auth_request_upstream` | — | string | — | `npmplus_auth_request_upstream` | + |
 
+## NPMplus-only fields
+
+These exist only in NPMplus. Against upstream nginx-proxy-manager they are left
+out of the request and reported once per resource - but only when a label set
+them, never because of a default.
+
+| Kind | Label | API field |
+|---|---|---|
+| `proxy` | `access_list_type` | `npmplus_access_list_type` |
+| `proxy` | `auth_request` | `npmplus_auth_request` |
+| `proxy` | `auth_request_upstream` | `npmplus_auth_request_upstream` |
+| `proxy` | `crowdsec_appsec` | `npmplus_crowdsec_appsec` |
+| `proxy` | `fancyindex` | `npmplus_fancyindex` |
+| `proxy` | `location_config` | `npmplus_location_config` |
+| `proxy` | `noindex` | `npmplus_noindex` |
+| `proxy` | `request_buffering` | `npmplus_proxy_request_buffering` |
+| `proxy` | `response_buffering` | `npmplus_proxy_response_buffering` |
+| `proxy` | `ssl.http3` | `npmplus_http3_support` |
+| `proxy` | `upstream_compression` | `npmplus_upstream_compression` |
+| `proxy` | `x_frame_options` | `npmplus_x_frame_options` |
+| `redirect` | `ssl.http3` | `npmplus_http3_support` |
+| `stream` | `advanced_config` | `npmplus_advanced_config` |
+| `stream` | `description` | `npmplus_description` |
+| `stream` | `proxy_protocol` | `npmplus_proxy_protocol_forwarding` |
+| `stream` | `proxy_tls` | `npmplus_proxy_tls` |
+| `dead` | `ssl.http3` | `npmplus_http3_support` |
+
 ## Inverted switches
 
 NPMplus spells three settings as "disable X". The labels are positive, and the

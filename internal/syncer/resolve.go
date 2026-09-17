@@ -177,6 +177,9 @@ func (w *Worker) resolveCertificate(log *slog.Logger, t *docker.Target, live npm
 			slog.Int("certificate", selection.ID),
 			slog.String("uncovered", strings.Join(selection.Uncovered, ",")))
 	}
+	if selection.ID > 0 {
+		w.countCertificate(selection.Class.String())
+	}
 	if selection.ID > 0 && selection.ID != current {
 		log.Info("certificate selected",
 			slog.String("key", t.Key()),
@@ -201,9 +204,10 @@ const (
 
 // failure remembers a rejected resource.
 type failure struct {
-	until time.Time
-	delay time.Duration
-	hash  string
+	until  time.Time
+	delay  time.Duration
+	hash   string
+	reason string
 }
 
 // backoffKey identifies a resource across runs.
@@ -231,7 +235,7 @@ func (w *Worker) deferred(kind npm.Kind, key, hash string, now time.Time) (bool,
 }
 
 // noteFailure records a rejected resource and doubles its retry delay.
-func (w *Worker) noteFailure(kind npm.Kind, key, hash string, now time.Time) time.Duration {
+func (w *Worker) noteFailure(kind npm.Kind, key, hash, reason string, now time.Time) time.Duration {
 	w.refMu.Lock()
 	defer w.refMu.Unlock()
 
@@ -243,7 +247,7 @@ func (w *Worker) noteFailure(kind npm.Kind, key, hash string, now time.Time) tim
 			delay = backoffMax
 		}
 	}
-	w.failures[id] = failure{until: now.Add(delay), delay: delay, hash: hash}
+	w.failures[id] = failure{until: now.Add(delay), delay: delay, hash: hash, reason: reason}
 	return delay
 }
 
@@ -257,11 +261,14 @@ func (w *Worker) noteSuccess(kind npm.Kind, key string) {
 // warnUnsupported reports NPMplus-only settings once per resource when
 // talking to upstream nginx-proxy-manager, where they are left out of the
 // request instead of failing it.
-func (w *Worker) warnUnsupported(log *slog.Logger, key string, resource npm.Resource) {
+func (w *Worker) warnUnsupported(log *slog.Logger, key string, t *docker.Target, resource npm.Resource) {
 	if w.api.Flavour() != npm.FlavourNPM {
 		return
 	}
-	unsupported := npm.UnsupportedByNPM(resource)
+	// Only what the labels asked for is worth a warning. Everything else is a
+	// default this tool chose, and a warning the operator cannot act on is
+	// noise that hides the ones they can.
+	unsupported := intersect(npm.UnsupportedByNPM(resource), t.ExplicitPlus)
 	if len(unsupported) == 0 {
 		return
 	}
@@ -277,4 +284,22 @@ func (w *Worker) warnUnsupported(log *slog.Logger, key string, resource npm.Reso
 	}
 	log.Warn("npmplus-only settings ignored by upstream nginx-proxy-manager",
 		slog.String("key", key), slog.String("fields", strings.Join(unsupported, ",")))
+}
+
+// intersect returns the elements of a that also appear in b, order preserved.
+func intersect(a, b []string) []string {
+	if len(a) == 0 || len(b) == 0 {
+		return nil
+	}
+	index := make(map[string]struct{}, len(b))
+	for _, v := range b {
+		index[v] = struct{}{}
+	}
+	out := make([]string, 0, len(a))
+	for _, v := range a {
+		if _, ok := index[v]; ok {
+			out = append(out, v)
+		}
+	}
+	return out
 }

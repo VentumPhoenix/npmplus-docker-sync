@@ -143,41 +143,71 @@ func TestPayloadsSatisfyTheAPISchemas(t *testing.T) {
 	t.Parallel()
 
 	for _, flavour := range []Flavour{FlavourNPMplus, FlavourNPM} {
-		t.Run(string(flavour), func(t *testing.T) {
-			t.Parallel()
-			resources := sampleResources(t)
+		for _, ref := range vendoredRefs(t, string(flavour)) {
+			t.Run(string(flavour)+"/"+ref, func(t *testing.T) {
+				t.Parallel()
+				validateAgainst(t, flavour, ref)
+			})
+		}
+	}
+}
 
-			for _, kind := range Kinds {
-				for _, method := range []string{"post", "put"} {
-					t.Run(fmt.Sprintf("%s-%s", kind, method), func(t *testing.T) {
-						resource := resources[kind]
+// vendoredRefs lists the upstream versions whose schemas are checked in. Every
+// supported NPM and NPMplus release has one directory, so a schema change
+// between two of them fails the build instead of somebody's instance.
+func vendoredRefs(t *testing.T, flavour string) []string {
+	t.Helper()
 
-						// NPMplus stream payloads only exist with a numeric
-						// certificate reference, which the sample has.
-						payload, err := resource.Payload(flavour)
-						if err != nil {
-							t.Fatalf("Payload(%s) error: %v", flavour, err)
-						}
+	entries, err := os.ReadDir(filepath.Join("testdata", "schema", flavour))
+	if err != nil {
+		t.Fatalf("read schema directory of %s: %v", flavour, err)
+	}
+	var refs []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			refs = append(refs, entry.Name())
+		}
+	}
+	if len(refs) == 0 {
+		t.Fatalf("no vendored schemas for %s; run: make schemas", flavour)
+	}
+	return refs
+}
 
-						raw, err := json.Marshal(payload)
-						if err != nil {
-							t.Fatalf("marshal payload: %v", err)
-						}
+func validateAgainst(t *testing.T, flavour Flavour, ref string) {
+	t.Helper()
 
-						var instance any
-						if err := json.Unmarshal(raw, &instance); err != nil {
-							t.Fatalf("decode payload: %v", err)
-						}
+	resources := sampleResources(t)
 
-						schema := loadSchema(t, string(flavour), fmt.Sprintf("%s-%s.json", kind, method))
-						if err := schema.Validate(instance); err != nil {
-							t.Errorf("%s %s %s payload violates the API schema:\n%v\n\npayload: %s",
-								flavour, kind, method, err, raw)
-						}
-					})
+	for _, kind := range Kinds {
+		for _, method := range []string{"post", "put"} {
+			t.Run(fmt.Sprintf("%s-%s", kind, method), func(t *testing.T) {
+				resource := resources[kind]
+
+				// NPMplus stream payloads only exist with a numeric
+				// certificate reference, which the sample has.
+				payload, err := resource.Payload(flavour)
+				if err != nil {
+					t.Fatalf("Payload(%s) error: %v", flavour, err)
 				}
-			}
-		})
+
+				raw, err := json.Marshal(payload)
+				if err != nil {
+					t.Fatalf("marshal payload: %v", err)
+				}
+
+				var instance any
+				if err := json.Unmarshal(raw, &instance); err != nil {
+					t.Fatalf("decode payload: %v", err)
+				}
+
+				schema := loadSchema(t, string(flavour), ref, fmt.Sprintf("%s-%s.json", kind, method))
+				if err := schema.Validate(instance); err != nil {
+					t.Errorf("%s %s %s payload violates the API schema:\n%v\n\npayload: %s",
+						flavour, kind, method, err, raw)
+				}
+			})
+		}
 	}
 }
 
@@ -322,9 +352,9 @@ func TestNPMplusOnlyFieldsAreDroppedNotRejected(t *testing.T) {
 
 func boolPointer(b bool) *bool { return &b }
 
-func loadSchema(t *testing.T, flavour, name string) *jsonschema.Schema {
+func loadSchema(t *testing.T, flavour, ref, name string) *jsonschema.Schema {
 	t.Helper()
-	path := filepath.Join("testdata", "schema", flavour, name)
+	path := filepath.Join("testdata", "schema", flavour, ref, name)
 	raw, err := os.Open(path) //nolint:gosec // fixed test fixture path
 	if err != nil {
 		t.Fatalf("open %s: %v", path, err)

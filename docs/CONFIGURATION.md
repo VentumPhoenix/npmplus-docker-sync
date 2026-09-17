@@ -70,10 +70,15 @@ Use `tcp://docker-socket-proxy:2375` with a filtered socket proxy — see
 |---|---|---|
 | `LABEL_PREFIX` | `npm` | Label namespace. A trailing dot is stripped; `.` and `-` both separate it from the field. |
 | `NPM_EXPOSED_BY_DEFAULT` | `true` | Manage every container carrying labels of the namespace. `false` requires `npm.enable=true` (alias `EXPOSED_BY_DEFAULT`). |
-| `STRICT_LABELS` | `false` | Skip a resource whose labels contain an unknown field instead of only warning. |
+| `STRICT_LABELS` | `false` | Skip a resource whose labels contain an unknown field instead of only warning (alias `NPM_STRICT_LABELS`). |
 | `NPM_PORT_PREFERENCE` | `80,8080,3000,8000,443` | Order in which an exposed container port is picked when there is more than one. |
 | `MIGRATE_FROM_REDTH` | `false` | Take over hosts created by [Redth/npm-docker-sync](https://github.com/Redth/npm-docker-sync). |
-| `SYNC_KINDS` | all four | Resource types to manage, e.g. `proxy,stream`. Aliases: `proxies`, `redirection`, `dead`, `404`. |
+| `NPM_ON_STOP` | `disable` | What happens to the resources of a stopped container: `disable`, `keep` or `delete`. |
+| `NPM_STOP_GRACE` | `1m` | How long a stopped container is ignored, so a restart produces no churn. |
+| `SYNC_INSTANCE_ID` | the Docker daemon id | Identifies this instance in the resource meta; resources of another instance are never touched (alias `NPM_INSTANCE_ID`). |
+| `DELETE_GUARD` | `0.5` | Largest share of the managed resources a single run may delete. Accepts `0.5`, `50%` or `off`. |
+| `DELETE_GUARD_MIN` | `3` | How many deletions a run needs before the share guard applies. |
+| `SYNC_KINDS` | all four | Resource types to manage, e.g. `proxy,stream` (alias `RESOURCE_KINDS`). Values: `proxy`, `redirect`, `stream`, `404` (and the spellings `proxies`, `redirection`, `dead`). |
 | `DEBOUNCE_INTERVAL` | `3s` | Quiet period after the last event. |
 | `DEBOUNCE_MAX_WAIT` | `30s` | Cap for a continuous event stream. Must be ≥ interval. |
 | `RESYNC_INTERVAL` | `5m` | Periodic full reconcile; `0` disables it. |
@@ -117,6 +122,14 @@ is reported as a warning instead of being ignored silently.
 
 The full list is in [FIELDS.md](FIELDS.md).
 
+### Deletion safeguards
+
+Which of these actually delete anything — and which stop a run that would — is
+documented in [DELETION.md](DELETION.md). In short: a stopped container no
+longer loses its host, a container whose labels cannot be parsed is protected,
+and a run that would remove an implausible share of the managed resources is
+refused.
+
 ### The shutdown flush never deletes
 
 On SIGINT/SIGTERM the worker runs one last reconcile on a detached context so
@@ -144,17 +157,44 @@ restart of the stack. Deletion resumes on the next start, or at the next
   the container network. Set `RESOLVE_CONTAINER_IP=false` and give each
   resource an explicit `forward_host` in that case.
 
+## Subcommands
+
+```bash
+npmplus-docker-sync              # the daemon: watch Docker until stopped
+npmplus-docker-sync sync         # one reconcile, then exit (exit code 1 on error)
+npmplus-docker-sync validate     # parse the labels and report; never writes, never contacts NPM
+npmplus-docker-sync healthcheck  # probe HEALTH_ADDR/readyz (used by the container HEALTHCHECK)
+npmplus-docker-sync version
+```
+
+`validate` is the pre-deploy check: it exits non-zero when a container carries a
+label set that cannot be parsed, and prints every resource the labels would
+produce. With a file argument it checks a compose stack **before** it runs, and
+then needs neither Docker nor NPM:
+
+```bash
+docker compose config --format json > stack.json
+npmplus-docker-sync validate stack.json
+```
+
+The rendered configuration is read rather than the YAML, so variables,
+`extends` and multiple `-f` files are already resolved by compose itself.
+
+`sync` is the form for a pipeline or a test harness — one deterministic run, no
+debounce window. Both exit `1` when something went wrong, `0` otherwise.
+
 ## Observability
 
 | Variable | Default | Description |
 |---|---|---|
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 | `LOG_FORMAT` | `text` | `text` (human) or `json` (`log/slog`). |
-| `HEALTH_ADDR` | — | e.g. `:8080` to expose `/healthz` and `/readyz`. |
+| `HEALTH_ADDR` | — | e.g. `:8080` to expose `/healthz`, `/readyz`, `/status` and `/metrics`. Disabled when unset. |
 | `LOG_PAYLOADS` | `false` | Mirror full API request bodies into the debug log (alias `NPM_DEBUG_PAYLOADS`). |
 
-`/readyz` returns `503` until the first reconcile and whenever Docker or the
-NPM API is unreachable. A resource the API *rejected* does not make the process
+`/readyz` returns `503` until the first reconcile, whenever Docker or the NPM
+API is unreachable, and when the Docker event stream has been disconnected for
+more than two minutes. A resource the API *rejected* does not make the process
 unready — the other hosts are still in sync and a restart would not help — so
 those are reported as a counter in the body instead:
 
@@ -204,6 +244,36 @@ docker inspect --format '{{.State.Health.Status}}' npmplus-docker-sync
 
 For an external HTTP probe (Kubernetes, Uptime Kuma), query `/readyz` directly
 instead.
+
+## Status and metrics
+
+With `HEALTH_ADDR` set, four endpoints are served:
+
+| Path | Content |
+|---|---|
+| `/healthz` | liveness: the process is running |
+| `/readyz` | readiness: a reconcile happened, Docker and NPM are reachable, and the event stream is connected |
+| `/status` | JSON: every managed resource with its container, id, certificate, enabled state, last error and backoff |
+| `/metrics` | Prometheus: runs, errors, created/updated/deleted/failed/skipped, blocked deletions, managed resources per kind, certificate matches per class, event stream state |
+
+`/readyz` answers `503` before the first run, while Docker or NPM is
+unreachable, and when the Docker event stream has been down for more than two
+minutes — a silently disconnected listener only reacts on the periodic resync,
+which is not healthy.
+
+```
+$ curl -s localhost:8080/status | jq '.resources[0]'
+{
+  "kind": "proxy",
+  "key": "app.example.com",
+  "id": 42,
+  "container": "app",
+  "index": 0,
+  "enabled": true,
+  "container_running": true,
+  "certificate_id": 12
+}
+```
 
 ## Exit codes
 

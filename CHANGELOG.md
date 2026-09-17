@@ -7,6 +7,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta.4] - 2026-09-16
+
+**Deletion is now hard to trigger by accident.** Five situations in which this
+tool could remove a production host are fixed, and a guard stops the ones
+nobody thought of yet. See [docs/DELETION.md](docs/DELETION.md).
+
+### Fixed
+
+- **A typo in a label no longer deletes the host.** A container whose labels
+  could not be parsed produced no resources, so its hosts looked orphaned and
+  were deleted - `npm.proxy.port: "80a"` was enough to take a host down. Such a
+  container is now recorded as *protected*: every resource whose meta names it
+  survives the run, and the offending label is logged.
+- **A stopped or crash-looping container no longer deletes its host.** Only
+  running containers were listed, so `docker stop`, a failed update or a crash
+  loop removed the host - and the restart created a new one with a new id.
+  Containers are now listed regardless of state and `NPM_ON_STOP` decides:
+  `disable` (the default), `keep` or `delete`. `NPM_STOP_GRACE` (default `1m`)
+  swallows restarts and recreates entirely. A stopped container's resource is
+  never reconfigured, only enabled or disabled, so its identity survives.
+- **Several sync instances no longer delete each other's hosts.** Ownership was
+  decided by the `managed_by` marker alone, so two Docker hosts driving one NPM
+  each saw the other's resources as orphans. Every resource now carries a
+  `managed_instance` stamp (`SYNC_INSTANCE_ID`, defaulting to the Docker daemon
+  id); resources of another instance are never updated and never deleted.
+  Resources written by earlier releases carry no stamp and are adopted once.
+- **A mass deletion is refused.** `DELETE_GUARD` (default `0.5`) caps the share
+  of the managed resources one run may delete; a run that would delete all of
+  them, that saw no containers at all, or that finds resources created with a
+  different `LABEL_PREFIX` is stopped and reported with the reason. That covers
+  the accidents a reconciler cannot tell from an intention: a changed prefix,
+  `NPM_EXPOSED_BY_DEFAULT=false`, a socket proxy answering with an empty list.
+  `DELETE_GUARD_MIN` (default 3) keeps small setups usable, `DELETE_GUARD=off`
+  disables the guard.
+- **A broken Docker event stream is visible.** The listener reconnects
+  silently, so a disconnected stream left `/readyz` green while the tool only
+  reacted on the periodic resync. The stream state is now part of
+  `worker.Status()`, reported by `/readyz` (`503` after two minutes down) and
+  by `/status` and `/metrics`.
+- **`ssl.http3` no longer warns on every host against upstream NPM.** Its
+  default is `true`, so every proxy, redirect and 404 host reported an NPMplus
+  field the user never asked for. Only fields a *label* set are reported now,
+  and the NPMplus fields are stripped from the resource before it is compared,
+  which also removes a permanent "update on every run" for that flavour.
+- **`npm.proxy.location_config` was parsed as a malformed location block.**
+  After separator normalisation it looks like `location.config`; the field
+  table is now consulted first.
+- **`ProxyHost.npmplusOnly()` was incomplete** (`access_list_type`,
+  `auth_request_upstream`). A test now walks every `Plus` field of the table
+  and checks that it is both reported and stripped.
+- **Label normalisation was not idempotent** for names with stray spaces, and
+  a domain like `".."` produced a resource without an identity. Both were found
+  by the new fuzz targets.
+
+### Added
+
+- **`/status` and `/metrics`.** `/status` is a JSON document listing every
+  managed resource with its container, id, certificate, enabled state, last
+  error and backoff; `/metrics` is a Prometheus exposition with runs, errors,
+  created/updated/deleted/failed/skipped counters, blocked deletions, managed
+  resources per kind, certificate matches per class and the event stream state.
+- **`validate` and `sync` subcommands.** `validate` parses the labels of the
+  running containers - or of a rendered compose configuration
+  (`docker compose config --format json`), in which case it needs neither
+  Docker nor NPM - reports what they would produce and exits non-zero on a
+  broken set. `sync` performs exactly one reconcile and exits with a status
+  code, which is what a pipeline or a test harness wants.
+- **A field diff in dry-run and drift reports.** `would update` now names the
+  fields (`forward_port: 80 → 8080`), and a managed resource that was changed
+  in the NPM UI is logged with the diff before it is overwritten.
+- **Flavour re-detection at runtime.** A `400 ... additional properties` from a
+  server whose dialect was auto-detected triggers a re-probe, and the periodic
+  resync notices a changed server version - so upgrading NPM or NPMplus under a
+  running process is picked up instead of failing forever.
+- **An integration suite** (`make integration`) that runs the real binary
+  against real NPM and NPMplus containers: every resource kind created, updated
+  and deleted with an HTTP check through nginx, stop/start/restart/rename,
+  adoption, the Redth migration, the typo and prefix safeguards, two instances,
+  `DRY_RUN`, an NPM restart mid-run, the socket proxy, `NPM_SECRET_FILE`,
+  certificates (upload, wildcard vs exact, poll) and access lists by name. It
+  runs in CI against the minimum supported NPM, the current NPM and NPMplus on
+  every pull request, and against the moving tags nightly.
+- **Fuzz targets** for the label grammar (`make fuzz`) and a convergence
+  property test that reconciles twice - and once more from a cold cache -
+  against a fake that stores what the *payload* would have written.
+- **Version-pinned schema vendoring.** `internal/npm/testdata/schema/<flavour>/<ref>/`
+  holds one directory per supported release, configured in
+  `scripts/schema-refs.json`; the contract test validates every payload against
+  each of them, and the weekly drift job additionally checks the latest
+  releases.
+- **Documentation:** [DELETION.md](docs/DELETION.md) (when something is
+  deleted, and what stops it), [COMPATIBILITY.md](docs/COMPATIBILITY.md)
+  (supported versions and the 1.0 compatibility promise), a generated
+  NPMplus-only field table, the socket proxy permissions in
+  [SECURITY.md](SECURITY.md), and an upgrade guide in
+  [MIGRATION.md](docs/MIGRATION.md).
+
+### Changed
+
+- `RESOLVE_CONTAINER_IP` gained the per-resource label back (`resolve_ip`),
+  which beta.3 had dropped from the field table.
+- Coverage is measured with `-coverpkg=./...` and a minimum of 75% is enforced
+  in CI.
+
 ## [1.0.0-beta.3] - 2026-09-16
 
 **Labels from [Redth/npm-docker-sync](https://github.com/Redth/npm-docker-sync)
@@ -369,7 +473,8 @@ Upstreams also change from container names to container IPs in 2.0. Set
 - Multi-stage `scratch` image running as `1000:1000`, published for
   linux/amd64, arm64 and arm/v7.
 
-[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.3...HEAD
+[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.4...HEAD
+[1.0.0-beta.4]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.3...v1.0.0-beta.4
 [1.0.0-beta.3]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.2...v1.0.0-beta.3
 [1.0.0-beta.2]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.1...v1.0.0-beta.2
 [1.0.0-beta.1]: https://github.com/VentumPhoenix/npmplus-docker-sync/releases/tag/v1.0.0-beta.1

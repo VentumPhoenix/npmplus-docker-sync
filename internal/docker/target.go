@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strings"
 
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/certs"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/fields"
@@ -44,6 +45,22 @@ type Container struct {
 	State string
 }
 
+// Running reports whether the container is up.
+//
+// "restarting" and "paused" count as running on purpose: a crash loop or a
+// paused container is a temporary condition, and treating it as stopped would
+// disable a host every few seconds.
+func (c Container) Running() bool {
+	switch strings.ToLower(c.State) {
+	case "running", "restarting", "paused", "":
+		// An empty state means the source did not report one (unit tests,
+		// older API versions); assume the container is up.
+		return true
+	default:
+		return false
+	}
+}
+
 // ParseOptions controls how labels are turned into targets.
 type ParseOptions struct {
 	// Prefix is the label namespace, e.g. "npm".
@@ -76,6 +93,73 @@ type ParseOptions struct {
 	PortPreference []int
 	// SelfID is this process's own container: it is never managed.
 	SelfID string
+	// Offline parses labels without a Docker daemon behind them, as the
+	// `validate` subcommand does for a compose file: the container's address
+	// and exposed ports are simply not knowable, and their absence is not an
+	// error.
+	Offline bool
+}
+
+// OnStop is the policy for a container that is stopped but still exists.
+type OnStop string
+
+// The stop policies.
+const (
+	// OnStopDisable disables the resources of a stopped container (default).
+	OnStopDisable OnStop = "disable"
+	// OnStopKeep leaves them untouched and serving.
+	OnStopKeep OnStop = "keep"
+	// OnStopDelete removes them, as if the container had been destroyed.
+	OnStopDelete OnStop = "delete"
+)
+
+// ParseOnStop resolves the NPM_ON_STOP setting.
+func ParseOnStop(raw string) (OnStop, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "disable", "disabled", "off":
+		return OnStopDisable, nil
+	case "keep", "ignore", "none":
+		return OnStopKeep, nil
+	case "delete", "remove":
+		return OnStopDelete, nil
+	default:
+		return OnStopDisable, fmt.Errorf("unknown value %q (want keep, disable or delete)", raw)
+	}
+}
+
+// Snapshot is the desired state of one reconcile run, plus what the parser
+// learned about the containers it read.
+type Snapshot struct {
+	// Targets are the resources the labels ask for.
+	Targets []*Target
+	// Protected lists containers whose labels could not be parsed, by name
+	// and by id. Their resources must not be deleted in this run: a typo in
+	// one label must never take a production host down.
+	Protected map[string]struct{}
+	// Summary counts how the containers were classified.
+	Summary Summary
+	// Containers is how many containers Docker reported at all. Zero is
+	// suspicious - a filtered socket proxy answering with an empty list looks
+	// exactly like "every container is gone".
+	Containers int
+}
+
+// IsProtected reports whether a container is shielded from orphan deletion.
+func (s Snapshot) IsProtected(name, id string) bool {
+	if s.Protected == nil {
+		return false
+	}
+	if name != "" {
+		if _, ok := s.Protected[name]; ok {
+			return true
+		}
+	}
+	if id != "" {
+		if _, ok := s.Protected[id]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // Target is one desired NPM resource derived from a container. A single
@@ -86,6 +170,13 @@ type Target struct {
 	Index         int
 	ContainerID   string
 	ContainerName string
+	// Running mirrors the container state. A resource whose container is
+	// stopped is never reconfigured, only enabled or disabled (NPM_ON_STOP).
+	Running bool
+	// ExplicitPlus lists the NPMplus-only fields the labels actually set, so
+	// a warning against upstream NPM only appears when the user asked for
+	// something that flavour cannot do.
+	ExplicitPlus []string
 
 	// Shared across proxy, redirect and 404 hosts.
 	DomainNames []string
@@ -171,6 +262,21 @@ func (t *Target) Key() string {
 // "web#0 proxy app.example.com".
 func (t *Target) Describe() string {
 	return fmt.Sprintf("%s#%d %s %s", t.ContainerName, t.Index, t.Kind, t.Key())
+}
+
+// Complete reports whether the target carries everything a create or update
+// needs. It is false only for a stopped container, whose address and ports
+// Docker no longer reports: such a resource is left exactly as it is and only
+// enabled or disabled.
+func (t *Target) Complete() bool {
+	switch t.Kind {
+	case npm.KindProxy:
+		return t.ForwardHost != "" && t.ForwardPort > 0
+	case npm.KindStream:
+		return t.ForwardingHost != "" && t.IncomingPort > 0 && t.ForwardingPort > 0
+	default:
+		return len(t.DomainNames) > 0
+	}
 }
 
 // Domains returns the domain names this target serves; streams have none.
