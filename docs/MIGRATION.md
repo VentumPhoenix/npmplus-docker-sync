@@ -42,8 +42,8 @@ shorthand `npm.domains` are understood, and inside a field name `.`, `_` and
 | `NPM_PASSWORD` | accepted, canonical name `NPM_SECRET` (use `NPM_PASSWORD_FILE` for a secret) |
 | `NPM_CONTAINER_NAME` | accepted — the networks of that container are used for upstream resolution |
 | `NPM_PROXY_*` | accepted, and extended to every field and every kind (see [FIELDS.md](FIELDS.md)) |
-| `DOCKER_HOST_IP` | not yet used; upstreams over the host IP arrive with the upstream modes in beta.4 |
-| `SYNC_INSTANCE_ID` | not yet used; multi-instance ownership arrives in beta.4 |
+| `DOCKER_HOST_IP` | ignored; upstreams over the host IP need the upstream modes, which are not implemented yet (see the roadmap in the [README](../README.md#roadmap)) |
+| `SYNC_INSTANCE_ID` | used since v1.0.0-beta.4: it stamps every managed resource with `managed_instance`, and resources of another instance are never touched. Defaults to the Docker daemon id, which needs `INFO=1` on a socket proxy |
 
 Each alias that is actually used is logged once at start-up with the canonical
 name it maps to.
@@ -186,3 +186,21 @@ sees them — so if you plan to run several, set `SYNC_INSTANCE_ID` on all of th
 npmplus-docker-sync validate   # parse the labels, report, never write
 npmplus-docker-sync sync       # one reconcile, then exit with a status code
 ```
+
+## From v1.0.0-beta.4 to v1.0.0-beta.8
+
+Nothing to change: no labels, variables or defaults were renamed. These
+releases fix compatibility with servers this project already claimed to
+support - upstream NPM 2.11, which rejected every write, and current NPMplus,
+which was detected as the wrong flavour - plus the integration suite that
+proves it. See the [changelog](../CHANGELOG.md).
+
+Two notes for anyone pinning a version:
+
+* The `v1.0.0-beta.4` tag was placed on the beta.3 commit. The deletion
+  safeguards described above therefore first shipped in `v1.0.0-beta.5`; an
+  installation pinned to `v1.0.0-beta.4` is running beta.3.
+* A host without a certificate now asks for `http2_support: false`, because
+  that is what the server stores for it anyway. The result is one last update
+  per such host on the first run after the upgrade, and no update on the runs
+  after that.
