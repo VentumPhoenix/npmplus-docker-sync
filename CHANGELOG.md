@@ -7,6 +7,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta.8] - 2026-09-17
+
+### Fixed
+
+- **A flaky readiness check in the integration suite.** `/readyz` was probed
+  exactly once, right after the host had appeared in NPM - but readiness flips
+  when the worker records the result of its run, on another goroutine, so a
+  single shot could legitimately still see "no reconciliation yet" and failed
+  the daemon scenario. It is polled for up to 30 seconds now, and the response
+  body is carried into the failure message, because the three `503` reasons
+  need very different fixes. Test-only: the shipped binary is unchanged from
+  v1.0.0-beta.7.
+
+## [1.0.0-beta.7] - 2026-09-17
+
+**Payloads are written for the server's release, not just for its flavour.**
+Upstream NPM 2.11 - the oldest version this project claims to support - could
+not be written to at all.
+
+### Fixed
+
+- **Upstream NPM 2.11 rejected every proxy host and every stream.** Its request
+  schemas set `additionalProperties: false`, and two fields this tool always
+  sent only exist from 2.12 on: `trust_forwarded_proto` on proxy hosts and
+  `certificate_id` on streams. 2.11 answered `data should NOT have additional
+  properties` and the whole write failed. The payload builders now take a
+  `Dialect` - the flavour *plus* the version reported by `GET /api/`, read
+  before the first write - and leave those fields out on an older server. Left
+  out, not sent as `false`: on an update an omitted field keeps its stored
+  value, so `false` would silently turn the setting off. A server that reports
+  no comparable version - NPMplus reports a string - counts as new enough, so
+  an unknown server still gets the full payload and, at worst, its own error
+  message naming the field.
+- **Booleans returned as integers failed to decode.** NPM up to 2.11 serialises
+  the switches as the SQLite integers they are stored as (`"ssl_forced": 1`),
+  while 2.12 and NPMplus return real booleans. Every boolean in the response
+  models is read through `Flag` now, which accepts both shapes and always
+  writes a boolean back.
+- **A host without a certificate was updated on every run.** `http2_support` is
+  part of the cascade the server applies before storing a host, and the two
+  upstream releases disagree about that half of it although they ship the same
+  `cleanSslHstsData`: 2.11 stores `0` for a certificate-less host, 2.12 stores
+  what it was sent. The rule is applied here now, so the fingerprint matches
+  what the API actually stored under either release instead of producing
+  another pointless update on every Docker event and every resync. HTTP/2 needs
+  TLS, so a host without a certificate loses nothing by it.
+
+## [1.0.0-beta.6] - 2026-09-17
+
+### Fixed
+
+- **Current NPMplus was detected as upstream NPM.** The detection took any
+  `version` in `GET /api/` as the upstream marker, but NPMplus reports one too:
+  as a string (`"2026-07-24-r1-a30a954-2.15.1"`) where upstream NPM reports an
+  object (`{major, minor, revision}`). Only the shape tells the two apart,
+  so the shape decides now; an absent or `null` version stays inconclusive and
+  lands on the NPMplus default as before. A misdetected server was sent the
+  wrong payload dialect for every single write.
+- **Every stream listing against NPMplus 2.15.1 failed to decode.**
+  `npmplus_proxy_protocol_forwarding` used to be an integer enum (`0`, `1`, `2`
+  for off, v1, v2) and is declared a boolean in 2.15.1 - which still coerces
+  `0` and `1` on the way in, rejects `2` with "must be boolean", and reports
+  the stored value back as `true`/`false`. The new `ProxyProtocolLevel` decodes
+  numbers, booleans and their string spellings; writing stays numeric, because
+  that is what both generations take.
+
+### Changed
+
+- **The integration stack comes up for both images** (test-only). NPMplus
+  registers an ACME account on its first boot and stays down when that fails,
+  so the stack now registers without an address against the Let's Encrypt
+  *staging* directory instead of sending `admin@example.com` to production -
+  which production rejects, and which a throwaway stack has no business
+  creating accounts in anyway. And jc21 refuses to start *without*
+  `/etc/letsencrypt` while NPMplus refuses to start *with* it - its `start.sh`
+  reads that mountpoint as a pending certbot migration - so the mount target is
+  derived from the image name and can be overridden with
+  `NPM_LETSENCRYPT_TARGET`.
+- **The harness speaks the NPMplus session** (test-only): it keeps a cookie
+  jar, because NPMplus sets an httpOnly cookie instead of returning the JWT,
+  and it no longer accepts a redirect as "the API answers here" - NPMplus sends
+  a `301` to https on the admin port, and following it lands on a self-signed
+  certificate only the insecure client tolerates. The certificate scenario also
+  cleans up in the right order now: a certificate deleted while a host still
+  references it makes NPMplus refuse to reload nginx at all, which failed every
+  later scenario with a `500`.
+
+## [1.0.0-beta.5] - 2026-09-17
+
+> **About the `v1.0.0-beta.4` tag.** It was placed on the beta.3 commit, so the
+> release and the image published under it contain beta.3. Everything listed
+> under [1.0.0-beta.4](#100-beta4---2026-09-16) below first shipped in
+> `v1.0.0-beta.5`.
+
 ### Fixed
 
 - **The integration stack could not start.** Both server images refuse to boot
@@ -494,7 +588,11 @@ Upstreams also change from container names to container IPs in 2.0. Set
 - Multi-stage `scratch` image running as `1000:1000`, published for
   linux/amd64, arm64 and arm/v7.
 
-[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.4...HEAD
+[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.8...HEAD
+[1.0.0-beta.8]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.7...v1.0.0-beta.8
+[1.0.0-beta.7]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.6...v1.0.0-beta.7
+[1.0.0-beta.6]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.5...v1.0.0-beta.6
+[1.0.0-beta.5]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.4...v1.0.0-beta.5
 [1.0.0-beta.4]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.3...v1.0.0-beta.4
 [1.0.0-beta.3]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.2...v1.0.0-beta.3
 [1.0.0-beta.2]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.1...v1.0.0-beta.2
