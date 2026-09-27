@@ -191,6 +191,12 @@ func buildMeta(t *docker.Target, certificate npm.CertificateID, instance, prefix
 	if prefix != "" {
 		meta[npm.MetaPrefix] = prefix
 	}
+	// NPMplus groups its host lists by meta.directory. An unset group leaves
+	// the key out entirely, which is what lets AdoptMeta keep a group that was
+	// picked in the UI instead of fighting it on every run.
+	if t.Group != nil {
+		meta.SetDirectory(*t.Group)
+	}
 	if certificate.New || t.LetsEncryptEmail != "" {
 		if t.LetsEncryptEmail != "" {
 			meta["letsencrypt_email"] = t.LetsEncryptEmail

@@ -1,9 +1,14 @@
 # Label reference
 
-The exhaustive list of fields — with aliases, defaults, environment variables
-and the API field each one writes to — is generated from the code in
-[FIELDS.md](FIELDS.md). This page explains the grammar and the rules around
-it.
+**[FIELDS.md](FIELDS.md) is the complete list of labels**: every field of every
+resource kind, what it does, its aliases, its type, its default, the
+environment variable that changes that default and the NPM/NPMplus API field it
+writes to. That page is generated from the same table the parser reads, so it
+cannot go out of date.
+
+This page explains the grammar around those names and the rules that are not
+visible in a table — what `auto` resolves to, how certificates are picked, what
+happens to a stopped container, which labels exist only on NPMplus.
 
 ## Grammar
 
@@ -252,6 +257,55 @@ mandatory. The default is `global`, which means "inherit the proxy host's".
 Passing more than one id to an upstream NPM server is refused before the
 request, with a message saying so.
 
+## Groups
+
+NPMplus can fold its host lists into groups instead of showing one flat page.
+The group is a free text name, and `group` sets it — on proxy hosts,
+redirections, streams and 404 hosts alike:
+
+```yaml
+npm.proxy.domains: "app.example.com"
+npm.proxy.group: "Production"
+```
+
+Aliases are `directory` (the name the API uses), `folder`, `category` and
+`ui.group`. A group name may be at most 255 characters; a longer one is refused
+with the label named rather than silently cut in half.
+
+One label sorts one resource; one variable sorts the whole fleet:
+
+```yaml
+# on the sync container
+NPM_DEFAULT_GROUP: "Docker"        # every managed resource lands here ...
+NPM_STREAM_GROUP: "Databases"      # ... except the streams
+```
+
+### An unset group is not "ungrouped"
+
+`group` has three states, not two:
+
+| Labels say | What happens |
+|---|---|
+| nothing | The group the resource already has is left alone — including one picked by hand in the NPMplus UI. |
+| `group: Production` | The resource is moved into `Production`, and moved back if somebody drags it elsewhere in the UI. |
+| `group: none` (or `off`) | The resource is taken out of its group. |
+
+The first row is the one worth knowing about. This tool writes what the labels
+ask for and overwrites anything that drifted from it — so if "no label" meant
+"ungrouped", every container that has never heard of groups would pull its hosts
+out of the sections somebody sorted them into, on every Docker event. `none` is
+how you ask for that deliberately, and it is also how a single container opts
+out of an `NPM_DEFAULT_GROUP`.
+
+### Where the group is stored
+
+NPMplus keeps it in the resource's `meta` object, as `meta.directory` — the
+same object this tool already writes its ownership markers into, which is why
+grouping needs no newer API than any other label. Upstream
+nginx-proxy-manager accepts the key but has no grouping in its UI, so `group`
+counts as an NPMplus-only field: against upstream NPM it is left out of the
+request and reported once, exactly like `ssl.http3`.
+
 ## Custom locations
 
 ```yaml
@@ -276,11 +330,12 @@ location overrides them. Blocks are ordered by `<n>`; gaps are allowed.
 
 ## NPMplus-only fields
 
-`ssl.http3`, `noindex`, `crowdsec_appsec`, `request_buffering`,
+`group`, `ssl.http3`, `noindex`, `crowdsec_appsec`, `request_buffering`,
 `response_buffering`, `upstream_compression`, `fancyindex`, `x_frame_options`,
-`auth_request`, `auth_request_upstream`, `location_config` and the stream
-extras (`proxy_protocol`, `proxy_tls`, `advanced_config`, `description`) exist
-only in NPMplus. Against upstream nginx-proxy-manager they are left out of the
+`auth_request`, `auth_request_upstream`, `location_config`, `access_list_type`
+and the stream extras (`proxy_protocol`, `proxy_tls`, `advanced_config`,
+`description`) exist only in NPMplus. [FIELDS.md](FIELDS.md#npmplus-only-fields)
+lists them per kind. Against upstream nginx-proxy-manager they are left out of the
 request and reported once per resource — a better default must not break the
 other flavour.
 
@@ -376,6 +431,7 @@ A resource is rejected (and the reason logged with the offending label) when:
 * a domain contains a path, space, scheme or port,
 * a boolean or numeric label cannot be parsed,
 * a redirect status code is outside `300–308`,
+* a group name is longer than 255 characters,
 * a stream has neither TCP nor UDP enabled,
 * `ssl.forced=true` is combined with `certificate: none`,
 * an access list name cannot be resolved,
@@ -394,6 +450,10 @@ services:
     image: ghcr.io/example/app:1.2.3
     networks: [npm]
     labels:
+      # everything this container publishes, in one NPMplus group
+      npm.proxy.group: "Production"
+      npm.1.proxy.group: "Production"
+
       # web UI with an API location block
       npm.proxy.domains: "app.example.com, www.app.example.com"
       npm.proxy.port: "8080"

@@ -123,6 +123,7 @@ const (
 	AuthRequest         = "auth_request"
 	AuthRequestUpstream = "auth_request_upstream"
 	LocationConfig      = "location_config"
+	Group               = "group"
 	NoIndex             = "noindex"
 	CrowdsecAppsec      = "crowdsec_appsec"
 	RequestBuffering    = "request_buffering"
@@ -181,7 +182,7 @@ func certificateField() Field {
 		Type:     TypeCertificate,
 		Default:  Auto,
 		APIField: "certificate_id",
-		Doc:      "auto, a certificate id, a domain, name:<nice name>, new or none",
+		Doc:      "auto, a certificate id, a domain, `name:<nice name>`, `new` or `none`",
 	}
 }
 
@@ -258,7 +259,25 @@ func enabledField() Field {
 	return Field{
 		Name: Enabled, Aliases: []string{Enable},
 		Type: TypeBool, Default: "true", APIField: "enabled",
-		Doc: "create the resource in the disabled state when false",
+		Doc: "switch this resource off in NPM without deleting it (create/update still runs)",
+	}
+}
+
+// groupField is the NPMplus UI group ("directory"): a free text name every
+// kind can carry, so the host list can be folded into sections instead of one
+// flat page. NPMplus keeps it in the meta object, which means this tool -
+// which already writes that object - can set it without a new endpoint.
+//
+// There is no built-in default: an unset group leaves the resource wherever
+// the UI put it, and `none` is the spelling that clears one again.
+func groupField() Field {
+	return Field{
+		Name:     Group,
+		Aliases:  []string{"directory", "folder", "category", "ui.group"},
+		Type:     TypeString,
+		APIField: "meta.directory",
+		Plus:     true,
+		Doc:      "NPMplus UI group this resource is listed under; none clears it",
 	}
 }
 
@@ -303,7 +322,7 @@ func proxyFields() []Field {
 		{
 			Name: ResolveIP, Aliases: []string{"resolve_container_ip"},
 			Type: TypeBool, APIField: "forward_host",
-			Doc: "use the container IP as upstream; defaults to RESOLVE_CONTAINER_IP",
+			Doc: "use the container IP instead of its name as upstream; defaults to RESOLVE_CONTAINER_IP",
 		},
 		{
 			Name: ForwardScheme, Aliases: []string{"scheme", "upstream_scheme"},
@@ -395,6 +414,7 @@ func proxyFields() []Field {
 			Doc: "X-Frame-Options header; unset keeps the NPMplus default",
 		},
 		enabledField(),
+		groupField(),
 	}...)
 	out = append(out, sslFields()...)
 	out = append(out, letsencryptFields()...)
@@ -436,6 +456,7 @@ func redirectFields() []Field {
 			Doc: "nginx snippet inserted into the server block",
 		},
 		enabledField(),
+		groupField(),
 	}...)
 	out = append(out, sslFields()...)
 	out = append(out, letsencryptFields()...)
@@ -478,7 +499,7 @@ func streamFields() []Field {
 		},
 		{
 			Name: Protocol, Type: TypeEnum, Enum: StreamProtocolValues, APIField: "tcp_forwarding/udp_forwarding",
-			Doc: "shorthand for the tcp and udp switches",
+			Doc: "shorthand for the tcp and udp switches: tcp, udp or both",
 		},
 		{
 			Name: ProxyProtocol, Aliases: []string{"proxy_protocol_forwarding"},
@@ -504,9 +525,10 @@ func streamFields() []Field {
 		{
 			Name: Certificate, Aliases: []string{"certificate_id", "cert", "ssl", "ssl.certificate", "ssl.certificate.id"},
 			Type: TypeCertificate, Default: Auto, APIField: "certificate_id",
-			Doc: "auto, a certificate id, a domain or name:<nice name>",
+			Doc: "auto, a certificate id, a domain or `name:<nice name>`",
 		},
 		enabledField(),
+		groupField(),
 	}
 }
 
@@ -520,6 +542,7 @@ func deadFields() []Field {
 			Doc: "nginx snippet inserted into the server block",
 		},
 		enabledField(),
+		groupField(),
 	}...)
 	out = append(out, sslFields()...)
 	out = append(out, letsencryptFields()...)
@@ -530,29 +553,29 @@ func deadFields() []Field {
 // per-location subset of the proxy fields plus the location's own path and
 // type.
 var LocationFields = []Field{
-	{Name: "path", Type: TypeString, APIField: "path", Doc: "location path (required)"},
+	{Name: "path", Type: TypeString, APIField: "path", Doc: "location path, e.g. /api (required)"},
 	{
 		Name: "type", Aliases: []string{"location_type", "modifier"},
 		Type: TypeEnum, Enum: LocationTypeValues, Default: "prefix", APIField: "location_type", Plus: true,
-		Doc: "prefix, exact, regex, iregex, prefer or named",
+		Doc: "nginx location modifier: prefix, exact (`= `), regex (`~ `), iregex (`~* `), prefer (`^~ `) or named (`@`)",
 	},
-	{Name: ForwardHost, Aliases: []string{"host", "upstream"}, Type: TypeString, APIField: "forward_host", Doc: "upstream address; inherited from the host"},
-	{Name: ForwardPort, Aliases: []string{"port"}, Type: TypePort, APIField: "forward_port", Doc: "upstream port; inherited from the host"},
-	{Name: ForwardScheme, Aliases: []string{"scheme"}, Type: TypeEnum, Enum: SchemeValues, APIField: "forward_scheme", Doc: "upstream scheme; inherited from the host"},
-	{Name: AdvancedConfig, Aliases: []string{"advanced", "advanced.config"}, Type: TypeString, APIField: "advanced_config", Doc: "nginx snippet for this location"},
-	{Name: LocationConfig, Type: TypeString, APIField: "npmplus_location_config", Plus: true, Doc: "nginx snippet inside the location block"},
-	{Name: AccessList, Aliases: []string{"access_list_id", "access_list_ids", "access_lists", "accesslist"}, Type: TypeList, APIField: "npmplus_access_list_ids", Plus: true, Doc: "access list ids or names"},
-	{Name: AccessListType, Type: TypeEnum, Enum: LocationAccessListTypeValues, APIField: "npmplus_access_list_type", Plus: true, Doc: "global, public or custom"},
-	{Name: Enabled, Aliases: []string{Enable}, Type: TypeBool, Default: "true", APIField: "npmplus_enabled", Plus: true, Doc: "disable a single location"},
-	{Name: NoIndex, Type: TypeBool, APIField: "npmplus_noindex", Plus: true, Doc: "inherited from the host"},
-	{Name: CrowdsecAppsec, Aliases: []string{"crowdsec", "appsec"}, Type: TypeBool, APIField: "npmplus_crowdsec_appsec", Plus: true, Invert: true, Doc: "inherited from the host"},
-	{Name: RequestBuffering, Type: TypeBool, APIField: "npmplus_proxy_request_buffering", Plus: true, Invert: true, Doc: "inherited from the host"},
-	{Name: ResponseBuffering, Type: TypeBool, APIField: "npmplus_proxy_response_buffering", Plus: true, Invert: true, Doc: "inherited from the host"},
-	{Name: UpstreamCompression, Aliases: []string{"compression"}, Type: TypeBool, APIField: "npmplus_upstream_compression", Plus: true, Doc: "inherited from the host"},
-	{Name: FancyIndex, Aliases: []string{"fancy_index"}, Type: TypeBool, APIField: "npmplus_fancyindex", Plus: true, Doc: "inherited from the host"},
-	{Name: XFrameOptions, Aliases: []string{"xframe_options"}, Type: TypeEnum, Enum: XFrameOptionsValues, APIField: "npmplus_x_frame_options", Plus: true, Doc: "inherited from the host"},
-	{Name: AuthRequest, Aliases: []string{"auth"}, Type: TypeEnum, Enum: AuthRequestValues, APIField: "npmplus_auth_request", Plus: true, Doc: "inherited from the host"},
-	{Name: AuthRequestUpstream, Type: TypeString, APIField: "npmplus_auth_request_upstream", Plus: true, Doc: "inherited from the host"},
+	{Name: ForwardHost, Aliases: []string{"host", "upstream"}, Type: TypeString, APIField: "forward_host", Doc: "upstream address for this path; inherited from the host"},
+	{Name: ForwardPort, Aliases: []string{"port"}, Type: TypePort, APIField: "forward_port", Doc: "upstream port for this path; inherited from the host"},
+	{Name: ForwardScheme, Aliases: []string{"scheme"}, Type: TypeEnum, Enum: SchemeValues, APIField: "forward_scheme", Doc: "how to talk to the upstream of this path; inherited from the host"},
+	{Name: AdvancedConfig, Aliases: []string{"advanced", "advanced.config"}, Type: TypeString, APIField: "advanced_config", Doc: "nginx snippet inserted for this location"},
+	{Name: LocationConfig, Type: TypeString, APIField: "npmplus_location_config", Plus: true, Doc: "nginx snippet inserted inside the location block"},
+	{Name: AccessList, Aliases: []string{"access_list_id", "access_list_ids", "access_lists", "accesslist"}, Type: TypeList, APIField: "npmplus_access_list_ids", Plus: true, Doc: "access list ids or names for this path only"},
+	{Name: AccessListType, Type: TypeEnum, Enum: LocationAccessListTypeValues, APIField: "npmplus_access_list_type", Plus: true, Doc: "global inherits the host's lists, public drops them, custom uses this block's"},
+	{Name: Enabled, Aliases: []string{Enable}, Type: TypeBool, Default: "true", APIField: "npmplus_enabled", Plus: true, Doc: "switch off this one location without removing its labels"},
+	{Name: NoIndex, Type: TypeBool, APIField: "npmplus_noindex", Plus: true, Doc: "send X-Robots-Tag: noindex for this path; inherited from the host"},
+	{Name: CrowdsecAppsec, Aliases: []string{"crowdsec", "appsec"}, Type: TypeBool, APIField: "npmplus_crowdsec_appsec", Plus: true, Invert: true, Doc: "run this path through CrowdSec AppSec; inherited from the host"},
+	{Name: RequestBuffering, Type: TypeBool, APIField: "npmplus_proxy_request_buffering", Plus: true, Invert: true, Doc: "buffer the request body for this path; inherited from the host"},
+	{Name: ResponseBuffering, Type: TypeBool, APIField: "npmplus_proxy_response_buffering", Plus: true, Invert: true, Doc: "buffer the upstream response for this path; inherited from the host"},
+	{Name: UpstreamCompression, Aliases: []string{"compression"}, Type: TypeBool, APIField: "npmplus_upstream_compression", Plus: true, Doc: "let the upstream compress this path; inherited from the host"},
+	{Name: FancyIndex, Aliases: []string{"fancy_index"}, Type: TypeBool, APIField: "npmplus_fancyindex", Plus: true, Doc: "pretty directory listings for this path; inherited from the host"},
+	{Name: XFrameOptions, Aliases: []string{"xframe_options"}, Type: TypeEnum, Enum: XFrameOptionsValues, APIField: "npmplus_x_frame_options", Plus: true, Doc: "X-Frame-Options header for this path; inherited from the host"},
+	{Name: AuthRequest, Aliases: []string{"auth"}, Type: TypeEnum, Enum: AuthRequestValues, APIField: "npmplus_auth_request", Plus: true, Doc: "forward authentication for this path; inherited from the host"},
+	{Name: AuthRequestUpstream, Type: TypeString, APIField: "npmplus_auth_request_upstream", Plus: true, Doc: "address of the auth service; inherited from the host"},
 }
 
 // index is the lookup table built from Table: normalised spelling -> field.

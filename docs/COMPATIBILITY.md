@@ -15,6 +15,16 @@ The API dialect is detected at start-up and re-checked when the server rejects
 a payload its schema should have accepted, so an upgrade from one flavour to
 the other is noticed while the process keeps running.
 
+### Where NPMplus keeps things
+
+NPMplus stores the group of a host (`group`) in `meta.directory`, which is what
+this tool writes. Its development branch has begun moving `meta` into columns of
+its own (`npmplus_directory` and others) and dropping `meta` from the write
+schema; the migration that does so carries `meta.directory` into the new column,
+so nothing written today is lost. Until that reaches a release, the release
+behaviour is what is implemented and tested here — which is also why
+`ghcr.io/zoeyvid/npmplus:develop` runs nightly rather than per pull request.
+
 ### How a version gets onto that list
 
 1. Add its ref to `scripts/schema-refs.json` and run `make schemas`. The
@@ -40,7 +50,8 @@ semantic versioning:
 * **Environment variable names** and their defaults.
 * **The `meta` format** written into managed resources (`managed_by`,
   `managed_container`, `managed_container_id`, `managed_index`,
-  `managed_instance`, `managed_prefix`).
+  `managed_instance`, `managed_prefix`), plus `directory` — the group NPMplus
+  sorts its host lists by, which the `group` label sets.
 * **The exit codes** of `sync` and `validate`, and the shape of `/status` and
   `/metrics`.
 

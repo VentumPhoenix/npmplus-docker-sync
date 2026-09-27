@@ -27,18 +27,22 @@ var plusLabels = map[npm.Kind]map[string]string{
 		fields.AuthRequestUpstream: "http://authelia:9091",
 		fields.LocationConfig:      "add_header X-Test 1;",
 		fields.AccessListType:      "public",
+		fields.Group:               "Production",
 	},
 	npm.KindRedirect: {
 		fields.HTTP3: "true",
+		fields.Group: "Production",
 	},
 	npm.KindDead: {
 		fields.HTTP3: "true",
+		fields.Group: "Production",
 	},
 	npm.KindStream: {
 		fields.ProxyProtocol:  "v2",
 		fields.ProxyTLS:       "true",
 		fields.AdvancedConfig: "proxy_timeout 30s;",
 		fields.Description:    "a stream",
+		fields.Group:          "Production",
 	},
 }
 

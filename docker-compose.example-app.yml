@@ -27,6 +27,14 @@ services:
     networks:
       - npm
     labels:
+      # Sort all four into one group of the NPMplus UI (per index, because
+      # each one is its own resource). NPM_DEFAULT_GROUP does it globally.
+      npm.proxy.group: "Demo"
+      npm.1.proxy.group: "Demo"
+      npm.2.stream.group: "Demo"
+      npm.3.redirect.group: "Demo"
+      npm.4.404.group: "Demo"
+
       # 0: the application itself, with a separate /api upstream
       npm.proxy.domains: "demo.example.com"
       npm.proxy.port: "80"

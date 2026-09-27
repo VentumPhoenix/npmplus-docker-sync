@@ -45,6 +45,9 @@ func buildTarget(c Container, opts ParseOptions, key entryKey, f fieldSet) (*Tar
 		return nil, err
 	}
 	t.AdvancedConfig = f.string(fields.AdvancedConfig)
+	if t.Group, err = groupSpec(f); err != nil {
+		return nil, err
+	}
 
 	t.LetsEncryptEmail = f.string(fields.LEEmail)
 	if t.LetsEncryptAgree, err = f.boolean(fields.LEAgree); err != nil {
@@ -192,6 +195,30 @@ func isDomainish(value string) bool {
 		}
 	}
 	return false
+}
+
+// groupSpec parses the `group` label into the NPMplus UI group.
+//
+// Three states, not two: an unset label returns nil, which leaves a resource
+// in whatever group the UI put it in - a label nobody wrote must not drag a
+// host out of a group somebody sorted it into by hand. `none` is the spelling
+// that asks for exactly that, and it is also how a single container opts out
+// of an NPM_DEFAULT_GROUP.
+func groupSpec(f fieldSet) (*string, error) {
+	raw := strings.TrimSpace(f.string(fields.Group))
+	if raw == "" {
+		return nil, nil //nolint:nilnil // nil is "no group configured"
+	}
+	switch strings.ToLower(raw) {
+	case "none", "off", "-":
+		ungrouped := ""
+		return &ungrouped, nil
+	}
+	if len(raw) > npm.MaxDirectoryLength {
+		return nil, fmt.Errorf("%s: a group name may be at most %d characters, got %d",
+			f.source(fields.Group), npm.MaxDirectoryLength, len(raw))
+	}
+	return &raw, nil
 }
 
 // certificateSpec parses the `certificate` label (or its default).
