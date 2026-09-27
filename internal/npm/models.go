@@ -23,8 +23,14 @@ const (
 	// MetaInstance names the sync instance that created the resource. Several
 	// instances can drive one NPM without treating each other's hosts as
 	// orphans.
-	MetaInstance    = "managed_instance"
-	MetaPrefix      = "managed_prefix"
+	MetaInstance = "managed_instance"
+	MetaPrefix   = "managed_prefix"
+	// MetaDirectory is the UI group of a resource. NPMplus keeps it in the
+	// meta object rather than in a column of its own, which is why grouping
+	// works through the same field this tool already writes its ownership
+	// markers into. Upstream nginx-proxy-manager stores the key too, but has
+	// no grouping in its UI, so it is treated as an NPMplus-only setting.
+	MetaDirectory   = "directory"
 	ManagedByValue  = "npmplus-docker-sync"
 	CertificateNew  = "new"
 	certificateNone = 0
@@ -101,6 +107,15 @@ func AdoptMeta(desired, live Meta) Meta {
 			desired[key] = value
 		}
 	}
+	// A resource without a `group` label is not a resource that wants to be
+	// ungrouped: the group may well have been picked in the NPMplus UI. Adopt
+	// it, or the fingerprint would report a drift the write cannot settle -
+	// and every event would move the host back out of its group.
+	if _, taken := desired[MetaDirectory]; !taken {
+		if value, ok := live[MetaDirectory]; ok {
+			desired[MetaDirectory] = value
+		}
+	}
 	return desired
 }
 
@@ -129,6 +144,24 @@ func (m Meta) Instance() string { return m.text(MetaInstance) }
 
 // Prefix returns the label namespace the resource was created from.
 func (m Meta) Prefix() string { return m.text(MetaPrefix) }
+
+// Directory returns the UI group of the resource, "" for an ungrouped one.
+// NPMplus trims the stored value before it groups by it, so this does too.
+func (m Meta) Directory() string { return strings.TrimSpace(m.text(MetaDirectory)) }
+
+// SetDirectory records the UI group. An empty name is kept as an empty value
+// rather than dropped: "explicitly ungrouped" has to be distinguishable from
+// "no group configured", which is what makes clearing one possible at all.
+func (m Meta) SetDirectory(group string) {
+	if m == nil {
+		return
+	}
+	m[MetaDirectory] = strings.TrimSpace(group)
+}
+
+// ClearDirectory removes the group from the meta object, leaving the resource
+// as if it had never been grouped by this tool.
+func (m Meta) ClearDirectory() { delete(m, MetaDirectory) }
 
 func (m Meta) text(key string) string {
 	if m == nil {
@@ -160,6 +193,11 @@ const (
 
 // MaxDescriptionLength is the limit NPMplus puts on `npmplus_description`.
 const MaxDescriptionLength = 255
+
+// MaxDirectoryLength is the limit NPMplus puts on a group name: it truncates
+// anything longer when it moves the value out of the meta object into a
+// column, so a longer name would not survive an upgrade intact.
+const MaxDirectoryLength = 255
 
 // XFrameOptionsValue returns the spelling NPMplus expects for a lower case
 // x-frame-options value.

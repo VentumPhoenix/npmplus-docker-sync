@@ -293,6 +293,9 @@ func (h *ProxyHost) npmplusOnly() []string {
 	if h.AccessListType != "" {
 		out = append(out, "access_list_type")
 	}
+	if h.Meta.Directory() != "" {
+		out = append(out, "group")
+	}
 	return out
 }
 
@@ -314,6 +317,7 @@ func (h *ProxyHost) stripPlus() {
 	h.AuthRequest = ""
 	h.AuthRequestUpstream = ""
 	h.LocationConfig = ""
+	h.Meta.ClearDirectory()
 	for i := range h.Locations {
 		h.Locations[i].stripPlus()
 	}
@@ -371,15 +375,13 @@ func (h *RedirectionHost) Payload(dialect Dialect) (any, error) {
 }
 
 // npmplusOnly implements the unsupportedFields interface.
-func (h *RedirectionHost) npmplusOnly() []string {
-	if h.HTTP3Support {
-		return []string{"ssl.http3"}
-	}
-	return nil
-}
+func (h *RedirectionHost) npmplusOnly() []string { return plusList(h.HTTP3Support, h.Meta) }
 
 // stripPlus implements the plusStripper interface.
-func (h *RedirectionHost) stripPlus() { h.HTTP3Support = false }
+func (h *RedirectionHost) stripPlus() {
+	h.HTTP3Support = false
+	h.Meta.ClearDirectory()
+}
 
 // ---------------------------------------------------------------------------
 // Streams
@@ -476,6 +478,9 @@ func (s *Stream) npmplusOnly() []string {
 	if s.Description != "" {
 		out = append(out, "description")
 	}
+	if s.Meta.Directory() != "" {
+		out = append(out, "group")
+	}
 	return out
 }
 
@@ -485,6 +490,7 @@ func (s *Stream) stripPlus() {
 	s.ProxyTLS = false
 	s.AdvancedConfig = ""
 	s.Description = ""
+	s.Meta.ClearDirectory()
 }
 
 // ---------------------------------------------------------------------------
@@ -527,19 +533,30 @@ func (h *DeadHost) Payload(dialect Dialect) (any, error) {
 }
 
 // npmplusOnly implements the unsupportedFields interface.
-func (h *DeadHost) npmplusOnly() []string {
-	if h.HTTP3Support {
-		return []string{"ssl.http3"}
-	}
-	return nil
-}
+func (h *DeadHost) npmplusOnly() []string { return plusList(h.HTTP3Support, h.Meta) }
 
 // stripPlus implements the plusStripper interface.
-func (h *DeadHost) stripPlus() { h.HTTP3Support = false }
+func (h *DeadHost) stripPlus() {
+	h.HTTP3Support = false
+	h.Meta.ClearDirectory()
+}
 
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+// plusList is the NPMplus-only report of the three kinds whose only such
+// settings are HTTP/3 and the UI group.
+func plusList(http3 Flag, meta Meta) []string {
+	var out []string
+	if http3 {
+		out = append(out, "ssl.http3")
+	}
+	if meta.Directory() != "" {
+		out = append(out, "group")
+	}
+	return out
+}
 
 // unsupportedFields is implemented by every resource that can carry
 // NPMplus-only settings.

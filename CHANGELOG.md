@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`group`: proxy hosts, redirections, streams and 404 hosts sort themselves
+  into the groups of the NPMplus UI.** NPMplus can fold its host lists into
+  sections; until now that was the one thing a label could not do, so a
+  label-driven setup ended up with the flat list it was trying to avoid.
+  `npm.proxy.group: "Production"` puts a resource into a group (aliases
+  `directory`, `folder`, `category`, `ui.group`), `NPM_DEFAULT_GROUP` and
+  `NPM_<KIND>_GROUP` do it for every container at once, and the label works on
+  all four resource kinds because NPMplus groups all four of its lists.
+
+  The label has three states rather than two. No label leaves the resource in
+  whatever group it already has - including one picked by hand in the UI, which
+  is adopted so it does not read as a drift and get rewritten on every Docker
+  event. A name moves the resource there and keeps it there. `none` (or `off`)
+  is the spelling that takes a resource out of its group, and the way a single
+  container opts out of an `NPM_DEFAULT_GROUP`.
+
+  The group lives in `meta.directory`, the object this tool already writes its
+  ownership markers into, so it needs no newer NPMplus than any other label. It
+  is part of the fingerprint, so a changed group is written to an existing
+  resource. Upstream nginx-proxy-manager has no grouping in its UI, so `group`
+  is treated as NPMplus-only: left out of the request and reported once, like
+  `ssl.http3`. A name longer than 255 characters is refused with the label
+  named, because NPMplus would truncate it.
+
+### Changed
+
+- **The generated field reference documents what each label does.** The one
+  line description of every field was in the table all along but never
+  rendered; [docs/FIELDS.md](docs/FIELDS.md) now has a "What it does" column
+  for all four resource kinds and for custom locations, spells enum values out
+  instead of printing "enum", and carries the NPMplus marker next to the label
+  rather than in the last column. The location fields that used to say only
+  "inherited from the host" say what they actually switch.
+
 ## [1.0.0-beta.8] - 2026-09-17
 
 ### Fixed

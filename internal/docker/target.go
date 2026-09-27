@@ -193,6 +193,10 @@ type Target struct {
 	BlockExploits  bool
 	AdvancedConfig string
 	Enabled        bool
+	// Group is the NPMplus UI group. nil means no label and no environment
+	// default named one, in which case the group a resource already has is
+	// left alone; a pointer to "" is the explicit "ungrouped".
+	Group *string
 
 	// Proxy hosts.
 	ForwardScheme       string

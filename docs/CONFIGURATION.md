@@ -115,6 +115,11 @@ cased with `.`, `-` and `_` all written as `_`, and every alias of a field has
 its own variable — which is why Redth's `NPM_PROXY_SSL_FORCE`,
 `NPM_PROXY_BLOCK_EXPLOITS` and `NPM_PROXY_HSTS_SUBDOMAINS` work unchanged.
 
+One of them is worth naming on its own: `NPM_DEFAULT_GROUP` puts every managed
+resource into one group of the NPMplus UI, and `NPM_<KIND>_GROUP` does it per
+resource type. A container opts back out with `npm.<kind>.group: "none"` —
+see [LABELS.md](LABELS.md#groups).
+
 Labels on a container always win over these. Values are validated at start-up,
 the effective defaults that came from the environment are logged, and a
 variable in the `NPM_<KIND>_` or `NPM_DEFAULT_` namespace that names no field

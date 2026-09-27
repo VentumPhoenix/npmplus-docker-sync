@@ -269,6 +269,7 @@ func (h *ProxyHost) Fingerprint() string {
 		AuthRequest         string `json:"auth_request"`
 		AuthRequestUpstream string `json:"auth_request_upstream"`
 		LocationConfig      string `json:"location_config"`
+		Directory           string `json:"directory"`
 
 		ManagedBy string `json:"managed_by"`
 		Container string `json:"container"`
@@ -305,6 +306,7 @@ func (h *ProxyHost) Fingerprint() string {
 		AuthRequest:         strings.TrimSpace(h.AuthRequest),
 		AuthRequestUpstream: strings.TrimSpace(h.AuthRequestUpstream),
 		LocationConfig:      strings.TrimSpace(h.LocationConfig),
+		Directory:           h.Meta.Directory(),
 
 		ManagedBy: managedBy,
 		Container: container,
@@ -403,6 +405,7 @@ func (h *RedirectionHost) Fingerprint() string {
 		HTTP3         Flag     `json:"http3"`
 		BlockExploits Flag     `json:"block_exploits"`
 		Advanced      string   `json:"advanced"`
+		Directory     string   `json:"directory"`
 		ManagedBy     string   `json:"managed_by"`
 		Container     string   `json:"container"`
 		Index         int      `json:"index"`
@@ -422,6 +425,7 @@ func (h *RedirectionHost) Fingerprint() string {
 		HTTP3:         h.HTTP3Support,
 		BlockExploits: h.BlockExploits,
 		Advanced:      strings.TrimSpace(h.AdvancedConfig),
+		Directory:     h.Meta.Directory(),
 		ManagedBy:     managedBy,
 		Container:     container,
 		Index:         index,
@@ -520,6 +524,7 @@ func (s *Stream) Fingerprint() string {
 		ProxyTLS      Flag   `json:"proxy_tls"`
 		Advanced      string `json:"advanced"`
 		Description   string `json:"description"`
+		Directory     string `json:"directory"`
 		ManagedBy     string `json:"managed_by"`
 		Container     string `json:"container"`
 		Index         int    `json:"index"`
@@ -536,6 +541,7 @@ func (s *Stream) Fingerprint() string {
 		ProxyTLS:      s.ProxyTLS,
 		Advanced:      strings.TrimSpace(s.AdvancedConfig),
 		Description:   strings.TrimSpace(s.Description),
+		Directory:     s.Meta.Directory(),
 		ManagedBy:     managedBy,
 		Container:     container,
 		Index:         index,
@@ -621,6 +627,7 @@ func (h *DeadHost) Fingerprint() string {
 		HTTP2       Flag     `json:"http2"`
 		HTTP3       Flag     `json:"http3"`
 		Advanced    string   `json:"advanced"`
+		Directory   string   `json:"directory"`
 		ManagedBy   string   `json:"managed_by"`
 		Container   string   `json:"container"`
 		Index       int      `json:"index"`
@@ -635,6 +642,7 @@ func (h *DeadHost) Fingerprint() string {
 		HTTP2:       h.HTTP2Support,
 		HTTP3:       h.HTTP3Support,
 		Advanced:    strings.TrimSpace(h.AdvancedConfig),
+		Directory:   h.Meta.Directory(),
 		ManagedBy:   managedBy,
 		Container:   container,
 		Index:       index,

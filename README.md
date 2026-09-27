@@ -269,9 +269,10 @@ old "opt-in only" behaviour.
 > served from — the meaning Redth's labels have. For redirection and 404 hosts,
 > which have no upstream, `host` stays an alias for `domains`.
 
-**The full table of fields, aliases, environment variables and defaults is
-generated from the code: [docs/FIELDS.md](docs/FIELDS.md).**
-[docs/LABELS.md](docs/LABELS.md) explains the rules; the highlights:
+**Every label, what it does, its aliases, its default and the environment
+variable behind it is listed in [docs/FIELDS.md](docs/FIELDS.md)** — generated
+from the same table the parser reads. [docs/LABELS.md](docs/LABELS.md) explains
+the rules; the highlights:
 
 ### Defaults you can move
 
@@ -321,12 +322,28 @@ no port label at all. With several ports `NPM_PORT_PREFERENCE`
 (`80,8080,3000,8000,443`) decides, and when none of them matches the resource
 is skipped with a message naming the ports it found.
 
+### Hosts sort themselves into groups
+
+NPMplus can fold its host lists into groups. `group` puts a resource into one —
+on proxy hosts, redirections, streams and 404 hosts alike — and
+`NPM_DEFAULT_GROUP` does it for every container at once:
+
+```yaml
+npm.proxy.domains: "app.example.com"
+npm.proxy.group: "Production"
+```
+
+A container that says nothing about groups leaves the resource where it is,
+including in a group somebody picked by hand in the UI; `group: "none"` is the
+spelling that takes it out of one. Details in
+[docs/LABELS.md](docs/LABELS.md#groups).
+
 ### Everything NPMplus can do
 
 `auth_request` (Authelia, Authentik, tinyauth, …), `crowdsec_appsec`,
 `noindex`, `x_frame_options`, `fancyindex`, `upstream_compression`,
-`request_buffering`, `response_buffering`, `location_config`, HTTP/3, the
-stream extras and custom location blocks with their nginx modifiers are all
+`request_buffering`, `response_buffering`, `location_config`, `group`, HTTP/3,
+the stream extras and custom location blocks with their nginx modifiers are all
 labels. Against upstream nginx-proxy-manager the NPMplus-only ones are left out
 of the request and reported once, instead of failing the write.
 
