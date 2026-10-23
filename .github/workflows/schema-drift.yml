@@ -25,6 +25,10 @@ jobs:
         with:
           go-version: "1.26"
           cache: true
+          # The runner image caches an older patch release; without this a
+          # security fix of the standard library (e.g. GO-2026-6809 in 1.26.10)
+          # would not reach the tests - or the release binaries.
+          check-latest: true
 
       - uses: actions/setup-python@v6
         with:
