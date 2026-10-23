@@ -299,12 +299,14 @@ out of an `NPM_DEFAULT_GROUP`.
 
 ### Where the group is stored
 
-NPMplus keeps it in the resource's `meta` object, as `meta.directory` — the
-same object this tool already writes its ownership markers into, which is why
-grouping needs no newer API than any other label. Upstream
-nginx-proxy-manager accepts the key but has no grouping in its UI, so `group`
-counts as an NPMplus-only field: against upstream NPM it is left out of the
-request and reported once, exactly like `ssl.http3`.
+NPMplus releases with a meta object keep it there, as `meta.directory`; the
+releases after its meta-to-columns migration keep it in the column
+`npmplus_directory`, and the migration carries every existing group over. This
+tool writes whichever the server accepts - it reads that from the server's
+schema - so a group survives the upgrade. Upstream nginx-proxy-manager has no
+grouping in its UI, so `group` counts as an NPMplus-only field: against
+upstream NPM it is left out of the request and reported once, exactly like
+`ssl.http3`.
 
 ## Custom locations
 

@@ -56,7 +56,8 @@ type Resource interface {
     ResourceID() int                   // 0 until NPM assigns one
     SetResourceID(id int)
     ResourceKey() string               // identity within its kind
-    ResourceMeta() Meta                // ownership marker lives here
+    ResourceMeta() Meta                // ownership, from the meta object and the marker
+    OwnerMarked() bool                 // carries the marker line
     ResourceCertificate() CertificateID // what the live resource carries
     Fingerprint() string               // config hash, ids excluded
     AdoptServerState(current Resource) // e.g. an issued certificate id
@@ -103,9 +104,8 @@ duplicated event cannot corrupt anything.
    * not in NPM → `POST <collection>`
    * in NPM, fingerprint differs → `PUT <collection>/:id`
    * in NPM, fingerprint equal → nothing (counted as `unchanged`)
-7. Resources carrying `meta.managed_by = npmplus-docker-sync` whose key no
-   longer appears in the desired set are deleted (unless
-   `DELETE_ORPHANS=false`).
+7. Resources this tool owns (see *Ownership*) whose key no longer appears in
+   the desired set are deleted (unless `DELETE_ORPHANS=false`).
 8. The cache bucket of that kind is replaced atomically with the new state.
 
 A resource the API rejected is remembered with an exponential backoff
@@ -131,7 +131,41 @@ every `CERTIFICATE_POLL_INTERVAL`; a changed list triggers a reconcile.
 
 ## Ownership
 
-`meta.managed_by` decides what may be touched:
+Every resource this tool writes records its owner twice:
+
+* in the **ownership marker**, a comment line at the top of its advanced
+  configuration:
+
+  ```
+  # npmplus-docker-sync: managed from Docker labels, do not edit or remove this line | v=1 key=app.example.com container=web index=0 container_id=… instance=… prefix=npm
+  ```
+
+* and in the `meta` object (`managed_by`, `managed_container`, …), wherever the
+  server still accepts one.
+
+The marker exists because the meta object cannot be relied on: NPMplus moves
+its own meta keys into columns and empties `meta` on every host while doing so,
+and its write schemas stop accepting the property. The advanced configuration
+survives that migration untouched, exists on proxy, redirection and 404 hosts
+of both flavours and on NPMplus streams, is stored verbatim, and a comment
+means nothing to nginx. Upstream NPM's streams have no advanced configuration;
+they keep their owner in the meta object, which upstream NPM still has.
+
+Every resource read from the API goes through `liftOwnership`: the marker is
+taken out of the advanced configuration - so what the labels configured
+compares byte for byte - and its fields are merged into the meta object, where
+the rest of the tool looks. When the two disagree, the marker wins. A marker
+that names another key than the resource's own (a host copied in the UI, or
+one whose first domain was edited by hand), or that cannot be read, also
+discards the meta ownership: a resource of unclear origin is nobody's and is
+never deleted.
+
+A resource of ours without a marker - written by a release before
+v1.0.0-beta.10 - is updated once to receive it, the host of a stopped container
+included, which is otherwise never written. That has to happen while the
+server still has the meta object; see [MIGRATION.md](MIGRATION.md).
+
+The owner decides what may be touched:
 
 | Marker | Behaviour |
 |---|---|
@@ -143,6 +177,26 @@ every `CERTIFICATE_POLL_INTERVAL`; a changed list triggers a reconcile.
 Both tools can therefore run against the same NPM instance without deleting
 each other's work.
 
+## Server capabilities
+
+Which properties a request body may carry is decided per field, not per
+version: `npm.Dialect.Accepts(kind, field)`. The answer comes from `GET
+/api/schema`, which both servers serve and which is the very document they
+validate request bodies against - so a field a release added or retired is
+noticed without a version table. Types and allowed values are read too: the
+proxy protocol of a stream is a boolean on some NPMplus releases and a level
+0-2 on others, and NPMplus wants nginx' `$scheme` where upstream NPM says
+`auto`.
+
+Without a schema endpoint the answer comes from built-in knowledge of the
+flavour - upstream NPM's version, and whether NPMplus returns the meta object
+or its new columns. The contract test checks that built-in knowledge against
+every vendored schema.
+
+The capabilities are read at start-up, again after the server rejected a
+payload, and again when `GET /api/` reports another version - also with a
+pinned `NPM_FLAVOUR`, which names the fork, not the release.
+
 Failures are collected with `errors.Join`: a single failing host is reported
 but does not abort the run.
 
@@ -150,7 +204,8 @@ but does not abort the run.
 
 Every resource implements `Fingerprint()`, which hashes its canonical,
 configuration-relevant subset (domains or ports, upstream, certificate, flags,
-location blocks, ownership meta) with SHA-256. The kind is part of the hashed
+location blocks, ownership including whether the marker is present) with
+SHA-256. The kind is part of the hashed
 shape, so a domain that is both a proxy host and a 404 host never produces
 colliding fingerprints. Server-side fields — `id`, `created_on`,
 `owner_user_id` — are deliberately excluded, so a freshly fetched resource and
