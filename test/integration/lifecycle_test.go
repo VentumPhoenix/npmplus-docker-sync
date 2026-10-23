@@ -248,6 +248,9 @@ func TestAdoptionLeavesForeignHostsAlone(t *testing.T) {
 func TestRedthMigration(t *testing.T) {
 	c := client(t)
 	ctx := context.Background()
+	if !c.Dialect().Accepts(npm.KindProxy, "meta") {
+		t.Skip("this server keeps no meta object, so no host can carry Redth's marker")
+	}
 
 	redth := &npm.ProxyHost{
 		DomainNames: []string{"redth.test"}, ForwardScheme: "http",

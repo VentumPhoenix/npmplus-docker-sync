@@ -4,12 +4,15 @@
     "A ref is a release tag or a branch; the vendoring script tries tags first.",
     "Add the release tags of every NPM/NPMplus version this project supports -",
     "development branches are an early warning, not what users run.",
-    "Re-vendor with: make schemas"
+    "Re-vendor with: make schemas",
+    "NPM before 2.12 keeps its schema in a layout this script cannot read; the integration suite covers 2.11.3."
   ],
   "npmplus": [
+    "2026-10-22-r1",
     "develop"
   ],
   "npm": [
+    "v2.16.0",
     "master"
   ]
 }

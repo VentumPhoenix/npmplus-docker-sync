@@ -14,6 +14,12 @@ import (
 // resource, request body - and returns the JSON that would go over the wire.
 func payloadOf(t *testing.T, c docker.Container, flavour npm.Flavour, list []npm.Certificate) []byte {
 	t.Helper()
+	return payloadFor(t, c, npm.Dialect{Flavour: flavour}, list)
+}
+
+// payloadFor is payloadOf for an explicit dialect.
+func payloadFor(t *testing.T, c docker.Container, dialect npm.Dialect, list []npm.Certificate) []byte {
+	t.Helper()
 
 	res := docker.Parse(c, docker.ParseOptions{Prefix: "npm", ExposedByDefault: true})
 	if len(res.Errors) > 0 {
@@ -33,7 +39,9 @@ func payloadOf(t *testing.T, c docker.Container, flavour npm.Flavour, list []npm
 		certificate = npm.NewCertificate()
 	}
 
-	payload, err := BuildResource(target, certificate, "", "npm").Payload(npm.Dialect{Flavour: flavour})
+	resource := BuildResource(target, certificate, "", "npm")
+	npm.Conform(resource, dialect)
+	payload, err := resource.Payload(dialect)
 	if err != nil {
 		t.Fatalf("payload: %v", err)
 	}
@@ -119,7 +127,7 @@ func TestGoldenMinimalProxyHost(t *testing.T) {
   "allow_websocket_upgrade": true,
   "npmplus_access_list_ids": [],
   "npmplus_access_list_type": "public",
-  "advanced_config": "",
+  "advanced_config": "# npmplus-docker-sync: managed from Docker labels, do not edit or remove this line | v=1 key=homepage.home.example.com container=homepage index=0 container_id=homepage-id prefix=npm",
   "npmplus_location_config": "",
   "locations": [],
   "npmplus_noindex": false,
@@ -174,7 +182,7 @@ func TestGoldenUpstreamNPMPayload(t *testing.T) {
   "caching_enabled": false,
   "allow_websocket_upgrade": true,
   "access_list_id": 0,
-  "advanced_config": "",
+  "advanced_config": "# npmplus-docker-sync: managed from Docker labels, do not edit or remove this line | v=1 key=homepage.home.example.com container=homepage index=0 container_id=homepage-id prefix=npm",
   "locations": [],
   "meta": {
     "managed_by": "npmplus-docker-sync",
@@ -211,9 +219,9 @@ func TestGoldenStream(t *testing.T) {
   "tcp_forwarding": true,
   "udp_forwarding": false,
   "certificate_id": 7,
-  "npmplus_proxy_protocol_forwarding": 0,
+  "npmplus_proxy_protocol_forwarding": false,
   "npmplus_proxy_tls": false,
-  "npmplus_advanced_config": "",
+  "npmplus_advanced_config": "# npmplus-docker-sync: managed from Docker labels, do not edit or remove this line | v=1 key=5432 container=db index=0 container_id=db-id prefix=npm",
   "npmplus_description": "db",
   "meta": {
     "managed_by": "npmplus-docker-sync",
@@ -224,6 +232,55 @@ func TestGoldenStream(t *testing.T) {
   }
 }`
 	if got := string(payloadOf(t, c, npm.FlavourNPMplus, list)); got != want {
+		t.Errorf("payload mismatch\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestGoldenNPMplusWithoutMeta pins the body for an NPMplus release that moved
+// the meta object into columns: no `meta`, no retired switches, the group in
+// its own column - and the ownership in the marker, the only place left.
+func TestGoldenNPMplusWithoutMeta(t *testing.T) {
+	t.Parallel()
+
+	c := docker.Container{
+		ID: "homepage-id", Name: "homepage",
+		Labels: map[string]string{
+			"npm.proxy.domains": "homepage.home.example.com",
+			"npm.proxy.port":    "3000",
+			"npm.proxy.group":   "Production",
+		},
+	}
+	list := []npm.Certificate{{ID: 12, Provider: "letsencrypt", DomainNames: []string{"*.home.example.com"}, ExpiresOn: notBefore}}
+
+	want := `{
+  "domain_names": [
+    "homepage.home.example.com"
+  ],
+  "forward_scheme": "http",
+  "forward_host": "homepage",
+  "forward_port": 3000,
+  "certificate_id": 12,
+  "ssl_forced": true,
+  "hsts_enabled": false,
+  "hsts_subdomains": false,
+  "npmplus_http3_support": true,
+  "npmplus_access_list_ids": [],
+  "npmplus_access_list_type": "public",
+  "advanced_config": "# npmplus-docker-sync: managed from Docker labels, do not edit or remove this line | v=1 key=homepage.home.example.com container=homepage index=0 container_id=homepage-id prefix=npm",
+  "npmplus_location_config": "",
+  "locations": [],
+  "npmplus_noindex": false,
+  "npmplus_crowdsec_appsec": false,
+  "npmplus_proxy_request_buffering": false,
+  "npmplus_proxy_response_buffering": false,
+  "npmplus_upstream_compression": false,
+  "npmplus_fancyindex": false,
+  "npmplus_auth_request": "none",
+  "npmplus_auth_request_upstream": "",
+  "npmplus_directory": "Production"
+}`
+	dialect := npm.Dialect{Flavour: npm.FlavourNPMplus, MetaRetired: true}
+	if got := string(payloadFor(t, c, dialect, list)); got != want {
 		t.Errorf("payload mismatch\n got:\n%s\nwant:\n%s", got, want)
 	}
 }

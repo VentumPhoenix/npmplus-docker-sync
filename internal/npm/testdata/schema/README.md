@@ -6,5 +6,7 @@ Every payload the tool can build is validated against each of these
 schemas by internal/npm/contract_test.go. The refs are configured in
 scripts/schema-refs.json.
 
+- `npmplus/2026-10-22-r1/` from https://github.com/ZoeyVid/NPMplus (`2026-10-22-r1`)
 - `npmplus/develop/` from https://github.com/ZoeyVid/NPMplus (`develop`)
+- `npm/v2.16.0/` from https://github.com/NginxProxyManager/nginx-proxy-manager (`v2.16.0`)
 - `npm/master/` from https://github.com/NginxProxyManager/nginx-proxy-manager (`master`)

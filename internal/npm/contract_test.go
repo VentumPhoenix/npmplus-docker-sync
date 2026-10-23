@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dlclark/regexp2"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -36,6 +37,7 @@ func sampleResources(t *testing.T) map[Kind]Resource {
 		"dns_provider":             "cloudflare",
 		"dns_provider_credentials": "dns_cloudflare_api_token = secret",
 		"propagation_seconds":      30,
+		MetaDirectory:              "Production",
 	}
 	return map[Kind]Resource{
 		KindProxy: &ProxyHost{
@@ -146,7 +148,16 @@ func TestPayloadsSatisfyTheAPISchemas(t *testing.T) {
 		for _, ref := range vendoredRefs(t, string(flavour)) {
 			t.Run(string(flavour)+"/"+ref, func(t *testing.T) {
 				t.Parallel()
-				validateAgainst(t, flavour, ref)
+				schema := vendoredWriteSchema(t, string(flavour), ref)
+				// The dialect the client reads from GET /api/schema ...
+				validateAgainst(t, Dialect{Flavour: flavour, Schema: schema}, ref)
+				// ... and the one it falls back to without: it must reach
+				// exactly the same verdicts on every field a payload decides
+				// about, or a server without a schema endpoint breaks.
+				_, hasMeta := schema[KindProxy]["meta"]
+				builtin := Dialect{Flavour: flavour, MetaRetired: !hasMeta}
+				assertSameVerdicts(t, Dialect{Flavour: flavour, Schema: schema}, builtin)
+				validateAgainst(t, builtin, ref)
 			})
 		}
 	}
@@ -174,21 +185,118 @@ func vendoredRefs(t *testing.T, flavour string) []string {
 	return refs
 }
 
-func validateAgainst(t *testing.T, flavour Flavour, ref string) {
+// decidedFields are the properties a payload sends or leaves out depending on
+// the server.
+var decidedFields = map[Kind][]string{
+	KindProxy: {
+		"meta", "advanced_config", "trust_forwarded_proto", "http2_support", "block_exploits",
+		"caching_enabled", "allow_websocket_upgrade", "npmplus_directory", "npmplus_dns_challenge",
+		"npmplus_dns_provider", "npmplus_dns_provider_credentials", "npmplus_propagation_seconds",
+		"locations/npmplus_location_config",
+	},
+	KindRedirect: {
+		"meta", "advanced_config", "http2_support", "block_exploits", "npmplus_directory",
+		"npmplus_dns_challenge", "npmplus_dns_provider", "npmplus_dns_provider_credentials",
+		"npmplus_propagation_seconds",
+	},
+	KindStream: {"meta", "npmplus_advanced_config", "npmplus_directory", "certificate_id"},
+	KindDead: {
+		"meta", "advanced_config", "http2_support", "npmplus_directory", "npmplus_dns_challenge",
+		"npmplus_dns_provider", "npmplus_dns_provider_credentials", "npmplus_propagation_seconds",
+	},
+}
+
+func assertSameVerdicts(t *testing.T, fromSchema, builtin Dialect) {
+	t.Helper()
+	for kind, names := range decidedFields {
+		for _, field := range names {
+			if got, want := builtin.Accepts(kind, field), fromSchema.Accepts(kind, field); got != want {
+				t.Errorf("built-in knowledge says %s accepts %s = %t, the schema says %t", kind, field, got, want)
+			}
+		}
+	}
+	for _, scheme := range []string{SchemeAuto, SchemeKeep} {
+		got := builtin.AcceptsValue(KindRedirect, "forward_scheme", scheme)
+		if want := fromSchema.AcceptsValue(KindRedirect, "forward_scheme", scheme); got != want {
+			t.Errorf("built-in knowledge says a redirection accepts scheme %q = %t, the schema says %t", scheme, got, want)
+		}
+	}
+	if fromSchema.Flavour == FlavourNPMplus {
+		got, want := builtin.TypeOf(KindStream, fieldProxyProtocol), fromSchema.TypeOf(KindStream, fieldProxyProtocol)
+		if got != want {
+			t.Errorf("built-in knowledge types the proxy protocol as %q, the schema as %q", got, want)
+		}
+	}
+}
+
+// vendoredWriteSchema assembles the vendored request schemas of one ref into
+// the document GET /api/schema serves, and reads it the way the client does.
+func vendoredWriteSchema(t *testing.T, flavour, ref string) WriteSchema {
+	t.Helper()
+	schema, err := parseWriteSchema(vendoredSchemaDocument(t, flavour, ref))
+	if err != nil {
+		t.Fatalf("parseWriteSchema() error: %v", err)
+	}
+	return schema
+}
+
+// vendoredSchemaDocument is the GET /api/schema document of one vendored ref.
+func vendoredSchemaDocument(t *testing.T, flavour, ref string) []byte {
+	t.Helper()
+	paths := map[string]map[string]any{}
+	for _, kind := range Kinds {
+		base := strings.TrimPrefix(kind.Path(), "/api")
+		for method, path := range map[string]string{"post": base, "put": base + "/{id}"} {
+			raw, err := os.ReadFile(filepath.Join("testdata", "schema", flavour, ref, fmt.Sprintf("%s-%s.json", kind, method))) //nolint:gosec // fixed test fixture path
+			if err != nil {
+				t.Fatalf("read schema: %v", err)
+			}
+			if paths[path] == nil {
+				paths[path] = map[string]any{}
+			}
+			paths[path][method] = map[string]any{
+				"requestBody": map[string]any{
+					"content": map[string]any{"application/json": map[string]any{"schema": json.RawMessage(raw)}},
+				},
+			}
+		}
+	}
+	document, err := json.Marshal(map[string]any{"paths": paths})
+	if err != nil {
+		t.Fatalf("marshal the schema document: %v", err)
+	}
+	return document
+}
+
+func validateAgainst(t *testing.T, dialect Dialect, ref string) {
 	t.Helper()
 
+	flavour := dialect.Flavour
 	resources := sampleResources(t)
-
+	requests := map[string]Resource{}
 	for _, kind := range Kinds {
-		for _, method := range []string{"post", "put"} {
-			t.Run(fmt.Sprintf("%s-%s", kind, method), func(t *testing.T) {
-				resource := resources[kind]
+		requests[string(kind)] = resources[kind]
+	}
+	// A certificate request carries the DNS challenge - in the meta object
+	// or, since NPMplus moved it, in columns of its own.
+	for _, kind := range []Kind{KindProxy, KindRedirect, KindDead} {
+		resource := sampleResources(t)[kind]
+		switch r := resource.(type) {
+		case *ProxyHost:
+			r.CertificateID = NewCertificate()
+		case *RedirectionHost:
+			r.CertificateID = NewCertificate()
+		case *DeadHost:
+			r.CertificateID = NewCertificate()
+		}
+		requests[string(kind)+"+new-certificate"] = resource
+	}
 
-				// NPMplus stream payloads only exist with a numeric
-				// certificate reference, which the sample has.
-				// The vendored schemas are the newest refs, so no version is
-				// pinned here: an unknown version means "new enough".
-				payload, err := resource.Payload(Dialect{Flavour: flavour})
+	for name, resource := range requests {
+		kind := resource.Kind()
+		for _, method := range []string{"post", "put"} {
+			t.Run(fmt.Sprintf("%s-%s", name, method), func(t *testing.T) {
+				payload, err := resource.Payload(dialect)
 				if err != nil {
 					t.Fatalf("Payload(%s) error: %v", flavour, err)
 				}
@@ -207,6 +315,9 @@ func validateAgainst(t *testing.T, flavour Flavour, ref string) {
 				if err := schema.Validate(instance); err != nil {
 					t.Errorf("%s %s %s payload violates the API schema:\n%v\n\npayload: %s",
 						flavour, kind, method, err, raw)
+				}
+				if !dialect.KeepsOwnership(kind) {
+					t.Errorf("%s %s: the server could not store who owns the resource", flavour, kind)
 				}
 			})
 		}
@@ -368,6 +479,9 @@ func loadSchema(t *testing.T, flavour, ref, name string) *jsonschema.Schema {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 	compiler := jsonschema.NewCompiler()
+	// The servers validate with Ajv, whose patterns are ECMAScript: NPMplus
+	// uses lookaheads that Go's RE2 does not support.
+	compiler.UseRegexpEngine(ecmaRegexp)
 	if err := compiler.AddResource(path, document); err != nil {
 		t.Fatalf("add %s: %v", path, err)
 	}
@@ -377,3 +491,21 @@ func loadSchema(t *testing.T, flavour, ref, name string) *jsonschema.Schema {
 	}
 	return schema
 }
+
+// ecmaRegexp compiles JSON schema patterns the way the servers' validator does.
+func ecmaRegexp(pattern string) (jsonschema.Regexp, error) {
+	re, err := regexp2.Compile(pattern, regexp2.ECMAScript|regexp2.Unicode)
+	if err != nil {
+		return nil, err
+	}
+	return ecmaPattern{re}, nil
+}
+
+type ecmaPattern struct{ re *regexp2.Regexp }
+
+func (p ecmaPattern) MatchString(s string) bool {
+	matched, err := p.re.MatchString(s)
+	return err == nil && matched
+}
+
+func (p ecmaPattern) String() string { return p.re.String() }

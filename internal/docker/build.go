@@ -20,6 +20,7 @@ func buildTarget(c Container, opts ParseOptions, key entryKey, f fieldSet) (*Tar
 		ContainerName: c.Name,
 		Running:       c.Running(),
 		ExplicitPlus:  explicitPlus(key.kind, f),
+		Explicit:      explicitFields(key.kind, f),
 	}
 
 	var err error
@@ -92,6 +93,19 @@ func explicitPlus(kind npm.Kind, f fieldSet) []string {
 	for name := range f.values {
 		definition, ok := fields.Lookup(kind, name)
 		if ok && definition.Plus {
+			out = append(out, definition.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// explicitFields lists every field the labels set explicitly, in canonical
+// spelling.
+func explicitFields(kind npm.Kind, f fieldSet) []string {
+	var out []string
+	for name := range f.values {
+		if definition, ok := fields.Lookup(kind, name); ok {
 			out = append(out, definition.Name)
 		}
 	}

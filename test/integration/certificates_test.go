@@ -179,7 +179,6 @@ func uploadCertificate(t *testing.T, name string, domains ...string) int {
 		"provider":     "other",
 		"nice_name":    name,
 		"domain_names": domains,
-		"meta":         map[string]any{},
 	})
 	id, ok := created["id"].(float64)
 	if !ok {

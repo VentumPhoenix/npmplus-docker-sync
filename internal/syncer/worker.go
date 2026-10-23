@@ -33,9 +33,10 @@ type API interface {
 	ListCertificates(ctx context.Context) ([]npm.Certificate, error)
 	// ListAccessLists resolves access lists referenced by name.
 	ListAccessLists(ctx context.Context) ([]npm.AccessList, error)
-	// Flavour reports the API dialect, which decides whether NPMplus-only
-	// settings can be sent at all.
-	Flavour() npm.Flavour
+	// Dialect reports what the server accepts: the flavour, which decides
+	// whether NPMplus-only settings can be sent at all, and the fields a
+	// release has added or retired - the meta object above all.
+	Dialect() npm.Dialect
 	// Recheck notices a server upgrade and re-probes the dialect if the
 	// version changed. Called on the periodic resync.
 	Recheck(ctx context.Context) error
@@ -547,6 +548,7 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 		}
 	}
 
+	dialect := w.api.Dialect()
 	desired, conflicts := indexTargets(w.applyStopPolicy(log, targets))
 	for _, c := range conflicts {
 		out.result.Skipped++
@@ -640,13 +642,10 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 			errs = append(errs, fmt.Errorf("%s: unsupported resource kind %q", target.Describe(), target.Kind))
 			continue
 		}
-		w.warnUnsupported(log, key, target, resource)
-		if w.api.Flavour() == npm.FlavourNPM {
-			// Upstream nginx-proxy-manager neither stores nor returns the
-			// NPMplus fields, so they must not take part in the comparison
-			// either - otherwise every run would see a difference.
-			npm.StripNPMplus(resource)
-		}
+		w.warnUnsupported(log, key, target, resource, dialect)
+		// What the server neither stores nor returns must not take part in the
+		// comparison either - otherwise every run would see a difference.
+		npm.Conform(resource, dialect)
 		if found {
 			// Carry over values NPM assigned (issued certificates, the meta
 			// of a migrated host, ...) so the desired state can converge.
@@ -707,6 +706,19 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 
 		enabled := current.IsEnabled()
 		changed := false
+
+		if frozen && needsMarker(current, dialect) {
+			stamped, err := w.stampMarker(ctx, log, key, id, current)
+			if err != nil {
+				out.result.Failed++
+				errs = append(errs, err)
+				continue
+			}
+			changed = true
+			if stamped != nil {
+				hash = stamped.Fingerprint()
+			}
+		}
 
 		if !inSync {
 			w.reportDrift(log, kind, key, id, current, resource)
@@ -804,6 +816,34 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 	w.cache.ReplaceKind(kind, next)
 	out.partial = errors.Join(errs...)
 	return out
+}
+
+// needsMarker reports a resource of ours that the server could mark but that
+// carries no marker yet - one written by a release before the marker existed.
+func needsMarker(r npm.Resource, dialect npm.Dialect) bool {
+	return npm.IsManaged(r.ResourceMeta()) && !r.OwnerMarked() && dialect.CarriesMarker(r.Kind())
+}
+
+// stampMarker writes the ownership marker into a resource whose container is
+// stopped. Such a resource is otherwise never written - Docker no longer
+// reports its address - so it is written back exactly as it is stored, with
+// the marker added. Without that it would lose its owner the moment NPMplus
+// empties the meta object, and with it every protection this tool gives it.
+func (w *Worker) stampMarker(ctx context.Context, log *slog.Logger, key string, id int, current npm.Resource) (npm.Resource, error) {
+	kind := current.Kind()
+	if w.opts.DryRun {
+		log.Info("[dry-run] would add the ownership marker",
+			slog.String("key", key), slog.Int("id", id))
+		return nil, nil
+	}
+	updated, err := w.api.Update(ctx, id, current)
+	if err != nil {
+		log.Error("failed to add the ownership marker",
+			slog.String("key", key), slog.Int("id", id), slog.String("error", err.Error()))
+		return nil, fmt.Errorf("mark %s %s: %w", kind.Label(), key, err)
+	}
+	log.Info("added the ownership marker", slog.String("key", key), slog.Int("id", id))
+	return updated, nil
 }
 
 // applyStopPolicy drops the targets of stopped containers when NPM_ON_STOP is

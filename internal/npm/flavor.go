@@ -102,16 +102,17 @@ func WithFlavour(f Flavour) Option {
 // When neither is conclusive the detection falls back to NPMplus, which is
 // what this tool is named after, and says so in the log.
 func (c *Client) DetectFlavour(ctx context.Context) (Flavour, error) {
-	// Unconditionally, and before the pinned shortcut: the version decides
-	// which fields a payload may carry, and a pinned flavour says nothing
-	// about the release.
+	// Unconditionally, and before the pinned shortcut: the version and the
+	// schema decide which fields a payload may carry, and a pinned flavour
+	// says nothing about the release.
 	c.readVersion(ctx)
 
 	if f := c.Flavour(); f != FlavourAuto {
+		c.readCapabilities(ctx, nil)
 		return f, nil
 	}
 
-	flavour, how, err := c.probeFlavour(ctx)
+	flavour, how, hosts, err := c.probeFlavour(ctx)
 	if err != nil {
 		return FlavourAuto, err
 	}
@@ -123,21 +124,93 @@ func (c *Client) DetectFlavour(ctx context.Context) (Flavour, error) {
 	c.log.Info("detected npm api flavour",
 		slog.String("flavour", string(flavour)),
 		slog.String("detected_from", how))
+	c.readCapabilities(ctx, hosts)
 	return flavour, nil
 }
 
-// probeFlavour runs the detection without touching the client state.
-func (c *Client) probeFlavour(ctx context.Context) (flavour Flavour, how string, err error) {
-	var hosts []map[string]json.RawMessage
-	if listErr := c.do(ctx, http.MethodGet, KindProxy.Path(), nil, &hosts); listErr != nil && !IsNotFound(listErr) {
-		return FlavourAuto, "", fmt.Errorf("npm: probe api flavour: %w", listErr)
+// readCapabilities learns which fields the server accepts: from GET
+// /api/schema when it serves one, otherwise from the shape of the proxy hosts
+// it returns. hosts may carry a listing the caller already fetched.
+func (c *Client) readCapabilities(ctx context.Context, hosts []map[string]json.RawMessage) {
+	schema, schemaErr := c.fetchWriteSchema(ctx)
+	retired, conclusive := false, false
+	if schemaErr != nil {
+		c.log.Debug("the npm api serves no usable schema, falling back to the host shape",
+			slog.String("error", schemaErr.Error()))
+		retired, conclusive = c.metaRetiredFromHosts(ctx, hosts)
+	}
+
+	c.mu.Lock()
+	previous := c.dialectLocked()
+	c.schema = schema
+	if schema != nil || conclusive {
+		c.metaRetired = retired
+	}
+	current := c.dialectLocked()
+	c.mu.Unlock()
+
+	source := "api schema"
+	if schema == nil {
+		source = "built-in"
+	}
+	attrs := []any{
+		slog.String("flavour", current.Flavour.String()),
+		slog.String("source", source),
+		slog.Bool("meta", current.Accepts(KindProxy, "meta")),
+		slog.Bool("ownership_marker", current.CarriesMarker(KindProxy)),
+		slog.Bool("group_column", current.Accepts(KindProxy, "npmplus_directory")),
+	}
+	if previous.Accepts(KindProxy, "meta") != current.Accepts(KindProxy, "meta") {
+		c.log.Warn("npm api capabilities changed", attrs...)
+		return
+	}
+	c.log.Info("npm api capabilities", attrs...)
+}
+
+// fetchWriteSchema reads GET /api/schema.
+func (c *Client) fetchWriteSchema(ctx context.Context) (WriteSchema, error) {
+	var raw json.RawMessage
+	if err := c.do(ctx, http.MethodGet, "/api/schema", nil, &raw); err != nil {
+		return nil, err
+	}
+	return parseWriteSchema(raw)
+}
+
+// metaRetiredFromHosts inspects the proxy hosts the server returns, listing
+// them first when the caller has not.
+func (c *Client) metaRetiredFromHosts(ctx context.Context, hosts []map[string]json.RawMessage) (retired, conclusive bool) {
+	if hosts == nil {
+		if err := c.do(ctx, http.MethodGet, KindProxy.Path(), nil, &hosts); err != nil && !IsNotFound(err) {
+			c.log.Debug("could not list proxy hosts", slog.String("error", err.Error()))
+		}
 	}
 	for _, host := range hosts {
+		if retired, conclusive = metaRetiredFrom(host); conclusive {
+			return retired, true
+		}
+	}
+	return false, false
+}
+
+// probeFlavour runs the detection without touching the client state. It hands
+// back the proxy hosts it listed, so the capability check can reuse them.
+func (c *Client) probeFlavour(ctx context.Context) (flavour Flavour, how string, hosts []map[string]json.RawMessage, err error) {
+	if listErr := c.do(ctx, http.MethodGet, KindProxy.Path(), nil, &hosts); listErr != nil && !IsNotFound(listErr) {
+		return FlavourAuto, "", nil, fmt.Errorf("npm: probe api flavour: %w", listErr)
+	}
+	flavour, how = c.flavourOf(ctx, hosts)
+	return flavour, how, hosts, nil
+}
+
+// flavourOf reads the flavour from a proxy host listing, falling back to the
+// version GET /api/ reports.
+func (c *Client) flavourOf(ctx context.Context, hosts []map[string]json.RawMessage) (Flavour, string) {
+	for _, host := range hosts {
 		if _, ok := host["npmplus_access_list_ids"]; ok {
-			return FlavourNPMplus, "proxy host schema", nil
+			return FlavourNPMplus, "proxy host schema"
 		}
 		if _, ok := host["access_list_id"]; ok {
-			return FlavourNPM, "proxy host schema", nil
+			return FlavourNPM, "proxy host schema"
 		}
 	}
 
@@ -148,13 +221,13 @@ func (c *Client) probeFlavour(ctx context.Context) (flavour Flavour, how string,
 	if healthErr := c.do(ctx, http.MethodGet, "/api/", nil, &health); healthErr == nil {
 		switch versionShape(health.Version) {
 		case '{':
-			return FlavourNPM, "GET /api/ version object", nil
+			return FlavourNPM, "GET /api/ version object"
 		case '"':
-			return FlavourNPMplus, "GET /api/ version string", nil
+			return FlavourNPMplus, "GET /api/ version string"
 		}
 	}
 
-	return FlavourNPMplus, "default (no proxy host to inspect)", nil
+	return FlavourNPMplus, "default (no proxy host to inspect)"
 }
 
 // versionShape reports the first meaningful byte of the raw `version` value:
@@ -222,25 +295,32 @@ func parseVersion(raw json.RawMessage) Version {
 	return v
 }
 
-// Dialect is everything a request body has to be written for: the flavour,
-// and - for upstream NPM - the version. Its request schemas set
-// `additionalProperties: false` and gained fields over releases, so a field
-// that 2.12 expects makes 2.11 reject the whole payload with
-// "data should NOT have additional properties".
+// Dialect is everything a request body has to be written for. Both servers
+// validate with `additionalProperties: false` and have gained and lost fields
+// over their releases: a field that NPM 2.12 expects makes 2.11 reject the
+// whole payload, and a `meta` object that every NPMplus release accepted makes
+// the ones after its meta-to-columns migration reject it.
 type Dialect struct {
 	Flavour Flavour
+	// Version is upstream NPM's release; NPMplus reports none we can compare.
 	Version Version
+	// Schema is what the server says it accepts (GET /api/schema). nil when
+	// it serves none, in which case Accepts falls back to built-in knowledge.
+	Schema WriteSchema
+	// MetaRetired records an NPMplus release that moved the meta object into
+	// columns. Only consulted without a schema.
+	MetaRetired bool
 }
 
 // SupportsTrustForwardedProto reports whether proxy hosts accept
-// `trust_forwarded_proto`. Upstream NPM added it in 2.12; NPMplus has always
-// had it.
+// `trust_forwarded_proto`. Upstream NPM added it in 2.12; NPMplus retired it
+// together with the meta object.
 func (d Dialect) SupportsTrustForwardedProto() bool {
-	return d.Flavour != FlavourNPM || d.Version.AtLeast(2, 12)
+	return d.Accepts(KindProxy, "trust_forwarded_proto")
 }
 
 // SupportsStreamCertificate reports whether streams accept `certificate_id`.
 // Upstream NPM added stream certificates in 2.12; NPMplus has always had them.
 func (d Dialect) SupportsStreamCertificate() bool {
-	return d.Flavour != FlavourNPM || d.Version.AtLeast(2, 12)
+	return d.Accepts(KindStream, "certificate_id")
 }

@@ -95,6 +95,12 @@ type Client struct {
 	// version is apiVersion parsed, for the payload builders. The zero value
 	// means the server reports none (NPMplus) or a form we cannot compare.
 	version Version
+	// schema is what GET /api/schema says the server accepts, nil when it
+	// serves none.
+	schema WriteSchema
+	// metaRetired records an NPMplus release without the meta object, as read
+	// from the hosts it returns; only consulted without a schema.
+	metaRetired bool
 	// lastProbe throttles re-detection after a schema rejection.
 	lastProbe time.Time
 
@@ -478,15 +484,10 @@ func (c *Client) Update(ctx context.Context, id int, resource Resource) (Resourc
 // payloadFor renders the request body for the flavour in use, defaulting to
 // NPMplus when detection has not run.
 func (c *Client) payloadFor(resource Resource) (any, error) {
-	flavour := c.Flavour()
-	if flavour == FlavourAuto {
-		flavour = FlavourNPMplus
-	}
 	dialect := c.Dialect()
-	dialect.Flavour = flavour
 	payload, err := resource.Payload(dialect)
 	if err != nil {
-		return nil, fmt.Errorf("npm: build %s payload for %s: %w", resource.Kind().Label(), flavour, err)
+		return nil, fmt.Errorf("npm: build %s payload for %s: %w", resource.Kind().Label(), dialect.Flavour, err)
 	}
 	return payload, nil
 }
@@ -676,36 +677,44 @@ func schemaRejection(err error) bool {
 
 // reprobeFlavour re-runs the dialect detection after the server rejected a
 // body its schema should have accepted - which is what an upgrade from NPM to
-// NPMplus (or the other way round) looks like from here. The request that
-// triggered it is *not* retried: its body was built for the old dialect, so
-// the next reconcile is the first one that can succeed.
+// NPMplus (or the other way round), or an NPMplus release that retired the
+// meta object, looks like from here. The request that triggered it is *not*
+// retried: its body was built for the old dialect, so the next reconcile is
+// the first one that can succeed.
+//
+// A pinned flavour stays as it is, but what the server accepts is read again
+// regardless: pinning names the fork, not the release.
 func (c *Client) reprobeFlavour(ctx context.Context, reason string) {
 	c.mu.Lock()
-	if c.flavourPinned || c.now().Sub(c.lastProbe) < probeCooldown {
+	if c.now().Sub(c.lastProbe) < probeCooldown {
 		c.mu.Unlock()
 		return
 	}
-	previous := c.flavour
+	previous, pinned := c.flavour, c.flavourPinned
 	c.lastProbe = c.now()
 	c.mu.Unlock()
 
-	flavour, how, err := c.probeFlavour(ctx)
+	if pinned {
+		c.readCapabilities(ctx, nil)
+		return
+	}
+
+	flavour, how, hosts, err := c.probeFlavour(ctx)
 	if err != nil {
 		c.log.Debug("could not re-probe the api flavour", slog.String("error", err.Error()))
 		return
 	}
-	if flavour == previous {
-		return
+	if flavour != previous {
+		c.mu.Lock()
+		c.flavour = flavour
+		c.mu.Unlock()
+		c.log.Warn("npm api flavour changed, switching dialect",
+			slog.String("from", previous.String()),
+			slog.String("to", string(flavour)),
+			slog.String("detected_from", how),
+			slog.String("reason", reason))
 	}
-
-	c.mu.Lock()
-	c.flavour = flavour
-	c.mu.Unlock()
-	c.log.Warn("npm api flavour changed, switching dialect",
-		slog.String("from", previous.String()),
-		slog.String("to", string(flavour)),
-		slog.String("detected_from", how),
-		slog.String("reason", reason))
+	c.readCapabilities(ctx, hosts)
 }
 
 // Recheck notices a server upgrade: when GET /api/ reports a different
@@ -745,7 +754,18 @@ func (c *Client) ServerVersion() string {
 func (c *Client) Dialect() Dialect {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return Dialect{Flavour: c.flavour, Version: c.version}
+	return c.dialectLocked()
+}
+
+// dialectLocked builds the dialect; the caller holds c.mu. A flavour that has
+// not been detected yet is written as NPMplus, which is what the payload
+// builders default to as well.
+func (c *Client) dialectLocked() Dialect {
+	flavour := c.flavour
+	if flavour == "" || flavour == FlavourAuto {
+		flavour = FlavourNPMplus
+	}
+	return Dialect{Flavour: flavour, Version: c.version, Schema: c.schema, MetaRetired: c.metaRetired}
 }
 
 // readVersion reads GET /api/ and remembers the version it reports. It runs

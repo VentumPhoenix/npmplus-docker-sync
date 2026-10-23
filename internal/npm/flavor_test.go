@@ -320,11 +320,11 @@ func TestPayloadOmitsFieldsOlderNPMDoesNotKnow(t *testing.T) {
 		field    string
 		want     bool
 	}{
-		{"npm 2.11 drops trust_forwarded_proto", Dialect{FlavourNPM, Version{2, 11, 3}}, proxy, "trust_forwarded_proto", false},
-		{"npm 2.12 sends trust_forwarded_proto", Dialect{FlavourNPM, Version{2, 12, 6}}, proxy, "trust_forwarded_proto", true},
+		{"npm 2.11 drops trust_forwarded_proto", Dialect{Flavour: FlavourNPM, Version: Version{2, 11, 3}}, proxy, "trust_forwarded_proto", false},
+		{"npm 2.12 sends trust_forwarded_proto", Dialect{Flavour: FlavourNPM, Version: Version{2, 12, 6}}, proxy, "trust_forwarded_proto", true},
 		{"npmplus sends trust_forwarded_proto", Dialect{Flavour: FlavourNPMplus}, proxy, "trust_forwarded_proto", true},
-		{"npm 2.11 drops the stream certificate", Dialect{FlavourNPM, Version{2, 11, 3}}, stream, "certificate_id", false},
-		{"npm 2.12 sends the stream certificate", Dialect{FlavourNPM, Version{2, 12, 6}}, stream, "certificate_id", true},
+		{"npm 2.11 drops the stream certificate", Dialect{Flavour: FlavourNPM, Version: Version{2, 11, 3}}, stream, "certificate_id", false},
+		{"npm 2.12 sends the stream certificate", Dialect{Flavour: FlavourNPM, Version: Version{2, 12, 6}}, stream, "certificate_id", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

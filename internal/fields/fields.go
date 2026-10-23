@@ -198,7 +198,7 @@ func sslFields() []Field {
 		{
 			Name: HTTP2, Aliases: []string{"http2", "http2_support"},
 			Type: TypeBool, Default: "true", APIField: "http2_support",
-			Doc: "HTTP/2 support",
+			Doc: "HTTP/2 support (always on in NPMplus releases without the meta object)",
 		},
 		{
 			Name: HTTP3, Aliases: []string{"http3", "http3_support", "quic"},
@@ -234,22 +234,22 @@ func letsencryptFields() []Field {
 		{
 			Name: LEDNSChallenge, Aliases: []string{"le.dns_challenge", "dns_challenge"},
 			Type: TypeBool, Default: "false", APIField: "meta.dns_challenge",
-			Doc: "use a DNS-01 challenge instead of HTTP-01",
+			Doc: "use a DNS-01 challenge instead of HTTP-01 (npmplus_dns_challenge on NPMplus without the meta object)",
 		},
 		{
 			Name: LEDNSProvider, Aliases: []string{"le.dns_provider", "dns_provider"},
 			Type: TypeString, APIField: "meta.dns_provider",
-			Doc: "certbot DNS plugin name",
+			Doc: "certbot DNS plugin name (npmplus_dns_provider on NPMplus without the meta object)",
 		},
 		{
 			Name: LEDNSCreds, Aliases: []string{"le.dns_credentials", "dns_credentials", "letsencrypt.dns_provider_credentials"},
 			Type: TypeString, APIField: "meta.dns_provider_credentials",
-			Doc: "credentials file content for the DNS plugin",
+			Doc: "credentials file content for the DNS plugin (npmplus_dns_provider_credentials on NPMplus without the meta object)",
 		},
 		{
 			Name: LEPropagation, Aliases: []string{"le.propagation_seconds", "propagation_seconds"},
 			Type: TypeInt, Default: "0", APIField: "meta.propagation_seconds",
-			Doc: "how long to wait for the DNS record to propagate",
+			Doc: "how long to wait for the DNS record to propagate (npmplus_propagation_seconds on NPMplus without the meta object)",
 		},
 	}
 }
@@ -275,9 +275,9 @@ func groupField() Field {
 		Name:     Group,
 		Aliases:  []string{"directory", "folder", "category", "ui.group"},
 		Type:     TypeString,
-		APIField: "meta.directory",
+		APIField: "npmplus_directory",
 		Plus:     true,
-		Doc:      "NPMplus UI group this resource is listed under; none clears it",
+		Doc:      "NPMplus UI group this resource is listed under (meta.directory on releases before the column); none clears it",
 	}
 }
 
@@ -332,22 +332,22 @@ func proxyFields() []Field {
 		{
 			Name: Websockets, Aliases: []string{"websocket", "ws", "allow_websocket_upgrade"},
 			Type: TypeBool, Default: "true", APIField: "allow_websocket_upgrade",
-			Doc: "allow websocket upgrades",
+			Doc: "allow websocket upgrades (always on in NPMplus releases without the meta object)",
 		},
 		{
 			Name: Caching, Aliases: []string{"cache", "caching_enabled"},
 			Type: TypeBool, Default: "false", APIField: "caching_enabled",
-			Doc: "cache static assets (can break dynamic content)",
+			Doc: "cache static assets (can break dynamic content; not offered in NPMplus releases without the meta object)",
 		},
 		{
 			Name: BlockExploits, Aliases: []string{"block_common_exploits", "exploits"},
 			Type: TypeBool, Default: "true", APIField: "block_exploits",
-			Doc: "block common exploit patterns",
+			Doc: "block common exploit patterns (not offered in NPMplus releases without the meta object)",
 		},
 		{
 			Name: TrustForwardedProto, Aliases: []string{"trust_proto"},
 			Type: TypeBool, Default: "false", APIField: "trust_forwarded_proto",
-			Doc: "trust X-Forwarded-Proto (only behind another proxy)",
+			Doc: "trust X-Forwarded-Proto (only behind another proxy; always on in NPMplus releases without the meta object)",
 		},
 		{
 			Name: AccessList, Aliases: []string{"access_list_id", "access_list_ids", "access_lists", "accesslist", "accesslist.id", "accesslist.ids"},
@@ -376,7 +376,7 @@ func proxyFields() []Field {
 		{
 			Name: AdvancedConfig, Aliases: []string{"advanced", "custom_config", "advanced.config"},
 			Type: TypeString, APIField: "advanced_config",
-			Doc: "nginx snippet inserted into the server block",
+			Doc: "nginx snippet inserted into the server block, below the ownership marker line",
 		},
 		{
 			Name: NoIndex, Aliases: []string{"no_index"},
@@ -448,12 +448,12 @@ func redirectFields() []Field {
 		{
 			Name: BlockExploits, Aliases: []string{"block_common_exploits", "exploits"},
 			Type: TypeBool, Default: "true", APIField: "block_exploits",
-			Doc: "block common exploit patterns",
+			Doc: "block common exploit patterns (not offered in NPMplus releases without the meta object)",
 		},
 		{
 			Name: AdvancedConfig, Aliases: []string{"advanced", "custom_config", "advanced.config"},
 			Type: TypeString, APIField: "advanced_config",
-			Doc: "nginx snippet inserted into the server block",
+			Doc: "nginx snippet inserted into the server block, below the ownership marker line",
 		},
 		enabledField(),
 		groupField(),
@@ -515,7 +515,7 @@ func streamFields() []Field {
 		{
 			Name: AdvancedConfig, Aliases: []string{"advanced", "custom_config", "advanced.config"},
 			Type: TypeString, APIField: "npmplus_advanced_config", Plus: true,
-			Doc: "nginx snippet inserted into the stream block",
+			Doc: "nginx snippet inserted into the stream block, below the ownership marker line",
 		},
 		{
 			Name: Description, Aliases: []string{"comment", "note"},
@@ -539,7 +539,7 @@ func deadFields() []Field {
 		{
 			Name: AdvancedConfig, Aliases: []string{"advanced", "custom_config", "advanced.config"},
 			Type: TypeString, APIField: "advanced_config",
-			Doc: "nginx snippet inserted into the server block",
+			Doc: "nginx snippet inserted into the server block, below the ownership marker line",
 		},
 		enabledField(),
 		groupField(),

@@ -26,6 +26,8 @@ type fakeAPI struct {
 	certificates []npm.Certificate
 	accessLists  []npm.AccessList
 	flavour      npm.Flavour
+	// metaRetired plays an NPMplus that moved the meta object into columns.
+	metaRetired bool
 
 	listErr    map[npm.Kind]error
 	createErr  error
@@ -75,11 +77,14 @@ func (f *fakeAPI) ListAccessLists(ctx context.Context) ([]npm.AccessList, error)
 
 func (f *fakeAPI) Recheck(context.Context) error { return nil }
 
-func (f *fakeAPI) Flavour() npm.Flavour {
-	if f.flavour == "" {
-		return npm.FlavourNPMplus
+func (f *fakeAPI) Dialect() npm.Dialect {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	flavour := f.flavour
+	if flavour == "" {
+		flavour = npm.FlavourNPMplus
 	}
-	return f.flavour
+	return npm.Dialect{Flavour: flavour, MetaRetired: f.metaRetired}
 }
 
 func (f *fakeAPI) bucket(kind npm.Kind) map[int]npm.Resource {
@@ -377,9 +382,11 @@ func deadTarget(name, domain string) *docker.Target {
 	}
 }
 
-// managed builds a live resource as this tool would have created it.
+// managed builds a live resource as this tool would have created it on
+// NPMplus: ownership in the meta object and in the marker.
 func managed(id int, target *docker.Target) npm.Resource {
 	r := BuildResource(target, targetCertificate(target), "", "npm")
+	npm.Conform(r, npm.Dialect{Flavour: npm.FlavourNPMplus})
 	r.SetResourceID(id)
 	return r
 }

@@ -102,6 +102,7 @@
 		"locations": {
 			"example": [
 				{
+					"access_list_id": 0,
 					"forward_host": "example.com",
 					"forward_port": 80,
 					"forward_scheme": "http",
@@ -111,6 +112,12 @@
 			"items": {
 				"additionalProperties": false,
 				"properties": {
+					"access_list_id": {
+						"description": "Access List ID",
+						"example": 3,
+						"minimum": 0,
+						"type": "integer"
+					},
 					"advanced_config": {
 						"type": "string"
 					},
