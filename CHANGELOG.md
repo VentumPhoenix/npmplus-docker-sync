@@ -77,6 +77,11 @@ your hosts somewhere that survives it. See
   now uses an ECMAScript engine and checks the NPMplus release 2026-10-22-r1,
   `develop`, NPM 2.16.0 and `master` - each with the dialect read from the
   schema and with the built-in fallback.
+- **Release binaries are built with the newest Go patch release.** The CI and
+  release workflows asked for Go "1.26" and got whatever the runner had
+  cached - 1.26.9, which lacks the fix for GO-2026-6809 (crypto/x509 trusted
+  compromised intermediate certificates). Every `setup-go` step now checks for
+  the latest patch release.
 - The integration suite uploaded certificates with a `meta` object, which the
   NPMplus development branch rejects; the Redth migration scenario is skipped
   on a server that has no meta object to carry Redth's marker.

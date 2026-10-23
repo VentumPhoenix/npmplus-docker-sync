@@ -48,6 +48,10 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          # The runner image caches an older patch release; without this a
+          # security fix of the standard library (e.g. GO-2026-6809 in 1.26.10)
+          # would not reach the tests - or the release binaries.
+          check-latest: true
 
       - name: Run the integration suite
         env:
@@ -84,6 +88,10 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          # The runner image caches an older patch release; without this a
+          # security fix of the standard library (e.g. GO-2026-6809 in 1.26.10)
+          # would not reach the tests - or the release binaries.
+          check-latest: true
 
       - name: Run the upgrade scenario
         env:

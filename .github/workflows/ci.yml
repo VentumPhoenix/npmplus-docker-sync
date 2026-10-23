@@ -31,6 +31,10 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
           cache: true
+          # The runner image caches an older patch release; without this a
+          # security fix of the standard library (e.g. GO-2026-6809 in 1.26.10)
+          # would not reach the tests - or the release binaries.
+          check-latest: true
 
       - name: Verify formatting
         run: |
@@ -99,6 +103,10 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          # The runner image caches an older patch release; without this a
+          # security fix of the standard library (e.g. GO-2026-6809 in 1.26.10)
+          # would not reach the tests - or the release binaries.
+          check-latest: true
       # .golangci.yml uses the v2 schema, which needs golangci-lint v2 and
       # therefore action v7 or newer (v6 only speaks the v1 config format).
       #
@@ -120,6 +128,10 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          # The runner image caches an older patch release; without this a
+          # security fix of the standard library (e.g. GO-2026-6809 in 1.26.10)
+          # would not reach the tests - or the release binaries.
+          check-latest: true
       # Wrapper instead of a bare govulncheck run: findings that are
       # reachable but reviewed live in .govulncheck-allow, everything else
       # still fails the job. See the header of the script for why.
