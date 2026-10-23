@@ -326,6 +326,23 @@ Short answer: **it is built to never destroy something you care about.**
 | Docker reports **no containers at all** | Nothing is deleted. |
 | The domain is already used by another host | Reported as a conflict, nothing is overwritten. |
 | Several Docker hosts share **one NPM** | Each instance only manages its own hosts. |
+| You **update NPM / NPMplus** | Your hosts stay yours — see the note below. |
+
+**How it recognizes its own hosts:** every host it manages gets one comment
+line at the top of its *Advanced* config in NPM:
+
+```
+# npmplus-docker-sync: managed from Docker labels, do not edit or remove this line | v=1 key=app.example.com …
+```
+
+nginx ignores it; this tool relies on it. Leave it there. A host without that
+line counts as hand-made and is never deleted.
+
+> [!IMPORTANT]
+> **Update this tool before you update NPMplus.** The next NPMplus release
+> clears the old place where earlier versions (up to v1.0.0-beta.9) recorded
+> their hosts. v1.0.0-beta.10 adds the line above to every host on its first
+> run, so nothing is lost. Details: [docs/MIGRATION.md](docs/MIGRATION.md#from-v100-beta9-to-v100-beta10).
 
 > [!CAUTION]
 > **Before your first real run:** if this tool ever created a host for

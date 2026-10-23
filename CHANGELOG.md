@@ -7,6 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta.10] - 2026-10-23
+
+Update this release **before** NPMplus: the next NPMplus release empties the
+meta object of every host, and this is the release that keeps the owner of
+your hosts somewhere that survives it. See
+[docs/MIGRATION.md](docs/MIGRATION.md#from-v100-beta9-to-v100-beta10).
+
+### Added
+
+- **The ownership marker.** Every resource this tool writes now records its
+  owner in a comment line at the top of its advanced configuration, as well as
+  in the meta object wherever the server still has one:
+
+  ```
+  # npmplus-docker-sync: managed from Docker labels, do not edit or remove this line | v=1 key=app.example.com container=web index=0 ...
+  ```
+
+  NPMplus' development branch moves its meta object into columns
+  (`meta_to_columns`), empties `meta` on every host while doing so and no
+  longer accepts the property - and the meta object was the only place this
+  tool knew its hosts by. Without the marker, the first NPMplus release
+  carrying that migration would have turned every managed host into a
+  hand-made one: never cleaned up again, and no longer told apart from the
+  hosts of another sync instance. The advanced configuration survives the
+  migration untouched, exists on all four kinds (except upstream NPM's streams,
+  which keep the meta object), is stored verbatim, and a comment means nothing
+  to nginx. Upstream NPM is marked the same way, so both servers behave alike.
+
+  Hosts written by earlier releases are marked on the first run - one update
+  per host, the hosts of stopped containers included, which are otherwise never
+  written. A marker that names another host than the one carrying it (copied in
+  the UI, or a first domain edited by hand) makes that host nobody's, so it is
+  never deleted as an orphan.
+- **What a server accepts is read from the server.** `GET /api/schema` serves
+  the document both servers validate request bodies against; it now decides,
+  field by field, what a payload carries - `meta`, the retired switches, the
+  new NPMplus columns, `trust_forwarded_proto` on NPM 2.11 - including the type
+  and the allowed values of a field. It is read at start-up, after a rejected
+  payload and after the server reports a new version, also with a pinned
+  `NPM_FLAVOUR`. Servers without it fall back to built-in knowledge, which the
+  contract test checks against every vendored schema.
+- **Support for NPMplus without the meta object**: the group is written to
+  `npmplus_directory`, the DNS challenge of `certificate: new` to
+  `npmplus_dns_*`, and the switches NPMplus retired (websockets and HTTP/2 are
+  always on, caching and "block exploits" are gone, X-Forwarded-Proto is always
+  trusted) are left out of the request and out of the comparison. A label that
+  sets one of them explicitly gets a warning, once.
+- An upgrade scenario in the integration suite: hosts are created, the server
+  is replaced by a newer image on the same volume, and they must still be ours
+  afterwards. Pull requests run NPM 2.11.3 → 2, the nightly run adds the
+  current NPMplus → `develop`.
+
+### Fixed
+
+- **Redirections that keep the request's scheme were broken on NPMplus.** The
+  default `scheme: auto` was written as `auto`, which NPMplus puts verbatim
+  into `return 301 auto://...` since it switched back to nginx' `$scheme` in
+  April 2026. It is written as `$scheme` for NPMplus now, and existing
+  redirections are corrected on the first run. Upstream NPM keeps `auto`, which
+  it translates itself.
+- **`proxy_protocol: v2` was rejected by the current NPMplus release**, which
+  declares the stream's proxy protocol as a boolean. The value is written in
+  the type the server declares; where only "on" exists, v2 is stored as on and
+  a warning says so.
+- The contract test validated against NPMplus' development branch only, never
+  against the release people run, and could not compile the current schemas at
+  all: they use ECMAScript lookaheads, which Go's regular expressions lack. It
+  now uses an ECMAScript engine and checks the NPMplus release 2026-10-22-r1,
+  `develop`, NPM 2.16.0 and `master` - each with the dialect read from the
+  schema and with the built-in fallback.
+- The integration suite uploaded certificates with a `meta` object, which the
+  NPMplus development branch rejects; the Redth migration scenario is skipped
+  on a server that has no meta object to carry Redth's marker.
+
+### Changed
+
+- The generated field reference names the columns NPMplus moved things to and
+  says which switches it no longer offers.
+- `docs/COMPATIBILITY.md` defines the ownership marker, not the meta keys
+  alone, as the part of the 1.0 compatibility promise that records ownership.
+
+## [1.0.0-beta.9] - 2026-09-27
+
 ### Added
 
 - **`group`: proxy hosts, redirections, streams and 404 hosts sort themselves
@@ -545,14 +628,20 @@ No configuration change is required. Two behaviours differ in practice:
   malformed address, wildcard-to-loopback rewrite, connection refused). The
   `main` package previously had no tests at all.
 
-## [2.0.0] - 2026-09-16
+## Before the rename
+
+The two entries below come from `npm-docker-sync`, this project's name before
+it became `npmplus-docker-sync`. Their version numbers were never tagged in
+this repository and have nothing to do with the 1.x series above.
+
+### npm-docker-sync 2.0.0 - 2026-09-16
 
 The project was renamed from `npm-docker-sync` to **`npmplus-docker-sync`** and
 now targets full feature parity with
 [Redth/npm-docker-sync](https://github.com/Redth/npm-docker-sync), plus NPMplus
 compatibility.
 
-### Added
+#### Added
 
 - **All four NPM resource types**: proxy hosts (`npm.<i>.proxy.*`),
   redirection hosts (`npm.<i>.redirect.*`), TCP/UDP streams
@@ -572,7 +661,7 @@ compatibility.
 - `SYNC_KINDS` to limit which collections are managed.
 - `npm.Resource` interface so one reconcile implementation serves every kind.
 
-### Changed
+#### Changed
 
 - Module path is now `github.com/VentumPhoenix/npmplus-docker-sync`; the image
   is published as `ghcr.io/ventumphoenix/npmplus-docker-sync`.
@@ -583,7 +672,7 @@ compatibility.
 - A collection that answers `404` (not supported by a fork) is skipped with a
   warning instead of failing the run.
 
-### Migration from 1.x
+#### Migration from 1.x
 
 Resources created by 1.x carry the old `managed_by: npm-docker-sync` marker,
 which is still recognised: they are adopted, re-stamped with the new marker,
@@ -594,9 +683,9 @@ the updates.
 Upstreams also change from container names to container IPs in 2.0. Set
 `RESOLVE_CONTAINER_IP=false` to keep the previous behaviour.
 
-## [1.0.0] - 2026-09-15
+### npm-docker-sync 1.0.0 - 2026-09-15
 
-### Added
+#### Added
 
 - Label-driven synchronisation of Docker containers to Nginx Proxy Manager
   proxy hosts (`npm.enable`, `npm.proxy.host`, `npm.proxy.port`, …).
@@ -624,7 +713,9 @@ Upstreams also change from container names to container IPs in 2.0. Set
 - Multi-stage `scratch` image running as `1000:1000`, published for
   linux/amd64, arm64 and arm/v7.
 
-[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.8...HEAD
+[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.10...HEAD
+[1.0.0-beta.10]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.9...v1.0.0-beta.10
+[1.0.0-beta.9]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.8...v1.0.0-beta.9
 [1.0.0-beta.8]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.7...v1.0.0-beta.8
 [1.0.0-beta.7]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.6...v1.0.0-beta.7
 [1.0.0-beta.6]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.5...v1.0.0-beta.6
@@ -633,5 +724,3 @@ Upstreams also change from container names to container IPs in 2.0. Set
 [1.0.0-beta.3]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.2...v1.0.0-beta.3
 [1.0.0-beta.2]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.1...v1.0.0-beta.2
 [1.0.0-beta.1]: https://github.com/VentumPhoenix/npmplus-docker-sync/releases/tag/v1.0.0-beta.1
-[2.0.0]: https://github.com/VentumPhoenix/npmplus-docker-sync/releases/tag/v2.0.0
-[1.0.0]: https://github.com/VentumPhoenix/npmplus-docker-sync/releases/tag/v1.0.0

@@ -8,8 +8,9 @@ which a deletion happens, and every safeguard that stops one.
 
 A resource is deleted only when **all** of these are true:
 
-1. it carries our ownership marker (`managed_by: npmplus-docker-sync`) **and**
-   this instance's id,
+1. it carries our ownership marker - the `# npmplus-docker-sync:` line at the
+   top of its advanced configuration, or `managed_by: npmplus-docker-sync` in
+   its meta object - **and** this instance's id,
 2. no container claims its identity any more,
 3. `DELETE_ORPHANS=true` (the default),
 4. the run is not the shutdown flush,
@@ -33,6 +34,8 @@ Everything else is left alone.
 | Another sync instance manages the host | Never touched (`SYNC_INSTANCE_ID`). Without an id - `/info` denied and nothing configured - instance scoping is off and every resource with our marker counts as ours, which is what a single instance wants. |
 | Another tool manages the host (`npm-docker-sync`, anything else) | Never touched. |
 | The host was created by hand | Adopted when a label claims its domain, otherwise never touched — and never deleted while unmanaged. |
+| The marker was copied to another host, or the host's first domain was edited by hand | The marker no longer names that host, so the host is nobody's: never deleted, adopted again if a label claims it. |
+| NPMplus is upgraded and empties the meta object of every host | Nothing changes: the marker keeps the owner. Hosts that never got a marker (written before v1.0.0-beta.10, and the tool was not updated before NPMplus) lose their owner — they are never deleted, and adopted again by the labels that still claim them. |
 | SIGTERM / container shutdown | The final flush creates and updates, but never deletes. |
 
 ## Protected containers
@@ -42,8 +45,8 @@ invalid enum value, a domain that is not one — that container yields no
 resources for the run. Without a safeguard its hosts would look orphaned and be
 deleted, so a typo would take a production host down.
 
-Instead the container is recorded as protected, and every resource whose meta
-names it survives the run:
+Instead the container is recorded as protected, and every resource whose
+ownership names it survives the run:
 
 ```
 WARN ignoring invalid label definition (its hosts are protected from deletion)

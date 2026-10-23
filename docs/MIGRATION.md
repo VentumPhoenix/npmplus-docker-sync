@@ -187,7 +187,7 @@ npmplus-docker-sync validate   # parse the labels, report, never write
 npmplus-docker-sync sync       # one reconcile, then exit with a status code
 ```
 
-## From v1.0.0-beta.4 to v1.0.0-beta.8
+## From v1.0.0-beta.4 to v1.0.0-beta.9
 
 Nothing to change: no labels, variables or defaults were renamed. These
 releases fix compatibility with servers this project already claimed to
@@ -204,3 +204,63 @@ Two notes for anyone pinning a version:
   that is what the server stores for it anyway. The result is one last update
   per such host on the first run after the upgrade, and no update on the runs
   after that.
+
+## From v1.0.0-beta.9 to v1.0.0-beta.10
+
+No labels, variables or defaults changed. What changes is where a host keeps
+its owner, and the order in which you upgrade.
+
+### Update this tool before NPMplus
+
+The next NPMplus release moves its meta object into columns and empties `meta`
+on every host while doing so - and the meta object is where releases up to
+beta.9 recorded which hosts are theirs. Beta.10 records the owner a second time,
+in a comment line at the top of each host's advanced configuration:
+
+```
+# npmplus-docker-sync: managed from Docker labels, do not edit or remove this line | v=1 key=app.example.com container=web index=0 ...
+```
+
+That line survives the NPMplus migration. So:
+
+1. update npmplus-docker-sync to beta.10 and let it run once - every managed
+   host is updated a single time to receive the marker, the hosts of stopped
+   containers included;
+2. then update NPMplus whenever you like.
+
+Leave the line alone in the NPMplus UI. A host without it - or with one copied
+from another host - is treated as created by hand: never deleted, and adopted
+again only if a label still claims its domain.
+
+**Updated NPMplus first?** Then the hosts have already lost their owner, and
+nothing can tell them apart from hand-made ones any more. Nothing is deleted:
+every host a label still claims is adopted and marked on the first run, and
+the rest stays as it is. Hosts whose container is gone for good are no longer
+cleaned up automatically; delete them by hand.
+
+### One update per host
+
+The first run after the upgrade updates every managed host once, to add the
+marker. `DRY_RUN=true` shows it as `ownership_marker: unset → true`. The runs
+after that change nothing.
+
+### Upstream NPM gets the marker too
+
+The marker is written on upstream nginx-proxy-manager as well, next to the
+meta object it still has, so both servers behave the same. Its streams have no
+advanced configuration and keep their owner in the meta object.
+
+### Fixes that change a host
+
+* **Redirections that keep the request's scheme** (`scheme: auto`, the
+  default) were written as `auto`, which NPMplus puts verbatim into
+  `return 301 auto://...`. They are written as nginx' `$scheme` now, and the
+  existing ones are corrected on the first run. Upstream NPM keeps `auto`,
+  which it translates itself.
+* **The proxy protocol of a stream** is written as a boolean for the NPMplus
+  releases that declare it so; `proxy_protocol: v2` was rejected there. Those
+  releases only know "on", so v2 is stored as on and a warning says so.
+* **Settings NPMplus no longer offers** - `websockets` and `ssl.http2` (always
+  on), `caching`, `block_exploits`, `trust_forwarded_proto` - are left out of
+  the request on an NPMplus without the meta object, with a warning when a
+  label set one explicitly.
