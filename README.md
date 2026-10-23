@@ -1,88 +1,34 @@
 <div align="center">
 
-# npmplus-docker-sync
+# 🏷️ npmplus-docker-sync
 
-**Docker labels → Nginx Proxy Manager & NPMplus. Automatically, safely, in one static binary.**
+### Add one label to a container. Get a working HTTPS proxy host in Nginx Proxy Manager.
+
+**No clicking. No copy-paste. No forgotten hosts.**
 
 [![CI](https://github.com/VentumPhoenix/npmplus-docker-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/VentumPhoenix/npmplus-docker-sync/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/VentumPhoenix/npmplus-docker-sync/actions/workflows/codeql.yml/badge.svg)](https://github.com/VentumPhoenix/npmplus-docker-sync/actions/workflows/codeql.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/VentumPhoenix/npmplus-docker-sync.svg)](https://pkg.go.dev/github.com/VentumPhoenix/npmplus-docker-sync)
 [![Go Report Card](https://goreportcard.com/badge/github.com/VentumPhoenix/npmplus-docker-sync)](https://goreportcard.com/report/github.com/VentumPhoenix/npmplus-docker-sync)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Image](https://img.shields.io/badge/ghcr.io-npmplus--docker--sync-2496ED?logo=docker&logoColor=white)](https://github.com/VentumPhoenix/npmplus-docker-sync/pkgs/container/npmplus-docker-sync)
 
-Label a container, and its **proxy hosts, redirections, streams and 404 hosts**
-appear in Nginx Proxy Manager. Stop the container, and they disappear again —
-no clicking, no drift.
+Works with **[Nginx Proxy Manager](https://github.com/NginxProxyManager/nginx-proxy-manager)** and **[NPMplus](https://github.com/ZoeyVid/NPMplus)** · ~8 MB image · read-only Docker access
+
+[Quick start](#-quick-start) · [Examples](#-examples) · [Is it safe?](#%EF%B8%8F-is-it-safe) · [Configuration](#%EF%B8%8F-configuration) · [Troubleshooting](#-troubleshooting)
 
 </div>
 
 ---
 
-> [!IMPORTANT]
-> **v1.0.0-beta.4 hardens deletion.** A stopped container no longer loses its
-> host, a typo in a label can no longer delete one, several instances can share
-> one NPM, and a run that would remove an implausible share of your hosts is
-> refused. See [docs/DELETION.md](docs/DELETION.md).
->
-> **v1.0.0-beta.3 changed what `host` means.** It is now the upstream target,
-> as in [Redth/npm-docker-sync](https://github.com/Redth/npm-docker-sync); the
-> domain is `domains`. Containers no longer need `npm.enable`, and certificates
-> are selected automatically. See
-> [docs/MIGRATION.md](docs/MIGRATION.md).
+## 🤔 What does it do?
 
-## Why
+You run apps in Docker and use Nginx Proxy Manager (NPM) to make them reachable
+under nice domains with HTTPS. Normally, every new app means opening the NPM
+UI, clicking through a form, picking a certificate — and remembering to delete
+the host when the app is gone.
 
-Nginx Proxy Manager has a lovely UI and a decent API, but every new container
-still means the same six clicks. Traefik-style label-driven routing is the
-better workflow — `npmplus-docker-sync` brings it to NPM without replacing it.
-
-It watches the Docker event stream, reads a handful of labels and reconciles
-them against the NPM API. It works with **both** upstream
-[Nginx Proxy Manager](https://github.com/NginxProxyManager/nginx-proxy-manager)
-(JWT auth) and [NPMplus](https://github.com/ZoeyVid/NPMplus) (httpOnly cookie
-auth) — the auth mode is detected at login, nothing to configure.
-
-## Features
-
-| | |
-|---|---|
-| 🏷️ **Label driven** | `npm.proxy.domains: app.example.com` — that is the whole configuration |
-| 🧩 **All four resource types** | Proxy hosts, redirection hosts, TCP/UDP streams and 404 hosts |
-| 🔐 **Automatic certificates** | Picks the matching certificate, exact before wildcard, and keeps it stable |
-| 🎛️ **Global defaults** | `NPM_PROXY_*` / `NPM_DEFAULT_*` for every field, overridden per container |
-| 🤝 **Redth compatible** | The labels and environment of [npm-docker-sync](https://github.com/Redth/npm-docker-sync) work unchanged |
-| 🔢 **Many services per container** | Indexed labels: `npm.proxy.1.domains`, `npm.2.stream.incoming_port` |
-| 🎯 **IP-based upstreams** | Resolves the container's IP instead of its name — no more DNS-related 502s |
-| 🔁 **Event driven** | Reacts to `start` / `stop` / `die` / `destroy` within seconds |
-| 🧠 **Idempotent** | Per-kind fingerprint cache: no API call when nothing changed |
-| 🧹 **Self cleaning** | Removes resources whose container is gone — and only those it created |
-| 🛡️ **Hard to lose data** | A stopped container is disabled, not deleted; a broken label protects its hosts; a mass deletion is refused |
-| 👥 **Multi-instance** | Several Docker hosts can drive one NPM without fighting over resources |
-| 📊 **Observable** | `/healthz`, `/readyz`, `/status` (JSON) and `/metrics` (Prometheus) |
-| 🔐 **Socket-proxy ready** | Talks to Docker over TCP, so the raw socket never enters the container |
-| 🔑 **Dual auth** | NPM (Bearer JWT) and NPMplus (httpOnly cookie), auto-detected |
-| 🧊 **Debounced** | A `docker compose up` of 20 services triggers *one* reconcile |
-| 🚦 **Serialised writes** | A single worker goroutine — no `SQLITE_BUSY` from concurrent writes |
-| 🛑 **Graceful shutdown** | SIGTERM drains the queue and flushes state before exiting |
-| 🪶 **Tiny** | `FROM scratch`, non-root (`1000:1000`), ~8 MB image, no runtime deps |
-| 🧪 **Tested** | Table-driven unit tests, mocked Docker + NPM APIs, `-race` in CI |
-
-## Quick start
-
-```bash
-git clone https://github.com/VentumPhoenix/npmplus-docker-sync.git
-cd npmplus-docker-sync
-
-cp .env.example .env            # NPM_URL, NPM_IDENTITY, ...
-mkdir -p secrets && printf '%s' 'your-npm-password' > secrets/npm_password.txt
-chmod 600 secrets/npm_password.txt
-
-docker compose up -d            # starts docker-socket-proxy + npmplus-docker-sync
-docker compose logs -f npmplus-docker-sync
-```
-
-Then label any container on the same Docker host:
+**npmplus-docker-sync does that for you.** You describe the domain right next
+to the app, and NPM follows automatically.
 
 ```yaml
 services:
@@ -90,61 +36,91 @@ services:
     image: traefik/whoami
     networks: [npm]
     labels:
-      npm.proxy.domains: "whoami.example.com"
+      npm.proxy.domains: "whoami.example.com"   # ← that's it
 ```
 
-Within a few seconds the proxy host `whoami.example.com → http://172.20.0.5:80`
-exists in NPM — with the port read from the image's `EXPOSE`, the matching
-certificate attached and HTTPS enforced. `docker compose down` removes it
-again.
+A few seconds after `docker compose up`, NPM has a proxy host
+`whoami.example.com` — pointing at the right container and port, with the
+matching certificate attached and HTTPS enforced.
 
-Opt a container out with `npm.enable: "false"`.
+<table>
+<tr><th>😩 Without</th><th>😎 With npmplus-docker-sync</th></tr>
+<tr><td>
 
-### One container, many resources
+1. Start the container
+2. Open the NPM UI
+3. *Add proxy host*, type domain
+4. Look up the container IP and port
+5. Pick the certificate, tick *Force SSL*
+6. Save — and repeat for every app
+7. Forget to delete it later
 
-Indexed labels expose several services from a single container — and each
-index can be a different resource type:
+</td><td>
 
-```yaml
-labels:
-  # 0: the web UI
-  npm.proxy.domains: "app.example.com"
-  npm.proxy.port: "8080"
+1. Add one label
+2. `docker compose up -d`
+3. ✅ Done
 
-  # 1: the metrics endpoint on another port, behind an access list
-  npm.1.proxy.domains: "metrics.app.example.com"
-  npm.1.proxy.port: "9090"
-  npm.1.proxy.access_list: "Intern"
+Stop the app → the host is disabled.
+Remove the app → the host is cleaned up.
 
-  # 2: the database, exposed as a TCP stream
-  npm.2.stream.incoming_port: "5432"
+</td></tr>
+</table>
 
-  # 3: redirect the old domain
-  npm.3.redirect.domains: "old-app.example.com"
-  npm.3.redirect.forward_domain: "app.example.com"
+If you know Traefik's labels: it's that workflow, but for Nginx Proxy Manager —
+you keep NPM and its UI exactly as they are.
 
-  # 4: park a domain on a 404 page
-  npm.4.404.domains: "parked.example.com"
-```
+## ✨ Highlights
 
-Labels without an index belong to index `0`, so `npm.proxy.domains` and
-`npm.0.proxy.domains` are the same thing. The index may also follow the kind
-(`npm.proxy.1.domains`), which is how Redth writes it.
+- 🏷️ **One label is enough** — port, certificate and HTTPS are figured out automatically
+- 🧩 **All four NPM types** — proxy hosts, redirections, TCP/UDP streams and 404 hosts
+- 🔐 **Certificates pick themselves** — the best matching one, exact before wildcard
+- 🎯 **No more `502 Bad Gateway`** — uses the container's IP on the network NPM can actually reach
+- 🛡️ **Hard to break** — never touches hosts you made by hand, and refuses suspicious mass deletions
+- ⚡ **Fast and quiet** — reacts in seconds, and 20 containers starting at once cause *one* update
+- 🤝 **Drop-in for [Redth/npm-docker-sync](https://github.com/Redth/npm-docker-sync)** — its labels work unchanged
+- 🔒 **Secure by default** — talks to Docker through a read-only socket proxy, runs as non-root in a ~8 MB `scratch` image
+- 📊 **Observable** — health checks, a JSON status page and Prometheus metrics built in
 
-### Check before you deploy
+## 🚀 Quick start
+
+**You need:** Docker with Compose, and a running Nginx Proxy Manager or NPMplus
+in a Docker network (here called `npm`).
+
+**1. Get the files**
 
 ```bash
-npmplus-docker-sync validate              # check the labels of the running containers
-docker compose config --format json > stack.json
-npmplus-docker-sync validate stack.json   # check a stack before it even starts
-npmplus-docker-sync sync                  # exactly one reconcile, then exit
+git clone https://github.com/VentumPhoenix/npmplus-docker-sync.git
+cd npmplus-docker-sync
+cp .env.example .env
 ```
 
-`validate` never contacts NPM — with a file it does not need Docker either —
-and exits non-zero when a label set is broken, which makes it a useful step in
-a pipeline before the stack goes live.
+**2. Enter your NPM login**
 
-### Without compose
+Put your NPM admin e-mail into `.env` (`NPM_IDENTITY=...`) and the password into
+a secret file:
+
+```bash
+mkdir -p secrets
+printf '%s' 'your-npm-password' > secrets/npm_password.txt
+chmod 600 secrets/npm_password.txt
+```
+
+> [!TIP]
+> Your first run against a real NPM? Set `DRY_RUN=true` in `.env`. The tool then
+> only **logs** what it would change, without touching anything.
+
+**3. Start it**
+
+```bash
+docker compose up -d
+docker compose logs -f npmplus-docker-sync
+```
+
+**4. Label your apps** — as in the example above. Done! 🎉
+
+<details>
+<summary><b>Without Compose (<code>docker run</code>)</b></summary>
 
 ```bash
 docker run -d --name npmplus-docker-sync \
@@ -157,223 +133,244 @@ docker run -d --name npmplus-docker-sync \
   ghcr.io/ventumphoenix/npmplus-docker-sync:latest
 ```
 
-### From source
+For a quick test without a socket proxy, see
+[docker-compose.simple.yml](docker-compose.simple.yml).
+</details>
 
-Requires Go 1.26 or newer — that is the minimum of the official Docker SDK,
-which is this project's only direct dependency.
+<details>
+<summary><b>Build from source</b></summary>
+
+Requires Go 1.26 or newer.
 
 ```bash
 make build     # static binary ./npmplus-docker-sync
 make test      # race-enabled unit tests
 make check     # fmt + vet + lint + test
 ```
+</details>
 
-## How it works
+## 📖 Examples
 
-```
-                    ┌────────────────────────┐
-  docker events ───▶│ listener  (filtered)   │   type=container
-  (start/die/stop)  │ internal/docker        │   event=start,die,stop,…
-                    └───────────┬────────────┘
-                                │ Event
-                    ┌───────────▼────────────┐
-                    │ debouncer              │   quiet period 3s
-                    │ internal/syncer        │   hard cap 30s
-                    └───────────┬────────────┘
-                                │ []Event (one batch per burst)
-                    ┌───────────▼────────────┐   ┌────────────────────┐
-                    │ worker (single         │──▶│ state cache        │
-                    │ goroutine, sequential) │◀──│ RWMutex, per kind: │
-                    └───────────┬────────────┘   │ proxy · redirect · │
-                                │                │ stream · 404       │
-                                │                └────────────────────┘
-                    ┌───────────▼────────────────────────────────────┐
-                    │ NPM / NPMplus REST API                         │
-                    │ /proxy-hosts /redirection-hosts                │
-                    │ /streams     /dead-hosts                       │
-                    └────────────────────────────────────────────────┘
-```
+Copy what you need into the `labels:` of your container.
 
-1. **Reconciliation on startup.** Desired state (container labels) is compared
-   against live state (all four NPM collections) and the delta is applied — so
-   a restart after downtime repairs whatever drifted.
-2. **Events** are filtered *server-side*: the daemon only ever sends container
-   lifecycle events, which is what a socket proxy can be locked down to.
-3. **Debouncing** collapses bursts. `docker compose up` with 20 services
-   produces one reconcile, not 20.
-4. **One worker** performs every write. NPM stores its config in SQLite, which
-   does not appreciate concurrent writers.
-5. **A per-kind fingerprint cache** (SHA-256 over the canonical config)
-   short-circuits no-op updates, so a periodic resync costs a handful of
-   `GET`s.
-6. **The certificate list is polled** on its own schedule, because a
-   certificate issued in the NPM UI is not a Docker event.
-7. **SIGTERM** stops event intake, runs a final reconcile with a detached
-   context and exits — nothing is lost when Watchtower or Proxmox restarts the
-   container.
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the details.
-
-## Upstream host resolution
-
-NPM needs to reach your container. Using the container *name* only works when
-NPM can resolve Docker's internal DNS, which is the most common cause of
-`502 Bad Gateway` after a proxy host is created.
-
-`npmplus-docker-sync` therefore defaults the upstream to the container's **IP
-address**:
-
-1. an explicit `npm.proxy.host` / `npm.stream.host` label, else
-2. **with `NPM_NETWORK` set** — the IP in exactly that network. A container
-   that is not attached to it is skipped with a warning naming the networks it
-   *is* on. Nothing else is tried: an address on a network NPM does not share
-   is unreachable, and so is the container name, so a proxy host pointing
-   there would only produce a silent `502`.
-3. **with `NPM_CONTAINER_NAME` set** — the networks that container is on, so
-   naming the NPM container is enough to get the resolution right.
-4. **without either** — the IP in a network this sync container is itself
-   attached to, else the IP of the first network (alphabetically), else the
-   container name as a last resort.
-
-Set `RESOLVE_CONTAINER_IP=false` to go back to name-based upstreams, or
-`npm.<kind>.resolve_ip=false` for a single resource.
-`NPM_NETWORK_STRICT=false` restores the old fall-through behaviour if you
-really do want it.
-
-> [!NOTE]
-> Container IPs change when a container is recreated. That is fine: the next
-> event triggers a reconcile and the proxy host is updated within seconds.
-
-## Labels
-
-```
-<prefix>.enable=false                     exclude the container
-<prefix>.<kind>.<field>                   one resource, index 0
-<prefix>.<kind>.<index>.<field>           indexed (Redth's position)
-<prefix>.<index>.<kind>.<field>           indexed (our own position)
-<prefix>.<field>                          shorthand, <kind> defaults to proxy
-```
-
-`<prefix>` is `npm` by default (`LABEL_PREFIX`) and may be followed by `.` or
-`-`. `<kind>` is one of `proxy`, `redirect`, `stream`, `404` (alias `dead`).
-Inside a field name `.`, `_` and `-` are interchangeable, so
-`ssl.hsts.subdomains`, `ssl.hsts_subdomains` and `ssl-hsts-subdomains` are the
-same field. Booleans accept `true/false`, `1/0`, `yes/no`, `on/off`.
-
-Every container carrying at least one label of the namespace is managed;
-`npm.enable: "false"` opts out, and `NPM_EXPOSED_BY_DEFAULT=false` restores the
-old "opt-in only" behaviour.
-
-> [!IMPORTANT]
-> `domains` is the domain the world asks for, `host` is the upstream it is
-> served from — the meaning Redth's labels have. For redirection and 404 hosts,
-> which have no upstream, `host` stays an alias for `domains`.
-
-**Every label, what it does, its aliases, its default and the environment
-variable behind it is listed in [docs/FIELDS.md](docs/FIELDS.md)** — generated
-from the same table the parser reads. [docs/LABELS.md](docs/LABELS.md) explains
-the rules; the highlights:
-
-### Defaults you can move
-
-Every field has an environment variable that changes its default for all
-containers, and a label always wins over it:
+**A web app with HTTPS**
 
 ```yaml
-# on the sync container
-NPM_PROXY_SSL_FORCE: "true"        # https everywhere ...
-NPM_DEFAULT_CERTIFICATE: "auto"
+npm.proxy.domains: "app.example.com"
 ```
+
+**…on a specific port, with several domains**
 
 ```yaml
-# ... except here
-npm.proxy.ssl.force: "false"
+npm.proxy.domains: "app.example.com, www.app.example.com"
+npm.proxy.port: "8080"
 ```
 
-The resolution order per field is: indexed label → label → `NPM_<KIND>_<FIELD>`
-→ `NPM_DEFAULT_<FIELD>` → built-in default.
+**…behind a login (Authelia, Authentik, …) and an access list** *(login: NPMplus only)*
 
-### Certificates pick themselves
+```yaml
+npm.proxy.domains: "kuma.example.com"
+npm.proxy.auth_request: "authelia"
+npm.proxy.access_list: "Intern"
+```
 
-`certificate` defaults to `auto`: the tool looks through the certificates that
-exist in NPM and attaches the one that fits best — exact match before wildcard,
-ties broken by the longest remaining validity. Expired certificates, deleted
-ones and NPMplus' client CAs (`provider: mtls`) are never considered, a
-wildcard covers exactly one label (RFC 6125), and a certificate that already
-fits is kept rather than swapped for an equally good one.
+**Redirect an old domain**
+
+```yaml
+npm.redirect.domains: "old-app.example.com"
+npm.redirect.forward_domain: "app.example.com"
+```
+
+**Expose a database as a TCP stream**
+
+```yaml
+npm.stream.incoming_port: "5432"
+```
+
+**Show a 404 page for a parked domain**
+
+```yaml
+npm.404.domains: "parked.example.com"
+```
+
+**Several things from one container** — just number them:
+
+```yaml
+npm.proxy.domains: "app.example.com"          # 0: the web UI
+npm.1.proxy.domains: "metrics.example.com"    # 1: a second port
+npm.1.proxy.port: "9090"
+npm.2.stream.incoming_port: "5432"            # 2: the database
+```
+
+**Leave a container alone**
+
+```yaml
+npm.enable: "false"
+```
+
+📚 **Every label** — with what it does, its default and aliases — is listed in
+[docs/FIELDS.md](docs/FIELDS.md). The rules behind them are in
+[docs/LABELS.md](docs/LABELS.md).
+
+<details>
+<summary><b>Label syntax in detail</b></summary>
+
+```
+npm.<kind>.<field>              one resource
+npm.<index>.<kind>.<field>      several resources (npm.<kind>.<index>.<field> works too)
+npm.<field>                     shorthand for npm.proxy.<field>
+npm.enable=false                ignore this container
+```
+
+- `<kind>` is `proxy`, `redirect`, `stream` or `404`.
+- `domains` is the domain people visit; `host` is the upstream the app is
+  served from (for redirections and 404 hosts, `host` means `domains`).
+- `.`, `_` and `-` are interchangeable in field names: `ssl.hsts.subdomains`
+  = `ssl_hsts_subdomains`.
+- Booleans accept `true/false`, `1/0`, `yes/no`, `on/off`.
+- The prefix `npm` can be changed with `LABEL_PREFIX`.
+- A typo gets a warning with a suggestion (`did you mean npm.proxy.ssl.forced?`).
+</details>
+
+<details>
+<summary><b>Automatic certificates</b></summary>
+
+By default (`certificate: auto`) the tool picks the certificate in NPM that fits
+best: exact match before wildcard, then the one valid the longest. Expired
+certificates are ignored, and a certificate that already fits is never swapped
+for an equally good one. New certificates from the NPM UI are noticed within a
+minute.
 
 ```yaml
 npm.proxy.certificate: "auto"                # the default
 npm.proxy.certificate: "12"                  # a fixed id
 npm.proxy.certificate: "*.home.example.com"  # whatever covers this domain
-npm.proxy.certificate: "name:My wildcard"    # by nice name
+npm.proxy.certificate: "name:My wildcard"    # by name
 npm.proxy.certificate: "new"                 # request a Let's Encrypt one
-npm.proxy.certificate: "none"                # deliberately plain HTTP
+npm.proxy.certificate: "none"                # plain HTTP
 ```
 
-`ssl.forced` defaults to `auto` — on as soon as a certificate is attached. New
-certificates are noticed within `CERTIFICATE_POLL_INTERVAL` (1 minute), without
-a restart.
+HTTPS is forced automatically as soon as a certificate is attached.
+</details>
 
-### Ports guess themselves
+<details>
+<summary><b>Automatic ports</b></summary>
 
-`port` defaults to `auto`: a container that exposes exactly one TCP port needs
-no port label at all. With several ports `NPM_PORT_PREFERENCE`
-(`80,8080,3000,8000,443`) decides, and when none of them matches the resource
-is skipped with a message naming the ports it found.
+If a container exposes exactly one port, you don't need a port label. With
+several ports, `NPM_PORT_PREFERENCE` (`80,8080,3000,8000,443`) decides. If none
+of them fits, the host is skipped and the log names the ports it found.
+</details>
 
-### Hosts sort themselves into groups
+<details>
+<summary><b>Defaults for all containers</b></summary>
 
-NPMplus can fold its host lists into groups. `group` puts a resource into one —
-on proxy hosts, redirections, streams and 404 hosts alike — and
-`NPM_DEFAULT_GROUP` does it for every container at once:
+Every label has a matching environment variable on the sync container. A label
+on a container always wins:
 
 ```yaml
-npm.proxy.domains: "app.example.com"
+# on npmplus-docker-sync: HTTPS everywhere ...
+NPM_PROXY_SSL_FORCE: "true"
+```
+
+```yaml
+# ... except on this container
+npm.proxy.ssl.force: "false"
+```
+
+Order: indexed label → label → `NPM_<KIND>_<FIELD>` → `NPM_DEFAULT_<FIELD>` →
+built-in default.
+</details>
+
+<details>
+<summary><b>NPMplus extras (groups, CrowdSec, HTTP/3, …)</b></summary>
+
+Everything NPMplus can do is a label: `auth_request`, `crowdsec_appsec`,
+`noindex`, `x_frame_options`, `fancyindex`, `upstream_compression`,
+`request_buffering`, `response_buffering`, `location_config`, HTTP/3, custom
+locations — and `group`, which sorts hosts into the folders of the NPMplus UI:
+
+```yaml
 npm.proxy.group: "Production"
 ```
 
-A container that says nothing about groups leaves the resource where it is,
-including in a group somebody picked by hand in the UI; `group: "none"` is the
-spelling that takes it out of one. Details in
-[docs/LABELS.md](docs/LABELS.md#groups).
+Against the original Nginx Proxy Manager, NPMplus-only settings are simply
+left out and reported once — nothing fails.
+</details>
 
-### Everything NPMplus can do
+<details>
+<summary><b>Check labels before deploying</b></summary>
 
-`auth_request` (Authelia, Authentik, tinyauth, …), `crowdsec_appsec`,
-`noindex`, `x_frame_options`, `fancyindex`, `upstream_compression`,
-`request_buffering`, `response_buffering`, `location_config`, `group`, HTTP/3,
-the stream extras and custom location blocks with their nginx modifiers are all
-labels. Against upstream nginx-proxy-manager the NPMplus-only ones are left out
-of the request and reported once, instead of failing the write.
-
-```yaml
-npm.proxy.domains: "kuma.home.example.com"
-npm.proxy.port: "3001"
-npm.proxy.auth_request: "authelia"
-npm.proxy.access_list: "Intern"
-npm.proxy.noindex: "true"
+```bash
+npmplus-docker-sync validate              # check the labels of running containers
+docker compose config --format json > stack.json
+npmplus-docker-sync validate stack.json   # check a stack before it starts
+npmplus-docker-sync sync                  # one sync, then exit
 ```
 
-> [!NOTE]
-> Three NPMplus switches are "disable X" in the API. The labels are positive —
-> `crowdsec_appsec: "true"` means the AppSec component is **active** — and are
-> negated on the way in. The explicit `disable_crowdsec_appsec` spelling works
-> too.
+`validate` never contacts NPM and exits non-zero on broken labels — handy as a
+CI step.
+</details>
 
-> [!NOTE]
-> The server clears TLS settings that cannot apply: without a certificate
-> `ssl.forced` is dropped, without `ssl.forced` HSTS is dropped, and without
-> HSTS `ssl.hsts_subdomains` is dropped. `npmplus-docker-sync` applies the same
-> cascade before comparing, so a half-configured host converges instead of
-> being rewritten on every event.
+## 🛡️ Is it safe?
 
-> [!NOTE]
-> A label that names no field produces a warning with a suggestion
-> (`did you mean npm.proxy.ssl.forced?`). `STRICT_LABELS=true` skips the
-> resource instead, so a typo cannot quietly leave a host without TLS.
+Short answer: **it is built to never destroy something you care about.**
 
-## Configuration
+| Situation | What happens |
+|---|---|
+| You created a host **by hand** in NPM | Never deleted. Only hosts the tool created itself are ever removed. |
+| Another tool (e.g. Redth's) created a host | Never touched. |
+| A container is **stopped** | Its host is **disabled**, not deleted — a restart just turns it back on. |
+| A container is restarted or updated | Nothing changes (1 minute grace period). |
+| A label contains a **typo** | That container's hosts are protected, not deleted. |
+| A run would delete **many hosts at once** | Refused. (`DELETE_GUARD`, default: more than half) |
+| Docker reports **no containers at all** | Nothing is deleted. |
+| The domain is already used by another host | Reported as a conflict, nothing is overwritten. |
+| Several Docker hosts share **one NPM** | Each instance only manages its own hosts. |
+
+> [!CAUTION]
+> **Before your first real run:** if this tool ever created a host for
+> something you still need — like the NPM admin UI itself — make sure that
+> container still has its `npm.*` labels. Run once with `DRY_RUN=true` and
+> check the log for `would delete` lines.
+
+**Docker access is read-only.** The recommended setup never gives this tool the
+Docker socket. It goes through a
+[docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) that
+only allows *reading* containers and events — so even a compromised sync
+container could not start, stop or change anything:
+
+```
+npmplus-docker-sync ──tcp──▶ docker-socket-proxy ──read-only──▶ /var/run/docker.sock
+   (no socket)                 POST=0, no exec, no images, no volumes
+```
+
+The container itself runs as non-root from an empty `scratch` image, with a
+read-only filesystem and all capabilities dropped. The NPM password comes from
+a Docker secret and never appears in logs.
+
+More: [docs/DELETION.md](docs/DELETION.md) (every rule around deletion) ·
+[SECURITY.md](SECURITY.md) (threat model).
+
+## ⚙️ Configuration
+
+Most setups only need these:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `NPM_URL` | — | **Required.** Address of the NPM API, e.g. `http://npm:81` |
+| `NPM_IDENTITY` | — | **Required.** NPM admin e-mail |
+| `NPM_SECRET` / `NPM_SECRET_FILE` | — | **Required.** NPM admin password (or a file containing it) |
+| `NPM_NETWORK` | — | The Docker network NPM and your apps share |
+| `DOCKER_HOST` | `unix:///var/run/docker.sock` | How to reach Docker (`tcp://docker-socket-proxy:2375` in the recommended setup) |
+| `DRY_RUN` | `false` | Only log what would change |
+| `NPM_ON_STOP` | `disable` | What a stopped container does to its hosts: `disable`, `keep` or `delete` |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `HEALTH_ADDR` | — | Turn on `/healthz`, `/readyz`, `/status`, `/metrics`, e.g. `:8080` |
+
+Any variable can be read from a file by adding `_FILE` (Docker secrets).
+
+<details>
+<summary><b>All environment variables</b></summary>
 
 | Variable | Default | Description |
 |---|---|---|
@@ -383,7 +380,7 @@ npm.proxy.noindex: "true"
 | `<NAME>_FILE` | — | Any variable can be read from a file instead (Docker secrets), e.g. `NPM_SECRET_FILE`. |
 | `NPM_TIMEOUT` | `30s` | HTTP timeout per API request. |
 | `NPM_INSECURE_SKIP_VERIFY` | `false` | Accept self-signed NPM certificates. |
-| `NPM_FLAVOUR` | `auto` | API dialect: `auto`, `npmplus` or `npm` (alias `NPM_FLAVOR`). See below. |
+| `NPM_FLAVOUR` | `auto` | API dialect: `auto`, `npmplus` or `npm` (alias `NPM_FLAVOR`). |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | `unix://`, `tcp://`, `npipe://` or `ssh://`. |
 | `NPM_NETWORK` | — | The Docker network upstream IPs are taken from. |
 | `NPM_CONTAINER_NAME` | — | Name of the NPM container; its networks are used when `NPM_NETWORK` is unset. |
@@ -412,394 +409,198 @@ npm.proxy.noindex: "true"
 | `ADOPT_EXISTING` | `true` | Take over a pre-existing resource for a labelled key. |
 | `DRY_RUN` | `false` | Log intended changes without calling the API. |
 | `SHUTDOWN_TIMEOUT` | `30s` | Budget for the final flush after SIGTERM. |
-| `HEALTH_ADDR` | — | Expose `/healthz` and `/readyz`, e.g. `:8080`. |
+| `HEALTH_ADDR` | — | Expose `/healthz`, `/readyz`, `/status` and `/metrics`, e.g. `:8080`. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
-| `LOG_FORMAT` | `text` | `text` or `json` (structured `log/slog`). |
+| `LOG_FORMAT` | `text` | `text` or `json`. |
 | `LOG_PAYLOADS` | `false` | Mirror full API request bodies into the debug log (credentials redacted). |
 
 Durations accept Go syntax (`3s`, `1m30s`); a bare number means seconds.
-Tuning advice and the full reference: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+Tuning advice: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+</details>
 
-### NPM or NPMplus?
+<details>
+<summary><b>Nginx Proxy Manager or NPMplus?</b></summary>
 
-The two forks share their endpoints but not their request schemas, and both
-validate with `additionalProperties: false` — a body built for the wrong one is
-rejected in full with `400 data must NOT have additional properties`. The
-differences that matter:
+Both work, and the tool detects which one it talks to at startup. The two
+forks accept slightly different requests, so the right format is built for
+each. If detection ever guesses wrong, pin it with `NPM_FLAVOUR=npmplus` or
+`NPM_FLAVOUR=npm`.
 
 | | Nginx Proxy Manager | NPMplus |
 |---|---|---|
-| `enabled` in a write body | rejected¹ | rejected |
-| Access lists | `access_list_id` (one) | `npmplus_access_list_ids` + `npmplus_access_list_type` |
-| Location access lists | not applicable | mandatory on every location |
-| Stream ports | integers | strings (`"8080-8090"` ranges allowed) |
-| HTTP/3, gRPC upstreams | — | supported |
+| Access lists | one per host | several per host |
+| Stream port ranges (`8080-8090`) | — | ✅ |
+| HTTP/3, gRPC, CrowdSec, groups | — | ✅ |
 
-¹ accepted by the proxy-host schema, ignored everywhere else; this tool never
-sends it and uses the `/enable` and `/disable` endpoints for all four kinds.
-
-The flavour is detected once at startup — from an existing proxy host, falling
-back to the `version` object in `GET /api/` — and logged:
-
-```json
-{"level":"INFO","msg":"detected npm api flavour","flavour":"npmplus","detected_from":"proxy host schema"}
-```
-
-Pin it with `NPM_FLAVOUR=npmplus` or `NPM_FLAVOUR=npm` if the detection ever
-guesses wrong. NPMplus-only *settings* (HTTP/3, forward auth, CrowdSec, …) are
-simply left out of an upstream-NPM request and reported once per resource.
-Configurations that flavour genuinely cannot express — several access lists on
-upstream NPM, a Let's Encrypt `certificate: new` on an NPMplus stream, a port
-range against upstream NPM — fail with a message naming the feature instead of
-an opaque 400.
+Settings one flavour doesn't support are left out and reported once; things
+it can't express at all fail with a clear message instead of a cryptic `400`.
 
 > [!TIP]
-> Pin your NPM/NPMplus image to a version tag rather than `:latest`. The
-> request schemas change between releases, and an unattended upgrade can start
-> rejecting payloads that worked yesterday.
+> Pin your NPM/NPMplus image to a version tag instead of `:latest` — their API
+> changes between releases.
+</details>
 
-## Ownership: what gets deleted
+## 🔍 How it works
 
-Every resource created by this tool is stamped with
-`managed_by: npmplus-docker-sync` in its NPM `meta` field.
-
-* Resources **without** that marker are never deleted — your hand-made entries
-  are safe, even if `DELETE_ORPHANS=true`.
-* Resources carrying **another tool's** marker are never touched at all. That
-  includes `managed_by: npm-docker-sync`, written by
-  [Redth/npm-docker-sync](https://github.com/Redth/npm-docker-sync): both tools
-  can run against the same NPM instance without deleting each other's work.
-  `MIGRATE_FROM_REDTH=true` takes those hosts over and re-stamps them, keeping
-  Redth's own bookkeeping in the meta — see
-  [docs/MIGRATION.md](docs/MIGRATION.md).
-* A domain that another, foreign host already serves is reported as a conflict
-  (with that host's id and owner) and the own host is not created, instead of
-  letting the API answer `domain already in use`.
-* Resources carrying **another sync instance's** id (`managed_instance`) are
-  never touched, so several Docker hosts can drive one NPM.
-* A container whose labels cannot be parsed **protects** its resources for that
-  run: a typo must never take a host down.
-* A container that is merely **stopped** keeps its host (`NPM_ON_STOP`), with
-  its id, so a restart or an update changes nothing but the enabled flag.
-* A run that would delete an implausible share of the managed resources is
-  **refused** (`DELETE_GUARD`), as is any run that saw no containers at all or
-  that finds resources created with a different `LABEL_PREFIX`.
-
-The full list of what deletes and what protects is in
-[docs/DELETION.md](docs/DELETION.md).
-* Resources **with** the marker are deleted as soon as no labelled container
-  claims their key any more.
-* If a labelled key already exists as an unmanaged resource, it is adopted and
-  updated (set `ADOPT_EXISTING=false` to skip it instead).
-* The final reconcile on shutdown (SIGTERM) **never deletes**. When a whole
-  stack goes down with `docker compose down`, the labelled containers usually
-  stop *before* this one, so a last run with deletion enabled would wipe every
-  managed resource. Creates and updates are still flushed; deletion resumes on
-  the next start or the next periodic resync.
-
-Identity is the **alphabetically first domain name** per kind — and the
-**incoming port** for streams. The same domain can therefore be a proxy host
-and a 404 host at once without the two colliding. Change the first domain and
-you get a new resource, not a rename.
-
-> [!CAUTION]
-> **Before switching `DELETE_ORPHANS` on, check the hosts that point at your
-> own infrastructure** — the NPM admin UI itself, a dashboard, a status page.
-> A resource this tool created during an earlier experiment keeps its marker
-> for good, so once its labels are gone it is an orphan and will be deleted,
-> even though it is the page you manage NPM with. Give those containers their
-> labels back:
->
-> ```yaml
-> services:
->   npmplus:
->     labels:
->       npm.proxy.domains: "npm.example.com"
->       npm.proxy.port: "81"
-> ```
->
-> A container excluded with `npm.enable: "false"` is not evaluated at all, so
-> its hosts look orphaned regardless of what else the container says.
->
-> `DRY_RUN=true` lists every deletion it *would* perform — do that first:
->
-> ```
-> [dry-run] would delete orphaned resource key=npm.example.com id=64
-> ```
-
-Run with `DRY_RUN=true` once against a production NPM before letting it write.
-
-## Security
-
-The Docker socket is root-equivalent access to the host, which is why the
-default deployment never hands it to this container:
-
-```
-npmplus-docker-sync ──tcp──▶ docker-socket-proxy ──unix, ro──▶ /var/run/docker.sock
-   (no socket)                 CONTAINERS=1 EVENTS=1
-                               PING=1 VERSION=1 POST=0
+```mermaid
+flowchart LR
+    D[🐳 Docker<br/>container events] --> L[Read labels]
+    L --> W[Wait for the burst<br/>to settle · 3s]
+    W --> C{Compare with NPM}
+    C -->|new| A[Create host]
+    C -->|changed| U[Update host]
+    C -->|unchanged| S[Do nothing]
+    C -->|container gone| R[Remove own host<br/>with safety checks]
 ```
 
-* The proxy allows exactly four read-only API groups — no `POST`, no `exec`,
-  no `images`, no `volumes`. A compromise of `npmplus-docker-sync` cannot
-  start, stop or modify anything.
-* The `socket-proxy` network is `internal: true`, so the proxy has no route
-  out of the host.
-* The image is `FROM scratch` and runs as `USER 1000:1000` with `cap_drop: ALL`,
-  `read_only: true` and `no-new-privileges`.
-* The NPM password is read from a Docker secret and is redacted in every log
-  line (`slog.LogValuer`).
+1. **On startup** it compares all labelled containers with everything in NPM
+   and fixes the differences — so downtime never leaves things out of sync.
+2. **Then it listens** for containers starting and stopping, and syncs again
+   within seconds.
+3. **Every 5 minutes** it does a full check anyway, and every minute it looks
+   for new certificates.
+4. **Unchanged hosts cost nothing** — no API write happens unless something
+   actually changed.
 
-Details, threat model and the mount-the-socket fallback:
-[SECURITY.md](SECURITY.md).
+<details>
+<summary><b>Why the container IP? (and how it is chosen)</b></summary>
 
-## Status and metrics
+NPM has to reach your app. Using the container *name* only works if NPM can
+resolve Docker's internal DNS — the most common cause of `502 Bad Gateway`. So
+by default the upstream is the container's **IP**:
 
-`HEALTH_ADDR` also serves `/status` and `/metrics`:
+1. an explicit `npm.proxy.host` label, if set;
+2. otherwise the IP in `NPM_NETWORK` — a container not on that network is
+   skipped with a warning, because NPM couldn't reach it anyway;
+3. otherwise the networks of `NPM_CONTAINER_NAME`, or of the sync container
+   itself.
 
-```bash
-curl -s localhost:8080/status | jq '.resources[] | {key, id, enabled, certificate_id}'
-curl -s localhost:8080/metrics | grep npmsync_
-```
+When a container is recreated and gets a new IP, the host is updated within
+seconds. `RESOLVE_CONTAINER_IP=false` switches back to container names.
+</details>
 
-`/status` lists every managed resource with its container, id, certificate,
-enabled state and - when the API rejected it - the last error and when it will
-be retried. `/metrics` exposes runs, errors, created/updated/deleted counters,
-blocked deletions, managed resources per kind, the certificate match classes
-and whether the Docker event stream is connected.
+More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Health checks
+## 📊 Monitoring
 
 With `HEALTH_ADDR=:8080`:
 
-| Endpoint | Meaning |
+| Endpoint | Shows |
 |---|---|
-| `GET /healthz` | Process is alive (`200 ok`). |
-| `GET /readyz` | `200` once a reconcile ran with Docker and the NPM API reachable; `503` before the first run and while either is unreachable. |
+| `/healthz` | The process is alive |
+| `/readyz` | Docker and NPM are reachable and a sync has run |
+| `/status` | Every managed host as JSON, including errors and retries |
+| `/metrics` | Prometheus metrics (runs, errors, changes, blocked deletions, …) |
 
-`/readyz` tracks the dependencies, not the workload. A resource the API
-rejected — a typo in one label, a feature the flavour does not have — is
-reported as a counter in the body and in the reconcile result, not as
-`503`: every other host is still in sync and a restart would not fix it.
+The image has a built-in Docker `HEALTHCHECK`, so `docker ps` shows its health
+and other services can use `depends_on: { condition: service_healthy }`.
 
-```
-ok: 12 managed hosts, 1 failed, last sync 2026-09-16T13:26:35Z
-```
-
-The runtime image is `FROM scratch` — there is no shell, no `curl` and no
-`wget` to probe those endpoints with. The binary therefore carries its own
-probe:
-
-```bash
-HEALTH_ADDR=:8080 npmplus-docker-sync healthcheck; echo $?
-```
-
-It requests `/readyz` on `HEALTH_ADDR` and exits `0` on `200`, `1` otherwise.
-When `HEALTH_ADDR` is unset the health endpoint is disabled and the probe
-exits `0` without checking anything, so it never fails a container that was
-deliberately configured without it.
-
-The image ships a matching `HEALTHCHECK` (30 s interval, 20 s start period,
-3 retries), so `docker ps` and `docker inspect` report health out of the box:
-
-```bash
-docker inspect --format '{{.State.Health.Status}}' npmplus-docker-sync
-```
-
-Both compose files define the same check explicitly, which is what makes
-`depends_on: { condition: service_healthy }` usable in your own stacks.
-
-## Troubleshooting
+## 🩺 Troubleshooting
 
 <details>
 <summary><b>Nothing happens when I start a labelled container</b></summary>
 
-Run with `LOG_LEVEL=debug`. If no `docker event` lines appear, the event stream
-is not reaching the tool — check `DOCKER_HOST` and, when using the socket
-proxy, that `EVENTS=1` is set. If events arrive but nothing is created, the
-labels are likely invalid; the parser logs the exact label and reason at
-`warn`, including a suggestion for a misspelled field name. The start-up line
-`container overview managed=… opted_out=… without_labels=…` says how many
-containers were classified as what.
+Run with `LOG_LEVEL=debug`. No `docker event` lines? Then events aren't arriving
+— check `DOCKER_HOST` and that the socket proxy has `EVENTS=1`. Events arrive
+but nothing is created? Then a label is probably wrong — the log names it, often
+with a suggestion. The startup line `container overview managed=… opted_out=…`
+shows how each container was classified.
 </details>
 
 <details>
-<summary><b>`login to http://npm:81 failed`</b></summary>
+<summary><b><code>login to http://npm:81 failed</code></b></summary>
 
-`NPM_URL` must point at the **API** port (81 in the default NPM setup, not 80
-or 443). Verify the credentials with:
+`NPM_URL` must point to the **admin/API port** (81 by default — not 80 or 443).
+Test your credentials:
 
 ```bash
 curl -s -X POST http://npm:81/api/tokens \
   -H 'Content-Type: application/json' \
   -d '{"identity":"admin@example.com","secret":"changeme"}'
 ```
-
-NPM returns `{"token":"..."}`; NPMplus answers with a `Set-Cookie` header and
-possibly an empty body. Both are supported — anything else is a credential or
-URL problem.
 </details>
 
 <details>
-<summary><b>`400 data must NOT have additional properties`</b></summary>
+<summary><b><code>502 Bad Gateway</code> on the new host</b></summary>
 
-The request carried a field the server's JSON schema does not allow. Since
-v1.0.0-beta.2 the payloads are built per flavour, so this normally means the
-flavour was guessed wrong or your NPM/NPMplus version moved. Check which one
-was detected:
-
-```
-{"msg":"detected npm api flavour","flavour":"npmplus","detected_from":"proxy host schema"}
-```
-
-Pin the right one with `NPM_FLAVOUR=npmplus` or `NPM_FLAVOUR=npm`. With
-`LOG_LEVEL=debug` the rejected request is logged next to the fields it
-contained, which names the offending property the API refuses to:
-
-```
-{"msg":"npm api rejected a request","method":"POST","path":"/api/nginx/proxy-hosts",
- "status":400,"request_fields":"advanced_config,domain_names,...","error":"..."}
-```
-
-`LOG_PAYLOADS=true` adds the full body (credential-looking values redacted).
-If the schema really did change, please open an issue — the contract test in
-`internal/npm/contract_test.go` validates every payload against the vendored
-upstream schemas and needs refreshing via `make schemas`.
+NPM and your app must share a Docker network. Put both on the same network and
+set `NPM_NETWORK` to its name.
 </details>
 
 <details>
-<summary><b>`502 Bad Gateway` on the new host</b></summary>
+<summary><b><code>container is not attached to &lt;network&gt;</code></b></summary>
 
-Upstreams default to the container's IP, which NPM can only reach if both
-containers share a network. Put NPM and the target on the same network and set
-`NPM_NETWORK` to its name: the IP is then taken from that network only, and a
-container that is not attached to it is skipped with a warning rather than
-silently pointed at an unreachable address. With `RESOLVE_CONTAINER_IP=false`
-the container name is used instead, which additionally requires NPM to resolve
-Docker's embedded DNS.
+With `NPM_NETWORK` set, only that network is used. Attach the container to it,
+or set `npm.proxy.host` explicitly.
 </details>
 
 <details>
-<summary><b>A host is updated on every event / every resync</b></summary>
+<summary><b><code>400 data must NOT have additional properties</code></b></summary>
 
-The desired state and the stored state disagree about a field the server
-rewrites. The two known cascades — TLS settings without a certificate, and the
-`enabled` flag — are handled since v1.0.0-beta.2. For anything else, run with
-`LOG_LEVEL=debug` and compare the `request_fields` of two consecutive updates,
-then open an issue.
-</details>
-
-<details>
-<summary><b>`container is not attached to <network>`</b></summary>
-
-With `NPM_NETWORK` set, upstream IPs are taken from that network only. Either
-attach the container to it, or set `npm.<kind>.forward_host` explicitly. If you
-want the old fall-through behaviour back, set `NPM_NETWORK_STRICT=false` — but
-expect upstreams NPM cannot route to.
-</details>
-
-<details>
-<summary><b>Streams or 404 hosts are not created</b></summary>
-
-Check `SYNC_KINDS` — it limits which collections are managed. A `warn` line
-saying *"collection is not available on this npm instance"* means the API
-returned 404 for that endpoint; the rest keeps working.
-</details>
-
-<details>
-<summary><b>`permission denied` on /var/run/docker.sock</b></summary>
-
-Only relevant for `docker-compose.simple.yml`: the container user needs the
-host's docker group. Set `DOCKER_GID=$(getent group docker | cut -d: -f3)` in
-your `.env`. The socket-proxy setup avoids this entirely.
-</details>
-
-<details>
-<summary><b>A certificate is requested over and over</b></summary>
-
-That would be a bug — once NPM issues a certificate for a `certificate: new`
-resource, the assigned id is adopted on the next reconcile and the fingerprint
-stays stable. If you see repeated issuance, please open an issue with debug
-logs (Let's Encrypt rate limits are unforgiving).
+The wrong NPM flavour was detected, or your NPM version changed its API. Check
+the log line `detected npm api flavour` and pin it with `NPM_FLAVOUR=npmplus` or
+`NPM_FLAVOUR=npm`. `LOG_LEVEL=debug` names the rejected fields,
+`LOG_PAYLOADS=true` logs the full request. If the API really changed, please
+open an issue.
 </details>
 
 <details>
 <summary><b>The wrong certificate was attached</b></summary>
 
-The reason is in the log:
-
-```
-{"msg":"certificate selected","key":"app.home.example.com","id":12,
- "match":"wildcard","pattern":"*.home.example.com"}
-```
-
-`match` is the class that won: `exact`, `exact+sans`, `mixed` or `wildcard`. A
-certificate that already fits is kept, so a freshly imported one only takes
-over when it matches in a better class. Pin it with
-`npm.proxy.certificate: "<id>"` if the automatic choice is not what you want,
-and use `npm.proxy.certificate: "none"` to keep a host on plain HTTP.
+The log says why (`"msg":"certificate selected", "match":"wildcard", …`). Pin
+the one you want with `npm.proxy.certificate: "<id>"`, or use `"none"` for plain
+HTTP.
 </details>
 
 <details>
-<summary><b>A host disappeared after a container was stopped</b></summary>
+<summary><b><code>refusing to delete: …</code> in the log</b></summary>
 
-Since v1.0.0-beta.4 it should not: a stopped container has its host *disabled*,
-not deleted (`NPM_ON_STOP`). If it still happens, check whether
-`NPM_ON_STOP=delete` is set, and read
-[docs/DELETION.md](docs/DELETION.md) — it lists every situation in which
-something is removed, and every safeguard that stops one.
+A safety check stopped a run that would have removed too many hosts. The
+message says why (changed `LABEL_PREFIX`, no containers seen, or simply too
+many at once). Fix the cause — or, if the deletion is really intended, run once
+with `DELETE_GUARD=off`.
 </details>
 
 <details>
-<summary><b>"refusing to delete: ..." in the log</b></summary>
+<summary><b><code>domain already used by another host</code></b></summary>
 
-The delete guard stopped a run that would have removed an implausible share of
-your hosts. The message says why: a changed `LABEL_PREFIX`, an empty container
-list, or simply too many at once. Fix the cause, or - when the deletion really
-is intended - run once with `DELETE_GUARD=off`.
+Another host in NPM (made by hand or by another tool) already serves that
+domain. The message names its id — remove or rename it, and the next sync
+creates yours.
 </details>
 
 <details>
-<summary><b>A host is skipped with "domain already used by another host"</b></summary>
+<summary><b>A host disappeared after stopping a container</b></summary>
 
-Another host in NPM — created by hand or by a different tool — already serves
-one of the domains. NPM allows a domain exactly once per collection, so the
-own host is not created. The message carries the id and the owner of the
-conflicting host; remove or rename it, then the next reconcile creates yours.
+By default stopped containers only *disable* their host. Check whether
+`NPM_ON_STOP=delete` is set, and see [docs/DELETION.md](docs/DELETION.md).
 </details>
 
-## Project layout
+<details>
+<summary><b>Streams or 404 hosts are not created</b></summary>
 
-```
-main.go                     wiring, signals, health endpoint
-internal/config/            environment parsing + validation
-internal/fields/            the field table: labels, aliases, env vars, defaults
-internal/certs/             certificate matching and selection
-internal/npm/               API client and the four resource models
-internal/docker/            event listener, indexed label parser, IP resolution
-internal/syncer/            debouncer, per-kind state cache, reconcile worker
-test/integration/           the suite that runs against real NPM containers
-docs/                       architecture, fields (generated), labels, configuration,
-                            deletion rules, migration, compatibility
-```
+Check `SYNC_KINDS`. A warning *"collection is not available on this npm
+instance"* means your NPM doesn't offer that type.
+</details>
 
-## Contributing
+<details>
+<summary><b><code>permission denied</code> on /var/run/docker.sock</b></summary>
 
-Bug reports, labels you are missing and PRs are welcome — see
-[CONTRIBUTING.md](CONTRIBUTING.md). `make check` must pass, new behaviour needs
-a test, and commits follow [Conventional Commits](https://www.conventionalcommits.org/).
+Only with `docker-compose.simple.yml`: set
+`DOCKER_GID=$(getent group docker | cut -d: -f3)` in `.env`. The socket-proxy
+setup avoids this entirely.
+</details>
 
-## Roadmap
+## 🔄 Coming from Redth/npm-docker-sync?
 
-Shipped in **v1.0.0-beta.3**: Redth label compatibility, automatic certificate
-selection, global field defaults, opt-out instead of opt-in, port detection,
-the NPMplus feature set and access lists by name.
+Your labels and environment variables work unchanged. Both tools can even run
+against the same NPM without deleting each other's hosts. To take over the
+hosts Redth's tool created, set `MIGRATE_FROM_REDTH=true` — see
+[docs/MIGRATION.md](docs/MIGRATION.md).
 
-Shipped in **v1.0.0-beta.4**: the deletion safeguards above, sync instances,
-`/status` and `/metrics`, the `validate` and `sync` subcommands, a field diff in
-dry-run and drift reports, plus an integration suite that runs against real NPM
-and NPMplus containers.
+## 🗺️ Roadmap
 
+The project is in **beta** — see [CHANGELOG.md](CHANGELOG.md) for what's new.
 On the way to **1.0.0**:
 
 - [ ] A release candidate that runs in a real homelab for a few weeks
@@ -808,19 +609,40 @@ On the way to **1.0.0**:
 - [ ] Runtime schema check against `/api/schema`
 - [ ] Docker Swarm service labels
 
-From 1.0.0 onwards, labels, environment variables and the resource meta follow
+From 1.0.0 on, labels, environment variables and stored metadata follow
 semantic versioning — see [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
-## Acknowledgements
+## 🤝 Contributing
+
+Bug reports, missing labels and pull requests are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md). If this tool saves you some clicks, a ⭐
+helps others find it.
+
+<details>
+<summary><b>Project layout</b></summary>
+
+```
+main.go                 wiring, signals, health endpoint
+internal/config/        environment parsing + validation
+internal/fields/        the field table: labels, aliases, env vars, defaults
+internal/certs/         certificate matching and selection
+internal/npm/           API client and the four resource models
+internal/docker/        event listener, label parser, IP resolution
+internal/syncer/        debouncer, state cache, sync worker
+test/integration/       tests against real NPM and NPMplus containers
+docs/                   architecture, fields, labels, configuration, deletion, migration
+```
+</details>
+
+## 🙏 Acknowledgements
 
 Built on [Nginx Proxy Manager](https://nginxproxymanager.com/) by jc21,
 [NPMplus](https://github.com/ZoeyVid/NPMplus) by ZoeyVid and
 [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) by
-Tecnativa. Inspired by the label-driven workflow of Traefik and by
+Tecnativa. Inspired by Traefik's label-driven workflow and by
 [Redth/npm-docker-sync](https://github.com/Redth/npm-docker-sync).
-
 Not affiliated with or endorsed by any of these projects.
 
-## License
+## 📄 License
 
 [MIT](LICENSE)
