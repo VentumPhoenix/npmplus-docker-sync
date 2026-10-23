@@ -258,18 +258,22 @@ func (w *Worker) noteSuccess(kind npm.Kind, key string) {
 	delete(w.failures, backoffKey(kind, key))
 }
 
-// warnUnsupported reports NPMplus-only settings once per resource when
-// talking to upstream nginx-proxy-manager, where they are left out of the
-// request instead of failing it.
-func (w *Worker) warnUnsupported(log *slog.Logger, key string, t *docker.Target, resource npm.Resource) {
-	if w.api.Flavour() != npm.FlavourNPM {
-		return
-	}
+// warnUnsupported reports, once per resource, the settings the server cannot
+// store and which are therefore left out of the request instead of failing
+// it: NPMplus-only settings against upstream nginx-proxy-manager, and switches
+// a release does not offer (NPMplus retired websockets, HTTP/2, caching,
+// "block exploits" and trust_forwarded_proto as settings).
+func (w *Worker) warnUnsupported(log *slog.Logger, key string, t *docker.Target, resource npm.Resource, dialect npm.Dialect) {
 	// Only what the labels asked for is worth a warning. Everything else is a
 	// default this tool chose, and a warning the operator cannot act on is
 	// noise that hides the ones they can.
-	unsupported := intersect(npm.UnsupportedByNPM(resource), t.ExplicitPlus)
-	if len(unsupported) == 0 {
+	var plusOnly []string
+	if dialect.Flavour == npm.FlavourNPM {
+		plusOnly = intersect(npm.UnsupportedByNPM(resource), t.ExplicitPlus)
+	}
+	unavailable := intersect(npm.Unavailable(resource.Kind(), dialect), t.Explicit)
+	downgraded := intersect(npm.Downgraded(resource, dialect), t.Explicit)
+	if len(plusOnly) == 0 && len(unavailable) == 0 && len(downgraded) == 0 {
 		return
 	}
 
@@ -282,8 +286,20 @@ func (w *Worker) warnUnsupported(log *slog.Logger, key string, t *docker.Target,
 	if warned {
 		return
 	}
-	log.Warn("npmplus-only settings ignored by upstream nginx-proxy-manager",
-		slog.String("key", key), slog.String("fields", strings.Join(unsupported, ",")))
+	if len(plusOnly) > 0 {
+		log.Warn("npmplus-only settings ignored by upstream nginx-proxy-manager",
+			slog.String("key", key), slog.String("fields", strings.Join(plusOnly, ",")))
+	}
+	if len(unavailable) > 0 {
+		log.Warn("settings this server does not offer are ignored",
+			slog.String("key", key), slog.String("flavour", dialect.Flavour.String()),
+			slog.String("fields", strings.Join(unavailable, ",")))
+	}
+	if len(downgraded) > 0 {
+		log.Warn("settings this server can only store in a weaker form",
+			slog.String("key", key), slog.String("flavour", dialect.Flavour.String()),
+			slog.String("fields", strings.Join(downgraded, ",")))
+	}
 }
 
 // intersect returns the elements of a that also appear in b, order preserved.

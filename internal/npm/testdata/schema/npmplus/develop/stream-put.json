@@ -1,20 +1,59 @@
 {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"additionalProperties": false,
+	"if": {
+		"properties": {
+			"certificate_id": {
+				"const": "new"
+			}
+		},
+		"required": [
+			"certificate_id"
+		]
+	},
 	"minProperties": 1,
 	"properties": {
 		"certificate_id": {
+			"anyOf": [
+				{
+					"example": 5,
+					"minimum": 0,
+					"type": "integer"
+				},
+				{
+					"const": "new",
+					"example": "new"
+				}
+			],
+			"default": 0,
 			"description": "Certificate ID",
-			"example": 5,
-			"minimum": 0,
-			"type": "integer"
+			"example": 5
+		},
+		"domain_names": {
+			"description": "Domain Names for the DNS challenge, wildcards are allowed, IPs are not allowed",
+			"example": [
+				"example.com",
+				"*.example.com"
+			],
+			"items": {
+				"maxLength": 253,
+				"pattern": "^(?![0-9.]+$)(\\*\\.)?([\\p{L}\\p{Mn}\\p{Mc}\\p{Nd}\\-]+\\.)+[\\p{L}\\p{Mn}\\p{Mc}\\p{Nd}\\-]+$",
+				"type": "string"
+			},
+			"maxItems": 25,
+			"minItems": 1,
+			"type": "array",
+			"uniqueItems": true
 		},
 		"forwarding_host": {
 			"example": "127.0.0.1",
+			"maxLength": 253,
 			"minLength": 1,
+			"pattern": "^\\S+$",
 			"type": "string"
 		},
 		"forwarding_port": {
+			"default": "",
 			"example": 80,
 			"maxLength": 12,
 			"pattern": "^([0-9]{0,5}|\\$server_port)$",
@@ -26,20 +65,67 @@
 			"pattern": "^([0-9]{1,5}$|[0-9]{1,5}-[0-9]{1,5}$)",
 			"type": "string"
 		},
-		"meta": {
-			"example": {},
-			"type": "object"
-		},
 		"npmplus_advanced_config": {
+			"default": "",
 			"example": "",
 			"type": "string"
 		},
 		"npmplus_description": {
+			"default": "",
 			"example": "MariaDB database connection",
 			"maxLength": 255,
 			"type": "string"
 		},
+		"npmplus_directory": {
+			"default": "",
+			"description": "Directory to group this host in the UI",
+			"example": "Production",
+			"maxLength": 255,
+			"type": "string"
+		},
+		"npmplus_dns_challenge": {
+			"default": false,
+			"description": "Use the DNS challenge",
+			"example": false,
+			"type": "boolean"
+		},
+		"npmplus_dns_provider": {
+			"default": "",
+			"description": "DNS provider",
+			"example": "cloudflare",
+			"maxLength": 255,
+			"type": "string"
+		},
+		"npmplus_dns_provider_credentials": {
+			"default": "",
+			"description": "DNS provider credentials",
+			"example": "dns_cloudflare_api_token=123",
+			"type": "string",
+			"writeOnly": true
+		},
+		"npmplus_mtls_certificate_id": {
+			"default": 0,
+			"description": "mTLS Certificate ID",
+			"example": 0,
+			"minimum": 0,
+			"type": "integer"
+		},
+		"npmplus_mtls_verify_client_optional": {
+			"default": false,
+			"description": "Make the mTLS client verification optional",
+			"example": false,
+			"type": "boolean"
+		},
+		"npmplus_propagation_seconds": {
+			"default": 0,
+			"description": "DNS propagation seconds, 0 uses the default of the DNS plugin",
+			"example": 0,
+			"maximum": 7200,
+			"minimum": 0,
+			"type": "integer"
+		},
 		"npmplus_proxy_protocol_forwarding": {
+			"default": 0,
 			"enum": [
 				0,
 				1,
@@ -49,17 +135,39 @@
 			"type": "integer"
 		},
 		"npmplus_proxy_tls": {
+			"default": false,
+			"example": false,
+			"type": "boolean"
+		},
+		"npmplus_reuse_key": {
+			"default": false,
+			"description": "Reuse the private key on renewal",
 			"example": false,
 			"type": "boolean"
 		},
 		"tcp_forwarding": {
+			"default": false,
 			"example": true,
 			"type": "boolean"
 		},
 		"udp_forwarding": {
+			"default": false,
 			"example": false,
 			"type": "boolean"
 		}
+	},
+	"then": {
+		"properties": {
+			"npmplus_dns_challenge": {
+				"const": true,
+				"type": "boolean"
+			}
+		},
+		"required": [
+			"domain_names",
+			"npmplus_dns_challenge",
+			"npmplus_dns_provider"
+		]
 	},
 	"type": "object"
 }

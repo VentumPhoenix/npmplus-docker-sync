@@ -177,6 +177,9 @@ type Target struct {
 	// a warning against upstream NPM only appears when the user asked for
 	// something that flavour cannot do.
 	ExplicitPlus []string
+	// Explicit lists every field the labels actually set, in canonical
+	// spelling - the same idea for switches a server may not offer at all.
+	Explicit []string
 
 	// Shared across proxy, redirect and 404 hosts.
 	DomainNames []string

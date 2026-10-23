@@ -125,7 +125,7 @@ func TestUpstreamNPMPayloadIsStableAcrossRuns(t *testing.T) {
 	t.Parallel()
 
 	resource, _ := buildFrom(t, npm.KindProxy, baseLabels[npm.KindProxy])
-	npm.StripNPMplus(resource)
+	npm.Conform(resource, npm.Dialect{Flavour: npm.FlavourNPM})
 
 	payload, err := resource.Payload(npm.Dialect{Flavour: npm.FlavourNPM})
 	if err != nil {

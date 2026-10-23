@@ -305,10 +305,40 @@ func TestParseProxy(t *testing.T) {
 			if len(res.Errors) > 0 {
 				t.Fatalf("unexpected errors: %v", res.Errors)
 			}
+			// Which labels were set is TestExplicitListsTheLabelsThatWereSet's
+			// business; the cases here are about the values.
+			for _, target := range res.Targets {
+				target.Explicit = nil
+			}
 			if !reflect.DeepEqual(res.Targets, tc.want) {
 				t.Errorf("targets mismatch\n got: %s\nwant: %s", dump(res.Targets), dump(tc.want))
 			}
 		})
+	}
+}
+
+// TestExplicitListsTheLabelsThatWereSet: a warning about a setting the server
+// does not offer must only appear for what the labels asked for, in canonical
+// spelling whatever alias was used - never for a default.
+func TestExplicitListsTheLabelsThatWereSet(t *testing.T) {
+	t.Parallel()
+
+	c := Container{
+		ID: "app-id", Name: "app", State: "running",
+		Labels: map[string]string{
+			"npm.proxy.domains": "app.example.com",
+			"npm.proxy.port":    "80",
+			"npm.proxy.ws":      "false",
+			"npm.proxy.http2":   "true",
+		},
+	}
+	res := Parse(c, ParseOptions{Prefix: "npm", ExposedByDefault: true})
+	if len(res.Errors) > 0 || len(res.Targets) != 1 {
+		t.Fatalf("Parse() = %+v", res)
+	}
+	want := []string{"domains", "forward_port", "ssl.http2", "websockets"}
+	if got := res.Targets[0].Explicit; !reflect.DeepEqual(got, want) {
+		t.Errorf("Explicit = %v, want %v", got, want)
 	}
 }
 

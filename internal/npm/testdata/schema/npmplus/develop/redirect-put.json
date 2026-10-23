@@ -1,16 +1,124 @@
 {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"additionalProperties": false,
+	"allOf": [
+		{
+			"if": {
+				"properties": {
+					"npmplus_dns_challenge": {
+						"const": true,
+						"type": "boolean"
+					}
+				},
+				"required": [
+					"npmplus_dns_challenge"
+				]
+			},
+			"then": {
+				"required": [
+					"npmplus_dns_provider"
+				]
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"certificate_id": {
+						"const": "new"
+					}
+				},
+				"required": [
+					"certificate_id"
+				]
+			},
+			"then": {
+				"else": {
+					"properties": {
+						"domain_names": {
+							"description": "Domain Names and IPs for the HTTP challenge, wildcards are not allowed",
+							"example": [
+								"example.com",
+								"192.0.2.1",
+								"[2001:db8::1]"
+							],
+							"items": {
+								"maxLength": 253,
+								"pattern": "^(([\\p{L}\\p{Mn}\\p{Mc}\\p{Nd}\\-]+\\.)+[\\p{L}\\p{Mn}\\p{Mc}\\p{Nd}\\-]+|\\[[0-9a-fA-F:]+\\])$",
+								"type": "string"
+							},
+							"maxItems": 25,
+							"minItems": 1,
+							"type": "array",
+							"uniqueItems": true
+						}
+					}
+				},
+				"if": {
+					"properties": {
+						"npmplus_dns_challenge": {
+							"const": true,
+							"type": "boolean"
+						}
+					},
+					"required": [
+						"npmplus_dns_challenge"
+					]
+				},
+				"then": {
+					"properties": {
+						"domain_names": {
+							"description": "Domain Names for the DNS challenge, wildcards are allowed, IPs are not allowed",
+							"example": [
+								"example.com",
+								"*.example.com"
+							],
+							"items": {
+								"maxLength": 253,
+								"pattern": "^(?![0-9.]+$)(\\*\\.)?([\\p{L}\\p{Mn}\\p{Mc}\\p{Nd}\\-]+\\.)+[\\p{L}\\p{Mn}\\p{Mc}\\p{Nd}\\-]+$",
+								"type": "string"
+							},
+							"maxItems": 25,
+							"minItems": 1,
+							"type": "array",
+							"uniqueItems": true
+						}
+					}
+				}
+			}
+		},
+		{
+			"if": {
+				"properties": {
+					"npmplus_mtls_certificate_id": {
+						"minimum": 1,
+						"type": "integer"
+					},
+					"npmplus_mtls_verify_client_optional": {
+						"const": false,
+						"type": "boolean"
+					}
+				},
+				"required": [
+					"npmplus_mtls_certificate_id",
+					"npmplus_mtls_verify_client_optional"
+				]
+			},
+			"then": {
+				"properties": {
+					"ssl_forced": {
+						"const": true,
+						"type": "boolean"
+					}
+				}
+			}
+		}
+	],
 	"minProperties": 1,
 	"properties": {
 		"advanced_config": {
+			"default": "",
 			"example": "",
 			"type": "string"
-		},
-		"block_exploits": {
-			"description": "This is always disabled. Your value will be ignored",
-			"example": false,
-			"type": "boolean"
 		},
 		"certificate_id": {
 			"anyOf": [
@@ -20,11 +128,11 @@
 					"type": "integer"
 				},
 				{
-					"example": "new",
-					"pattern": "^new$",
-					"type": "string"
+					"const": "new",
+					"example": "new"
 				}
 			],
+			"default": 0,
 			"description": "Certificate ID",
 			"example": 5
 		},
@@ -35,10 +143,12 @@
 				"www.example.com"
 			],
 			"items": {
+				"maxLength": 253,
 				"minLength": 1,
+				"pattern": "^(~\\S*|(?!.*:[0-9]+$)[^\\s/]+)$",
 				"type": "string"
 			},
-			"maxItems": 99,
+			"maxItems": 100,
 			"minItems": 1,
 			"type": "array",
 			"uniqueItems": true
@@ -46,19 +156,27 @@
 		"forward_domain_name": {
 			"description": "Domain Name",
 			"example": "jc21.com",
+			"maxLength": 253,
 			"minLength": 1,
+			"pattern": "^\\S+$",
 			"type": "string"
 		},
 		"forward_http_code": {
+			"default": 302,
 			"description": "Redirect HTTP Status Code",
+			"enum": [
+				301,
+				302,
+				303,
+				307,
+				308
+			],
 			"example": 302,
-			"maximum": 308,
-			"minimum": 300,
 			"type": "integer"
 		},
 		"forward_scheme": {
+			"default": "$scheme",
 			"enum": [
-				"auto",
 				"$scheme",
 				"http",
 				"https"
@@ -67,38 +185,85 @@
 			"type": "string"
 		},
 		"hsts_enabled": {
+			"default": false,
 			"description": "Is HSTS Enabled",
 			"example": true,
 			"type": "boolean"
 		},
 		"hsts_subdomains": {
+			"default": false,
 			"description": "Is HSTS applicable to all subdomains",
 			"example": true,
 			"type": "boolean"
 		},
-		"http2_support": {
-			"description": "HTTP2 Protocol Support",
-			"example": true,
+		"npmplus_directory": {
+			"default": "",
+			"description": "Directory to group this host in the UI",
+			"example": "Production",
+			"maxLength": 255,
+			"type": "string"
+		},
+		"npmplus_dns_challenge": {
+			"default": false,
+			"description": "Use the DNS challenge",
+			"example": false,
 			"type": "boolean"
 		},
-		"meta": {
-			"example": {
-				"nginx_err": null,
-				"nginx_online": true
-			},
-			"type": "object"
+		"npmplus_dns_provider": {
+			"default": "",
+			"description": "DNS provider",
+			"example": "cloudflare",
+			"maxLength": 255,
+			"type": "string"
+		},
+		"npmplus_dns_provider_credentials": {
+			"default": "",
+			"description": "DNS provider credentials",
+			"example": "dns_cloudflare_api_token=123",
+			"type": "string",
+			"writeOnly": true
 		},
 		"npmplus_http3_support": {
+			"default": false,
 			"description": "HTTP3 Protocol Support",
 			"example": true,
 			"type": "boolean"
 		},
+		"npmplus_mtls_certificate_id": {
+			"default": 0,
+			"description": "mTLS Certificate ID",
+			"example": 0,
+			"minimum": 0,
+			"type": "integer"
+		},
+		"npmplus_mtls_verify_client_optional": {
+			"default": false,
+			"description": "Make the mTLS client verification optional",
+			"example": false,
+			"type": "boolean"
+		},
+		"npmplus_propagation_seconds": {
+			"default": 0,
+			"description": "DNS propagation seconds, 0 uses the default of the DNS plugin",
+			"example": 0,
+			"maximum": 7200,
+			"minimum": 0,
+			"type": "integer"
+		},
+		"npmplus_reuse_key": {
+			"default": false,
+			"description": "Reuse the private key on renewal",
+			"example": false,
+			"type": "boolean"
+		},
 		"preserve_path": {
+			"default": false,
 			"description": "Should the path be preserved",
 			"example": true,
 			"type": "boolean"
 		},
 		"ssl_forced": {
+			"default": false,
 			"description": "Is SSL Forced",
 			"example": true,
 			"type": "boolean"

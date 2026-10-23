@@ -16,10 +16,10 @@ import (
 // endless update loop.
 type serverAPI struct {
 	*fakeAPI
-	flavour npm.Flavour
+	dialect npm.Dialect
 }
 
-func (s *serverAPI) Flavour() npm.Flavour { return s.flavour }
+func (s *serverAPI) Dialect() npm.Dialect { return s.dialect }
 
 func (s *serverAPI) Create(ctx context.Context, resource npm.Resource) (npm.Resource, error) {
 	stored, err := s.roundTrip(resource)
@@ -40,7 +40,7 @@ func (s *serverAPI) Update(ctx context.Context, id int, resource npm.Resource) (
 // roundTrip sends a resource through its request payload and back, which is
 // exactly what the server stores and returns.
 func (s *serverAPI) roundTrip(resource npm.Resource) (npm.Resource, error) {
-	payload, err := resource.Payload(npm.Dialect{Flavour: s.flavour})
+	payload, err := resource.Payload(s.dialect)
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +68,15 @@ func newResourceOf(kind npm.Kind) npm.Resource {
 	default:
 		return &npm.DeadHost{}
 	}
+}
+
+// serverDialects are the servers every behaviour has to hold on: upstream NPM,
+// NPMplus as released today, and NPMplus after it moved the meta object into
+// columns.
+var serverDialects = map[string]npm.Dialect{
+	"npm":          {Flavour: npm.FlavourNPM},
+	"npmplus":      {Flavour: npm.FlavourNPMplus},
+	"npmplus-next": {Flavour: npm.FlavourNPMplus, MetaRetired: true},
 }
 
 // convergeCases are label sets that have to reach a fixed point.
@@ -135,9 +144,9 @@ var convergeCases = map[string]map[string]string{
 func TestReconcileConverges(t *testing.T) {
 	t.Parallel()
 
-	for _, flavour := range []npm.Flavour{npm.FlavourNPMplus, npm.FlavourNPM} {
+	for server, dialect := range serverDialects {
 		for name, labels := range convergeCases {
-			t.Run(string(flavour)+"/"+name, func(t *testing.T) {
+			t.Run(server+"/"+name, func(t *testing.T) {
 				t.Parallel()
 
 				c := docker.Container{
@@ -151,7 +160,7 @@ func TestReconcileConverges(t *testing.T) {
 					t.Fatalf("parse errors: %v", res.Errors)
 				}
 
-				api := &serverAPI{fakeAPI: newFakeAPI(), flavour: flavour}
+				api := &serverAPI{fakeAPI: newFakeAPI(), dialect: dialect}
 				api.certificates = []npm.Certificate{{
 					ID: 5, Provider: "letsencrypt", DomainNames: []string{"*.example.com"},
 					ExpiresOn: notBefore,

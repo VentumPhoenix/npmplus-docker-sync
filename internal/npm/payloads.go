@@ -1,6 +1,9 @@
 package npm
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Request bodies are deliberately separate from the response models.
 //
@@ -20,6 +23,15 @@ import "fmt"
 // rather than failing the write: they are a better default, not a
 // requirement. UnsupportedByNPM lists them so the reconcile loop can say once
 // what it had to leave out.
+//
+// Fields a server has retired or not yet introduced - `meta` and the legacy
+// proxy switches on NPMplus after its meta-to-columns migration,
+// `trust_forwarded_proto` before NPM 2.12 - are decided per field through
+// Dialect.Accepts, which reads the server's own schema when it serves one.
+//
+// Every advanced configuration starts with the ownership marker (see
+// marker.go), and the meta object carries the same ownership wherever the
+// server still accepts one.
 
 // ---------------------------------------------------------------------------
 // Proxy hosts
@@ -32,9 +44,10 @@ type locationPayloadNPMplus struct {
 	ForwardHost    string `json:"forward_host"`
 	ForwardPort    int    `json:"forward_port"`
 	AdvancedConfig string `json:"advanced_config"`
-	LocationConfig string `json:"npmplus_location_config"`
-	AccessListIDs  []int  `json:"npmplus_access_list_ids"`
-	AccessListType string `json:"npmplus_access_list_type"`
+	// LocationConfig moved to the host when NPMplus retired the meta object.
+	LocationConfig *string `json:"npmplus_location_config,omitempty"`
+	AccessListIDs  []int   `json:"npmplus_access_list_ids"`
+	AccessListType string  `json:"npmplus_access_list_type"`
 
 	Enabled                  Flag   `json:"npmplus_enabled"`
 	NoIndex                  Flag   `json:"npmplus_noindex"`
@@ -65,12 +78,12 @@ type proxyPayloadNPMplus struct {
 	SSLForced             Flag                     `json:"ssl_forced"`
 	HSTSEnabled           Flag                     `json:"hsts_enabled"`
 	HSTSSubdomains        Flag                     `json:"hsts_subdomains"`
-	TrustForwardedProto   Flag                     `json:"trust_forwarded_proto"`
-	HTTP2Support          Flag                     `json:"http2_support"`
+	TrustForwardedProto   *Flag                    `json:"trust_forwarded_proto,omitempty"`
+	HTTP2Support          *Flag                    `json:"http2_support,omitempty"`
 	HTTP3Support          Flag                     `json:"npmplus_http3_support"`
-	BlockExploits         Flag                     `json:"block_exploits"`
-	CachingEnabled        Flag                     `json:"caching_enabled"`
-	AllowWebsocketUpgrade Flag                     `json:"allow_websocket_upgrade"`
+	BlockExploits         *Flag                    `json:"block_exploits,omitempty"`
+	CachingEnabled        *Flag                    `json:"caching_enabled,omitempty"`
+	AllowWebsocketUpgrade *Flag                    `json:"allow_websocket_upgrade,omitempty"`
 	AccessListIDs         []int                    `json:"npmplus_access_list_ids"`
 	AccessListType        string                   `json:"npmplus_access_list_type"`
 	AdvancedConfig        string                   `json:"advanced_config"`
@@ -87,7 +100,8 @@ type proxyPayloadNPMplus struct {
 	AuthRequest              string `json:"npmplus_auth_request,omitempty"`
 	AuthRequestUpstream      string `json:"npmplus_auth_request_upstream"`
 
-	Meta Meta `json:"meta"`
+	*npmplusColumns
+	Meta Meta `json:"meta,omitempty"`
 }
 
 type proxyPayloadNPM struct {
@@ -111,7 +125,18 @@ type proxyPayloadNPM struct {
 	AccessListID          int                  `json:"access_list_id"`
 	AdvancedConfig        string               `json:"advanced_config"`
 	Locations             []locationPayloadNPM `json:"locations"`
-	Meta                  Meta                 `json:"meta"`
+	Meta                  Meta                 `json:"meta,omitempty"`
+}
+
+// npmplusColumns are the properties NPMplus introduced when it moved the meta
+// object into columns: the UI group and the DNS challenge of a certificate
+// request. Embedded as a pointer, so a nil value leaves all of them out.
+type npmplusColumns struct {
+	Directory          *string `json:"npmplus_directory,omitempty"`
+	DNSChallenge       *bool   `json:"npmplus_dns_challenge,omitempty"`
+	DNSProvider        string  `json:"npmplus_dns_provider,omitempty"`
+	DNSCredentials     string  `json:"npmplus_dns_provider_credentials,omitempty"`
+	PropagationSeconds *int    `json:"npmplus_propagation_seconds,omitempty"`
 }
 
 // Payload implements Resource.
@@ -166,9 +191,9 @@ func (h *ProxyHost) Payload(dialect Dialect) (any, error) {
 			CachingEnabled:        h.CachingEnabled,
 			AllowWebsocketUpgrade: h.AllowWebsocketUpgrade,
 			AccessListID:          accessListID,
-			AdvancedConfig:        h.AdvancedConfig,
+			AdvancedConfig:        advancedFor(dialect, KindProxy, h.Meta, h.ResourceKey(), h.AdvancedConfig),
 			Locations:             locations,
-			Meta:                  h.Meta,
+			Meta:                  metaForWrite(dialect, KindProxy, h.Meta),
 		}, nil
 	}
 
@@ -189,7 +214,7 @@ func (h *ProxyHost) Payload(dialect Dialect) (any, error) {
 			ForwardHost:              l.ForwardHost,
 			ForwardPort:              l.ForwardPort,
 			AdvancedConfig:           l.AdvancedConfig,
-			LocationConfig:           l.LocationConfig,
+			LocationConfig:           textIf(dialect, KindProxy, "locations/npmplus_location_config", l.LocationConfig),
 			AccessListIDs:            idList(locationIDs),
 			AccessListType:           listType,
 			Enabled:                  Flag(l.IsEnabled()),
@@ -213,15 +238,15 @@ func (h *ProxyHost) Payload(dialect Dialect) (any, error) {
 		SSLForced:             h.SSLForced,
 		HSTSEnabled:           h.HSTSEnabled,
 		HSTSSubdomains:        h.HSTSSubdomains,
-		TrustForwardedProto:   h.TrustForwardedProto,
-		HTTP2Support:          h.HTTP2Support,
 		HTTP3Support:          h.HTTP3Support,
-		BlockExploits:         h.BlockExploits,
-		CachingEnabled:        h.CachingEnabled,
-		AllowWebsocketUpgrade: h.AllowWebsocketUpgrade,
+		TrustForwardedProto:   flagIf(dialect, KindProxy, "trust_forwarded_proto", h.TrustForwardedProto),
+		HTTP2Support:          flagIf(dialect, KindProxy, "http2_support", h.HTTP2Support),
+		BlockExploits:         flagIf(dialect, KindProxy, "block_exploits", h.BlockExploits),
+		CachingEnabled:        flagIf(dialect, KindProxy, "caching_enabled", h.CachingEnabled),
+		AllowWebsocketUpgrade: flagIf(dialect, KindProxy, "allow_websocket_upgrade", h.AllowWebsocketUpgrade),
 		AccessListIDs:         idList(ids),
 		AccessListType:        listType,
-		AdvancedConfig:        h.AdvancedConfig,
+		AdvancedConfig:        advancedFor(dialect, KindProxy, h.Meta, h.ResourceKey(), h.AdvancedConfig),
 		LocationConfig:        h.LocationConfig,
 		Locations:             locations,
 
@@ -235,7 +260,8 @@ func (h *ProxyHost) Payload(dialect Dialect) (any, error) {
 		AuthRequest:              h.AuthRequest,
 		AuthRequestUpstream:      h.AuthRequestUpstream,
 
-		Meta: h.Meta,
+		npmplusColumns: columnsFor(dialect, KindProxy, h.Meta, h.CertificateID),
+		Meta:           metaForWrite(dialect, KindProxy, h.Meta),
 	}, nil
 }
 
@@ -339,11 +365,12 @@ type redirectPayload struct {
 	SSLForced         Flag          `json:"ssl_forced"`
 	HSTSEnabled       Flag          `json:"hsts_enabled"`
 	HSTSSubdomains    Flag          `json:"hsts_subdomains"`
-	HTTP2Support      Flag          `json:"http2_support"`
+	HTTP2Support      *Flag         `json:"http2_support,omitempty"`
 	HTTP3Support      *Flag         `json:"npmplus_http3_support,omitempty"`
-	BlockExploits     Flag          `json:"block_exploits"`
+	BlockExploits     *Flag         `json:"block_exploits,omitempty"`
 	AdvancedConfig    string        `json:"advanced_config"`
-	Meta              Meta          `json:"meta"`
+	*npmplusColumns
+	Meta Meta `json:"meta,omitempty"`
 }
 
 // Payload implements Resource.
@@ -354,7 +381,7 @@ func (h *RedirectionHost) Payload(dialect Dialect) (any, error) {
 	}
 	payload := &redirectPayload{
 		DomainNames:       NormalizeDomains(h.DomainNames),
-		ForwardScheme:     h.ForwardScheme,
+		ForwardScheme:     keepSchemeFor(dialect, h.ForwardScheme),
 		ForwardDomainName: h.ForwardDomainName,
 		ForwardHTTPCode:   h.ForwardHTTPCode,
 		PreservePath:      h.PreservePath,
@@ -362,10 +389,11 @@ func (h *RedirectionHost) Payload(dialect Dialect) (any, error) {
 		SSLForced:         h.SSLForced,
 		HSTSEnabled:       h.HSTSEnabled,
 		HSTSSubdomains:    h.HSTSSubdomains,
-		HTTP2Support:      h.HTTP2Support,
-		BlockExploits:     h.BlockExploits,
-		AdvancedConfig:    h.AdvancedConfig,
-		Meta:              h.Meta,
+		HTTP2Support:      flagIf(dialect, KindRedirect, "http2_support", h.HTTP2Support),
+		BlockExploits:     flagIf(dialect, KindRedirect, "block_exploits", h.BlockExploits),
+		AdvancedConfig:    advancedFor(dialect, KindRedirect, h.Meta, h.ResourceKey(), h.AdvancedConfig),
+		npmplusColumns:    columnsFor(dialect, KindRedirect, h.Meta, h.CertificateID),
+		Meta:              metaForWrite(dialect, KindRedirect, h.Meta),
 	}
 	if flavour != FlavourNPM {
 		http3 := h.HTTP3Support
@@ -390,17 +418,20 @@ func (h *RedirectionHost) stripPlus() {
 // NPMplus types the stream ports as strings (and accepts "8080-8090" or
 // "$server_port"), upstream NPM as integers.
 type streamPayloadNPMplus struct {
-	IncomingPort   string             `json:"incoming_port"`
-	ForwardingHost string             `json:"forwarding_host"`
-	ForwardingPort string             `json:"forwarding_port"`
-	TCPForwarding  Flag               `json:"tcp_forwarding"`
-	UDPForwarding  Flag               `json:"udp_forwarding"`
-	CertificateID  int                `json:"certificate_id"`
-	ProxyProtocol  ProxyProtocolLevel `json:"npmplus_proxy_protocol_forwarding"`
-	ProxyTLS       Flag               `json:"npmplus_proxy_tls"`
-	AdvancedConfig string             `json:"npmplus_advanced_config"`
-	Description    string             `json:"npmplus_description"`
-	Meta           Meta               `json:"meta"`
+	IncomingPort   string `json:"incoming_port"`
+	ForwardingHost string `json:"forwarding_host"`
+	ForwardingPort string `json:"forwarding_port"`
+	TCPForwarding  Flag   `json:"tcp_forwarding"`
+	UDPForwarding  Flag   `json:"udp_forwarding"`
+	CertificateID  int    `json:"certificate_id"`
+	// ProxyProtocol is a ProxyProtocolLevel or, for the releases that type
+	// it so, a boolean; see proxyProtocolFor.
+	ProxyProtocol  any    `json:"npmplus_proxy_protocol_forwarding"`
+	ProxyTLS       Flag   `json:"npmplus_proxy_tls"`
+	AdvancedConfig string `json:"npmplus_advanced_config"`
+	Description    string `json:"npmplus_description"`
+	*npmplusColumns
+	Meta Meta `json:"meta,omitempty"`
 }
 
 type streamPayloadNPM struct {
@@ -412,7 +443,7 @@ type streamPayloadNPM struct {
 	// Same reasoning as trust_forwarded_proto above: stream certificates
 	// arrived in NPM 2.12, and 2.11 rejects the body over the field.
 	CertificateID *CertificateID `json:"certificate_id,omitempty"`
-	Meta          Meta           `json:"meta"`
+	Meta          Meta           `json:"meta,omitempty"`
 }
 
 // Payload implements Resource.
@@ -435,7 +466,7 @@ func (s *Stream) Payload(dialect Dialect) (any, error) {
 			TCPForwarding:  s.TCPForwarding,
 			UDPForwarding:  s.UDPForwarding,
 			CertificateID:  certificate,
-			Meta:           s.Meta,
+			Meta:           metaForWrite(dialect, KindStream, s.Meta),
 		}, nil
 	}
 
@@ -455,11 +486,12 @@ func (s *Stream) Payload(dialect Dialect) (any, error) {
 		TCPForwarding:  s.TCPForwarding,
 		UDPForwarding:  s.UDPForwarding,
 		CertificateID:  s.CertificateID.ID,
-		ProxyProtocol:  s.ProxyProtocol,
+		ProxyProtocol:  proxyProtocolFor(dialect, s.ProxyProtocol),
 		ProxyTLS:       s.ProxyTLS,
-		AdvancedConfig: s.AdvancedConfig,
+		AdvancedConfig: advancedFor(dialect, KindStream, s.Meta, s.ResourceKey(), s.AdvancedConfig),
 		Description:    description,
-		Meta:           s.Meta,
+		npmplusColumns: columnsFor(dialect, KindStream, s.Meta, s.CertificateID),
+		Meta:           metaForWrite(dialect, KindStream, s.Meta),
 	}, nil
 }
 
@@ -503,10 +535,11 @@ type deadPayload struct {
 	SSLForced      Flag          `json:"ssl_forced"`
 	HSTSEnabled    Flag          `json:"hsts_enabled"`
 	HSTSSubdomains Flag          `json:"hsts_subdomains"`
-	HTTP2Support   Flag          `json:"http2_support"`
+	HTTP2Support   *Flag         `json:"http2_support,omitempty"`
 	HTTP3Support   *Flag         `json:"npmplus_http3_support,omitempty"`
 	AdvancedConfig string        `json:"advanced_config"`
-	Meta           Meta          `json:"meta"`
+	*npmplusColumns
+	Meta Meta `json:"meta,omitempty"`
 }
 
 // Payload implements Resource.
@@ -521,9 +554,10 @@ func (h *DeadHost) Payload(dialect Dialect) (any, error) {
 		SSLForced:      h.SSLForced,
 		HSTSEnabled:    h.HSTSEnabled,
 		HSTSSubdomains: h.HSTSSubdomains,
-		HTTP2Support:   h.HTTP2Support,
-		AdvancedConfig: h.AdvancedConfig,
-		Meta:           h.Meta,
+		HTTP2Support:   flagIf(dialect, KindDead, "http2_support", h.HTTP2Support),
+		AdvancedConfig: advancedFor(dialect, KindDead, h.Meta, h.ResourceKey(), h.AdvancedConfig),
+		npmplusColumns: columnsFor(dialect, KindDead, h.Meta, h.CertificateID),
+		Meta:           metaForWrite(dialect, KindDead, h.Meta),
 	}
 	if flavour != FlavourNPM {
 		http3 := h.HTTP3Support
@@ -587,6 +621,224 @@ func UnsupportedByNPM(r Resource) []string {
 		return u.npmplusOnly()
 	}
 	return nil
+}
+
+// conformer is implemented by every resource whose desired state depends on
+// what the server can store.
+type conformer interface {
+	conform(dialect Dialect)
+}
+
+// Conform brings a desired resource in line with what the server can store
+// and return: NPMplus-only settings go against upstream NPM, retired switches
+// go against an NPMplus that no longer has them, and the resource records
+// whether its ownership marker can be written. Call it once the dialect is
+// known, before fingerprinting - a field the server drops would otherwise
+// differ from the live resource on every single run.
+func Conform(r Resource, dialect Dialect) {
+	if dialect.Flavour == FlavourNPM {
+		StripNPMplus(r)
+	}
+	if c, ok := r.(conformer); ok {
+		c.conform(dialect)
+	}
+}
+
+// Labels and API properties of the legacy switches.
+const (
+	labelHTTP2         = "ssl.http2"
+	labelBlockExploits = "block_exploits"
+	fieldHTTP2         = "http2_support"
+	fieldBlockExploits = "block_exploits"
+)
+
+// retiredSwitches maps the label of each legacy switch to its API property.
+var retiredSwitches = map[Kind][][2]string{
+	KindProxy: {
+		{"websockets", "allow_websocket_upgrade"},
+		{labelHTTP2, fieldHTTP2},
+		{labelBlockExploits, fieldBlockExploits},
+		{"caching", "caching_enabled"},
+		{"trust_forwarded_proto", "trust_forwarded_proto"},
+	},
+	KindRedirect: {
+		{labelHTTP2, fieldHTTP2},
+		{labelBlockExploits, fieldBlockExploits},
+	},
+	KindDead: {
+		{labelHTTP2, fieldHTTP2},
+	},
+}
+
+// Unavailable returns the labels of the switches this server does not offer
+// for the kind: NPMplus retired them (websockets and HTTP/2 are always on
+// there), upstream NPM before 2.12 has no trust_forwarded_proto. The caller
+// reports those a label set explicitly.
+func Unavailable(kind Kind, dialect Dialect) []string {
+	var out []string
+	for _, pair := range retiredSwitches[kind] {
+		if !dialect.Accepts(kind, pair[1]) {
+			out = append(out, pair[0])
+		}
+	}
+	return out
+}
+
+// conform implements conformer.
+func (h *ProxyHost) conform(d Dialect) {
+	h.OwnerMarker = Flag(d.CarriesMarker(KindProxy))
+	h.TrustForwardedProto = keepIf(d, KindProxy, "trust_forwarded_proto", h.TrustForwardedProto)
+	h.HTTP2Support = keepIf(d, KindProxy, "http2_support", h.HTTP2Support)
+	h.BlockExploits = keepIf(d, KindProxy, "block_exploits", h.BlockExploits)
+	h.CachingEnabled = keepIf(d, KindProxy, "caching_enabled", h.CachingEnabled)
+	h.AllowWebsocketUpgrade = keepIf(d, KindProxy, "allow_websocket_upgrade", h.AllowWebsocketUpgrade)
+	if !d.Accepts(KindProxy, "locations/npmplus_location_config") {
+		for i := range h.Locations {
+			h.Locations[i].LocationConfig = ""
+		}
+	}
+}
+
+// conform implements conformer.
+func (h *RedirectionHost) conform(d Dialect) {
+	h.OwnerMarker = Flag(d.CarriesMarker(KindRedirect))
+	h.ForwardScheme = keepSchemeFor(d, h.ForwardScheme)
+	h.HTTP2Support = keepIf(d, KindRedirect, "http2_support", h.HTTP2Support)
+	h.BlockExploits = keepIf(d, KindRedirect, "block_exploits", h.BlockExploits)
+}
+
+// conform implements conformer.
+func (s *Stream) conform(d Dialect) {
+	s.OwnerMarker = Flag(d.CarriesMarker(KindStream))
+	// A server that only knows "on" and "off" stores level 2 as "on" and
+	// reports it back as 1.
+	if d.TypeOf(KindStream, fieldProxyProtocol) == "boolean" && s.ProxyProtocol > 1 {
+		s.ProxyProtocol = 1
+	}
+}
+
+// proxyProtocolFor writes the stream's proxy protocol in the type the server
+// declares. Both kinds of release coerce 0 and 1 into their own type, but
+// only the one that declares levels can express 2.
+func proxyProtocolFor(d Dialect, level ProxyProtocolLevel) any {
+	if d.TypeOf(KindStream, fieldProxyProtocol) == "boolean" {
+		return level > 0
+	}
+	return level
+}
+
+// conform implements conformer.
+func (h *DeadHost) conform(d Dialect) {
+	h.OwnerMarker = Flag(d.CarriesMarker(KindDead))
+	h.HTTP2Support = keepIf(d, KindDead, "http2_support", h.HTTP2Support)
+}
+
+// keepSchemeFor spells "keep the request's scheme" the way the server needs
+// it. NPMplus writes the scheme verbatim into `return 301 <scheme>://...`, so
+// it must get nginx' own "$scheme" wherever it accepts it - an "auto" there
+// produces a redirect to auto://. Upstream NPM only knows "auto" and
+// translates it itself.
+func keepSchemeFor(d Dialect, scheme string) string {
+	if scheme != SchemeAuto && scheme != SchemeKeep {
+		return scheme
+	}
+	if d.Flavour == FlavourNPMplus && d.AcceptsValue(KindRedirect, "forward_scheme", SchemeKeep) {
+		return SchemeKeep
+	}
+	if d.AcceptsValue(KindRedirect, "forward_scheme", SchemeAuto) {
+		return SchemeAuto
+	}
+	return scheme
+}
+
+// Downgraded returns the labels whose value the server can only store in a
+// weaker form: a proxy protocol v2 on an NPMplus release that only knows "on".
+func Downgraded(r Resource, d Dialect) []string {
+	if s, ok := r.(*Stream); ok && s.ProxyProtocol > 1 && d.TypeOf(KindStream, fieldProxyProtocol) == "boolean" {
+		return []string{"proxy_protocol"}
+	}
+	return nil
+}
+
+// keepIf clears a switch the server does not store.
+func keepIf(d Dialect, kind Kind, field string, value Flag) Flag {
+	if !d.Accepts(kind, field) {
+		return false
+	}
+	return value
+}
+
+// flagIf returns the switch for the request body, or nil to leave it out.
+func flagIf(d Dialect, kind Kind, field string, value Flag) *Flag {
+	if !d.Accepts(kind, field) {
+		return nil
+	}
+	return &value
+}
+
+// textIf returns the text for the request body, or nil to leave it out.
+func textIf(d Dialect, kind Kind, field, value string) *string {
+	if !d.Accepts(kind, field) {
+		return nil
+	}
+	return &value
+}
+
+// advancedFor renders the advanced configuration of a request: the ownership
+// marker in front of what the labels configured.
+func advancedFor(d Dialect, kind Kind, meta Meta, key, user string) string {
+	if !d.CarriesMarker(kind) {
+		return user
+	}
+	m, ok := markerFor(meta, key)
+	if !ok {
+		return user
+	}
+	return withMarker(user, m)
+}
+
+// columnsFor fills the properties NPMplus moved out of the meta object, for a
+// server that has them.
+func columnsFor(d Dialect, kind Kind, meta Meta, certificate CertificateID) *npmplusColumns {
+	var columns npmplusColumns
+	used := false
+	if d.Accepts(kind, "npmplus_directory") {
+		// Only a group the labels set (or that was adopted from the live
+		// resource) is written; an absent key leaves the column alone.
+		if group, ok := meta[MetaDirectory].(string); ok {
+			group = strings.TrimSpace(group)
+			columns.Directory = &group
+			used = true
+		}
+	}
+	if certificate.New && d.Accepts(kind, "npmplus_dns_challenge") {
+		if challenge, _ := meta["dns_challenge"].(bool); challenge {
+			columns.DNSChallenge = &challenge
+			columns.DNSProvider, _ = meta["dns_provider"].(string)
+			columns.DNSCredentials, _ = meta["dns_provider_credentials"].(string)
+			if seconds := metaInt(meta["propagation_seconds"]); seconds > 0 {
+				columns.PropagationSeconds = &seconds
+			}
+			used = true
+		}
+	}
+	if !used {
+		return nil
+	}
+	return &columns
+}
+
+// metaInt reads a number from the meta object, which holds an int when built
+// here and a float64 after a JSON round trip.
+func metaInt(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
 }
 
 // idList never returns nil: both schemas type the field as an array, and a nil

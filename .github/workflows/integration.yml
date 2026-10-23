@@ -61,3 +61,40 @@ jobs:
       - name: Clean up
         if: always()
         run: docker compose -p npmsync-it -f test/integration/docker-compose.yml down -v --remove-orphans || true
+
+  upgrade:
+    name: upgrade ${{ matrix.from }} → ${{ matrix.to }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # Upgrading the server must never cost a host its owner. Pull requests
+        # run the upgrade between two releases; scheduled runs add the one to
+        # NPMplus' development branch, whose meta-to-columns migration empties
+        # the meta object of every host.
+        include: ${{ fromJSON(
+          (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+          && '[{"from":"jc21/nginx-proxy-manager:2.11.3","to":"jc21/nginx-proxy-manager:2"},{"from":"ghcr.io/zoeyvid/npmplus:latest","to":"ghcr.io/zoeyvid/npmplus:develop"}]'
+          || '[{"from":"jc21/nginx-proxy-manager:2.11.3","to":"jc21/nginx-proxy-manager:2"}]') }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run the upgrade scenario
+        env:
+          NPM_IMAGE: ${{ matrix.from }}
+          NPM_UPGRADE_IMAGE: ${{ matrix.to }}
+        run: go test -tags integration -count=1 -timeout 40m -v -run TestUpgradeKeepsOwnership ./test/integration/
+
+      - name: Stack logs on failure
+        if: failure()
+        run: docker compose -p npmsync-it -f test/integration/docker-compose.yml logs --no-color --tail 200 || true
+
+      - name: Clean up
+        if: always()
+        run: docker compose -p npmsync-it -f test/integration/docker-compose.yml down -v --remove-orphans || true

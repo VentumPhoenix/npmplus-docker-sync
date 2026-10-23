@@ -1,6 +1,7 @@
 package npm
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -72,8 +73,13 @@ type Resource interface {
 	// ResourceKey is the stable identity within its kind: the first domain
 	// name, or the incoming port for streams.
 	ResourceKey() string
-	// ResourceMeta exposes the meta object carrying the ownership marker.
+	// ResourceMeta exposes the ownership of the resource. For a resource read
+	// from the API it combines the meta object with the marker in the
+	// advanced configuration; see liftOwnership.
 	ResourceMeta() Meta
+	// OwnerMarked reports whether the resource carries a trusted ownership
+	// marker - for a desired resource, whether it is going to.
+	OwnerMarked() bool
 	// ResourceCertificate reports the attached certificate, which the
 	// automatic selection uses to stay on a certificate that still fits.
 	ResourceCertificate() CertificateID
@@ -131,6 +137,13 @@ type ProxyHost struct {
 	Locations             []Location `json:"locations"`
 	Meta                  Meta       `json:"meta"`
 
+	// Directory is NPMplus' `npmplus_directory` column. It is moved into the
+	// meta object when the resource is decoded and never kept here.
+	Directory string `json:"npmplus_directory,omitempty"`
+	// OwnerMarker records the ownership marker in the advanced configuration;
+	// see marker.go. Not an API field.
+	OwnerMarker Flag `json:"ownership_marker,omitempty"`
+
 	// HTTP3Support is an NPMplus extension (`npmplus_http3_support`).
 	HTTP3Support Flag `json:"npmplus_http3_support"`
 
@@ -176,6 +189,26 @@ func (h *ProxyHost) Domains() []string { return NormalizeDomains(h.DomainNames) 
 
 // ResourceMeta implements Resource.
 func (h *ProxyHost) ResourceMeta() Meta { return h.Meta }
+
+// OwnerMarked implements Resource.
+func (h *ProxyHost) OwnerMarked() bool { return bool(h.OwnerMarker) }
+
+// UnmarshalJSON decodes the resource and lifts the ownership marker and the
+// group column into the meta object.
+func (h *ProxyHost) UnmarshalJSON(data []byte) error {
+	type plain ProxyHost
+	if err := json.Unmarshal(data, (*plain)(h)); err != nil {
+		return err
+	}
+	advanced, meta, marked := liftOwnership(h.AdvancedConfig, h.Meta, h.ResourceKey())
+	h.AdvancedConfig = advanced
+	h.Meta = liftDirectory(meta, h.Directory)
+	h.Directory = ""
+	if marked {
+		h.OwnerMarker = true
+	}
+	return nil
+}
 
 // ResourceCertificate implements Resource.
 func (h *ProxyHost) ResourceCertificate() CertificateID { return h.CertificateID }
@@ -275,6 +308,7 @@ func (h *ProxyHost) Fingerprint() string {
 		Container string `json:"container"`
 		Index     int    `json:"index"`
 		Instance  string `json:"instance"`
+		Marked    Flag   `json:"marked"`
 	}{
 		Kind:           string(KindProxy),
 		Domains:        NormalizeDomains(h.DomainNames),
@@ -312,6 +346,7 @@ func (h *ProxyHost) Fingerprint() string {
 		Container: container,
 		Index:     index,
 		Instance:  instance,
+		Marked:    h.OwnerMarker,
 	})
 }
 
@@ -341,6 +376,13 @@ type RedirectionHost struct {
 	AdvancedConfig    string        `json:"advanced_config"`
 	Enabled           Flag          `json:"enabled"`
 	Meta              Meta          `json:"meta"`
+
+	// Directory is NPMplus' `npmplus_directory` column. It is moved into the
+	// meta object when the resource is decoded and never kept here.
+	Directory string `json:"npmplus_directory,omitempty"`
+	// OwnerMarker records the ownership marker in the advanced configuration;
+	// see marker.go. Not an API field.
+	OwnerMarker Flag `json:"ownership_marker,omitempty"`
 }
 
 // Kind implements Resource.
@@ -360,6 +402,26 @@ func (h *RedirectionHost) Domains() []string { return NormalizeDomains(h.DomainN
 
 // ResourceMeta implements Resource.
 func (h *RedirectionHost) ResourceMeta() Meta { return h.Meta }
+
+// OwnerMarked implements Resource.
+func (h *RedirectionHost) OwnerMarked() bool { return bool(h.OwnerMarker) }
+
+// UnmarshalJSON decodes the resource and lifts the ownership marker and the
+// group column into the meta object.
+func (h *RedirectionHost) UnmarshalJSON(data []byte) error {
+	type plain RedirectionHost
+	if err := json.Unmarshal(data, (*plain)(h)); err != nil {
+		return err
+	}
+	advanced, meta, marked := liftOwnership(h.AdvancedConfig, h.Meta, h.ResourceKey())
+	h.AdvancedConfig = advanced
+	h.Meta = liftDirectory(meta, h.Directory)
+	h.Directory = ""
+	if marked {
+		h.OwnerMarker = true
+	}
+	return nil
+}
 
 // ResourceCertificate implements Resource.
 func (h *RedirectionHost) ResourceCertificate() CertificateID { return h.CertificateID }
@@ -410,6 +472,7 @@ func (h *RedirectionHost) Fingerprint() string {
 		Container     string   `json:"container"`
 		Index         int      `json:"index"`
 		Instance      string   `json:"instance"`
+		Marked        Flag     `json:"marked"`
 	}{
 		Kind:          string(KindRedirect),
 		Domains:       NormalizeDomains(h.DomainNames),
@@ -430,6 +493,7 @@ func (h *RedirectionHost) Fingerprint() string {
 		Container:     container,
 		Index:         index,
 		Instance:      instance,
+		Marked:        h.OwnerMarker,
 	})
 }
 
@@ -459,6 +523,13 @@ type Stream struct {
 	ProxyTLS       Flag               `json:"npmplus_proxy_tls"`
 	AdvancedConfig string             `json:"npmplus_advanced_config"`
 	Description    string             `json:"npmplus_description"`
+
+	// Directory is NPMplus' `npmplus_directory` column. It is moved into the
+	// meta object when the resource is decoded and never kept here.
+	Directory string `json:"npmplus_directory,omitempty"`
+	// OwnerMarker records the ownership marker in the advanced configuration;
+	// see marker.go. Not an API field.
+	OwnerMarker Flag `json:"ownership_marker,omitempty"`
 }
 
 // Kind implements Resource.
@@ -476,6 +547,26 @@ func (s *Stream) ResourceKey() string { return s.IncomingPort.String() }
 
 // ResourceMeta implements Resource.
 func (s *Stream) ResourceMeta() Meta { return s.Meta }
+
+// OwnerMarked implements Resource.
+func (s *Stream) OwnerMarked() bool { return bool(s.OwnerMarker) }
+
+// UnmarshalJSON decodes the resource and lifts the ownership marker and the
+// group column into the meta object.
+func (s *Stream) UnmarshalJSON(data []byte) error {
+	type plain Stream
+	if err := json.Unmarshal(data, (*plain)(s)); err != nil {
+		return err
+	}
+	advanced, meta, marked := liftOwnership(s.AdvancedConfig, s.Meta, s.ResourceKey())
+	s.AdvancedConfig = advanced
+	s.Meta = liftDirectory(meta, s.Directory)
+	s.Directory = ""
+	if marked {
+		s.OwnerMarker = true
+	}
+	return nil
+}
 
 // ResourceCertificate implements Resource.
 func (s *Stream) ResourceCertificate() CertificateID { return s.CertificateID }
@@ -529,6 +620,7 @@ func (s *Stream) Fingerprint() string {
 		Container     string `json:"container"`
 		Index         int    `json:"index"`
 		Instance      string `json:"instance"`
+		Marked        Flag   `json:"marked"`
 	}{
 		Kind:          string(KindStream),
 		IncomingPort:  s.IncomingPort.String(),
@@ -546,6 +638,7 @@ func (s *Stream) Fingerprint() string {
 		Container:     container,
 		Index:         index,
 		Instance:      instance,
+		Marked:        s.OwnerMarker,
 	})
 }
 
@@ -570,6 +663,13 @@ type DeadHost struct {
 	AdvancedConfig string        `json:"advanced_config"`
 	Enabled        Flag          `json:"enabled"`
 	Meta           Meta          `json:"meta"`
+
+	// Directory is NPMplus' `npmplus_directory` column. It is moved into the
+	// meta object when the resource is decoded and never kept here.
+	Directory string `json:"npmplus_directory,omitempty"`
+	// OwnerMarker records the ownership marker in the advanced configuration;
+	// see marker.go. Not an API field.
+	OwnerMarker Flag `json:"ownership_marker,omitempty"`
 }
 
 // Kind implements Resource.
@@ -589,6 +689,26 @@ func (h *DeadHost) Domains() []string { return NormalizeDomains(h.DomainNames) }
 
 // ResourceMeta implements Resource.
 func (h *DeadHost) ResourceMeta() Meta { return h.Meta }
+
+// OwnerMarked implements Resource.
+func (h *DeadHost) OwnerMarked() bool { return bool(h.OwnerMarker) }
+
+// UnmarshalJSON decodes the resource and lifts the ownership marker and the
+// group column into the meta object.
+func (h *DeadHost) UnmarshalJSON(data []byte) error {
+	type plain DeadHost
+	if err := json.Unmarshal(data, (*plain)(h)); err != nil {
+		return err
+	}
+	advanced, meta, marked := liftOwnership(h.AdvancedConfig, h.Meta, h.ResourceKey())
+	h.AdvancedConfig = advanced
+	h.Meta = liftDirectory(meta, h.Directory)
+	h.Directory = ""
+	if marked {
+		h.OwnerMarker = true
+	}
+	return nil
+}
 
 // ResourceCertificate implements Resource.
 func (h *DeadHost) ResourceCertificate() CertificateID { return h.CertificateID }
@@ -632,6 +752,7 @@ func (h *DeadHost) Fingerprint() string {
 		Container   string   `json:"container"`
 		Index       int      `json:"index"`
 		Instance    string   `json:"instance"`
+		Marked      Flag     `json:"marked"`
 	}{
 		Kind:        string(KindDead),
 		Domains:     NormalizeDomains(h.DomainNames),
@@ -647,6 +768,7 @@ func (h *DeadHost) Fingerprint() string {
 		Container:   container,
 		Index:       index,
 		Instance:    instance,
+		Marked:      h.OwnerMarker,
 	})
 }
 

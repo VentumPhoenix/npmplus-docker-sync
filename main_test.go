@@ -272,7 +272,7 @@ func (s *stubAPI) Delete(context.Context, npm.Kind, int) error                 {
 func (s *stubAPI) SetEnabled(context.Context, npm.Kind, int, bool) error       { return nil }
 func (s *stubAPI) ListCertificates(context.Context) ([]npm.Certificate, error) { return nil, nil }
 func (s *stubAPI) ListAccessLists(context.Context) ([]npm.AccessList, error)   { return nil, nil }
-func (s *stubAPI) Flavour() npm.Flavour                                        { return npm.FlavourNPMplus }
+func (s *stubAPI) Dialect() npm.Dialect                                        { return npm.Dialect{Flavour: npm.FlavourNPMplus} }
 func (s *stubAPI) Recheck(context.Context) error                               { return nil }
 
 // stubSource serves a fixed set of targets plus an event stream state.
