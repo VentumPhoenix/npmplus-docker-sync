@@ -537,7 +537,8 @@ hosts Redth's tool created, set `MIGRATE_FROM_REDTH=true` — see
 - [x] Ownership that survives NPMplus' meta-to-columns migration *(beta.10)*
 - [x] Server capabilities read from `/api/schema` *(beta.10)*
 - [x] Upgrade tests against real NPM and NPMplus containers *(beta.10)*
-- [ ] A few weeks of beta.10 in real use
+- [x] Fixes from testing against the next NPMplus release *(beta.11)*
+- [ ] A few weeks of beta.11 in real use
 - [ ] The NPMplus release with the new API in the test matrix
 
 **After 1.0** — new features in 1.x releases, without breaking changes:
