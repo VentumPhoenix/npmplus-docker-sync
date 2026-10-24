@@ -2,6 +2,7 @@
 
 Newest first. Most upgrades need no action — the ones that do say so at the top.
 
+- beta.10 → beta.11 — no action, only fixes
 - [beta.9 → beta.10](#from-v100-beta9-to-v100-beta10) — **update this tool before NPMplus**
 - [beta.4 → beta.9](#from-v100-beta4-to-v100-beta9) · [beta.3 → beta.4](#from-v100-beta3-to-v100-beta4) · [beta.2 → beta.3](#from-v100-beta2-to-v100-beta3) — `host` changed meaning
 - [From Redth/npm-docker-sync](#from-redthnpm-docker-sync)

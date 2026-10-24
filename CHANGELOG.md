@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta.11] - 2026-10-24
+
+Fixes found by running the integration suite against NPMplus `develop`, the
+code of the next NPMplus release. No labels, variables or defaults changed;
+nothing to do when upgrading from beta.10.
+
 ### Fixed
 
 - **Hosts without a certificate did not converge on NPMplus `develop`.** It
@@ -740,7 +746,8 @@ Upstreams also change from container names to container IPs in 2.0. Set
 - Multi-stage `scratch` image running as `1000:1000`, published for
   linux/amd64, arm64 and arm/v7.
 
-[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.10...HEAD
+[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.11...HEAD
+[1.0.0-beta.11]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.10...v1.0.0-beta.11
 [1.0.0-beta.10]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.9...v1.0.0-beta.10
 [1.0.0-beta.9]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.8...v1.0.0-beta.9
 [1.0.0-beta.8]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.7...v1.0.0-beta.8
