@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -546,15 +547,21 @@ func TestClientReplaysWritesOnAClosedConnection(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var writes atomic.Int64
-			mux := http.NewServeMux()
-			mux.HandleFunc("/api/tokens", func(w http.ResponseWriter, _ *http.Request) {
-				_, _ = w.Write([]byte(`{"token":"jwt"}`))
-			})
-			mux.HandleFunc("/api/nginx/proxy-hosts/7", func(w http.ResponseWriter, _ *http.Request) {
-				if writes.Add(1) == 1 {
-					// Close the reused connection without an answer, as a
-					// server does whose keep-alive timeout just expired.
+			// net/http hands a connection back to its pool asynchronously, so
+			// a write may go out on a fresh one - which no server drops for
+			// being idle and which must not be replayed. Only a write on a
+			// reused connection is dropped, once.
+			type served struct{}
+			var dropped atomic.Bool
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reused := r.Context().Value(served{}).(*atomic.Int64).Add(1) > 1
+				if r.URL.Path == "/api/tokens" {
+					_, _ = w.Write([]byte(`{"token":"jwt"}`))
+					return
+				}
+				if reused && dropped.CompareAndSwap(false, true) {
+					// Close without an answer, as a server does whose
+					// keep-alive timeout just expired.
 					conn, _, err := w.(http.Hijacker).Hijack()
 					if err != nil {
 						t.Errorf("hijack: %v", err)
@@ -564,15 +571,21 @@ func TestClientReplaysWritesOnAClosedConnection(t *testing.T) {
 					return
 				}
 				_, _ = w.Write([]byte(`{"id":7,"domain_names":["a.example.com"]}`))
-			})
-			srv := httptest.NewServer(mux)
+			}))
+			srv.Config.ConnContext = func(ctx context.Context, _ net.Conn) context.Context {
+				return context.WithValue(ctx, served{}, new(atomic.Int64))
+			}
+			srv.Start()
 			defer srv.Close()
 
-			if err := tt.call(newTestClient(t, srv)); err != nil {
-				t.Fatalf("error = %v, want the write replayed", err)
+			client := newTestClient(t, srv)
+			for i := 0; i < 50 && !dropped.Load(); i++ {
+				if err := tt.call(client); err != nil {
+					t.Fatalf("error = %v, want the write replayed", err)
+				}
 			}
-			if got := writes.Load(); got != 2 {
-				t.Errorf("writes = %d, want 2 (dropped + replayed)", got)
+			if !dropped.Load() {
+				t.Fatal("no write went out on a reused connection")
 			}
 		})
 	}
