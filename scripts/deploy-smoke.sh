@@ -37,6 +37,12 @@ set_env NPM_ADMIN_PASSWORD "smoke-$(openssl rand -hex 12)"
 set_env ACME_EMAIL smoke@example.com
 set_env DOCKER_GID "$(stat -c %g /var/run/docker.sock)"
 grep -q '^CROWDSEC_BOUNCER_KEY=' "$dir/.env" && set_env CROWDSEC_BOUNCER_KEY "$(openssl rand -hex 32)"
+if grep -q 'secrets/npm_password.txt' "$dir/compose.yaml"; then
+  # Exactly the steps the compose file documents.
+  mkdir -p -m 700 "$dir/secrets"
+  grep '^NPM_ADMIN_PASSWORD=' "$dir/.env" | cut -d= -f2- | tr -d '\n' > "$dir/secrets/npm_password.txt"
+  chmod 644 "$dir/secrets/npm_password.txt"
+fi
 
 extra=()
 if grep -q 'zoeyvid/npmplus' "$dir/compose.yaml"; then
@@ -70,7 +76,7 @@ cleanup() {
   if [ "${KEEP_STACK:-0}" != 1 ]; then
     docker rm -f "$app" >/dev/null 2>&1 || true
     compose down -v --remove-orphans >/dev/null 2>&1 || true
-    rm -f "$dir/.env"
+    rm -rf "$dir/.env" "$dir/secrets"
   fi
   exit "$status"
 }

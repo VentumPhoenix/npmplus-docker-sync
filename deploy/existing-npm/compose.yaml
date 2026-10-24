@@ -44,14 +44,12 @@ services:
       NPM_URL: ${NPM_URL:?set NPM_URL in .env}
       NPM_INSECURE_SKIP_VERIFY: ${NPM_INSECURE_SKIP_VERIFY:-false}
       NPM_IDENTITY: ${NPM_IDENTITY:?set NPM_IDENTITY in .env}
-      NPM_SECRET_FILE: /run/secrets/npm_password
+      NPM_SECRET: ${NPM_SECRET:?set NPM_SECRET in .env}
       NPM_NETWORK: ${NPM_NETWORK:-npm}
       # Strongly recommended for the first run against hosts that already
       # exist: the tool only logs what it would change.
       DRY_RUN: ${DRY_RUN:-true}
       HEALTH_ADDR: 127.0.0.1:8080
-    secrets:
-      - npm_password
     networks:
       - npm
       - socket-proxy
@@ -63,10 +61,6 @@ services:
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
-
-secrets:
-  npm_password:
-    environment: NPM_SECRET # read from .env, mounted as a file
 
 networks:
   npm:

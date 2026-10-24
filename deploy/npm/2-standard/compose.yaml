@@ -3,8 +3,6 @@
 # What changes compared to ../1-simple:
 #   - the tool reaches Docker only through a read-only socket proxy on an
 #     internal network; the raw socket is never mounted into it
-#   - its NPM password is a Docker secret, not an environment variable
-#     (environment variables show up in `docker inspect`)
 #   - healthchecks, start order and log rotation
 #   - the admin UI is no longer published on port 81
 #
@@ -86,24 +84,18 @@ services:
       DOCKER_HOST: tcp://socket-proxy:2375
       NPM_URL: http://npm:81
       NPM_IDENTITY: ${NPM_ADMIN_EMAIL}
-      NPM_SECRET_FILE: /run/secrets/npm_password
+      NPM_SECRET: ${NPM_ADMIN_PASSWORD}
       NPM_NETWORK: npm
       # First run against an NPM that already has hosts? Set DRY_RUN=true in
       # .env: the tool then only logs what it would change.
       DRY_RUN: ${DRY_RUN:-false}
       HEALTH_ADDR: 127.0.0.1:8080
-    secrets:
-      - npm_password
     networks:
       - npm
       - socket-proxy
     read_only: true
     cap_drop:
       - ALL
-
-secrets:
-  npm_password:
-    environment: NPM_ADMIN_PASSWORD # read from .env, mounted as a file
 
 networks:
   npm:

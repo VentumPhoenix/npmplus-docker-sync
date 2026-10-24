@@ -9,6 +9,9 @@ cp .env.example .env             # fill in the values
 docker compose up -d
 ```
 
+The hardened stacks need one more step, a secret file for the tool's password —
+the commands are at the top of their `compose.yaml`.
+
 |  | [NPM](https://nginxproxymanager.com) | [NPMplus](https://github.com/ZoeyVid/NPMplus) |
 |---|---|---|
 | **1 · Simple** — try it out, home lab | [npm/1-simple](npm/1-simple/compose.yaml) | [npmplus/1-simple](npmplus/1-simple/compose.yaml) |
@@ -25,7 +28,7 @@ Then label your apps: [example-app](example-app/compose.yaml).
 | NPM / NPMplus + this tool | ✅ | ✅ | ✅ |
 | Tool: non-root, read-only, no capabilities | ✅ | ✅ | ✅ |
 | Docker access | socket `:ro` | socket proxy | allowlist socket proxy, 5 endpoints |
-| NPM password for the tool | environment | Docker secret | Docker secret |
+| NPM password for the tool | `.env` | `.env` | secret file, not in `docker inspect` |
 | Admin UI on port 81 | published | via its domain only | via its domain only |
 | Healthchecks, start order, log rotation | – | ✅ | ✅ |
 | Fixed IPs, containers isolated from each other (ICC off + firewall) | – | – | ✅ |
@@ -47,8 +50,9 @@ unhealthy the moment one is missing.
 ## Good to know
 
 - **The tool logs in with the admin account** from `.env`. Change the
-  password in the UI → change `NPM_ADMIN_PASSWORD` too, then
-  `docker compose up -d`.
+  password in the UI → change `NPM_ADMIN_PASSWORD` too (hardened:
+  `secrets/npm_password.txt`), then `docker compose up -d`. Keep `.env` at
+  `chmod 600` and the `secrets/` folder at `700`.
 - **The admin UI gets a proxy host** through the labels on the proxy manager
   container (`NPM_UI_DOMAIN`). Keep those labels — removing them makes the tool
   delete that host.

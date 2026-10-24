@@ -12,7 +12,10 @@
 # tool needs. Upstream NPM has no built-in CrowdSec bouncer; for CrowdSec and
 # its WAF use the NPMplus variant (../../npmplus/3-hardened).
 #
-#   cp .env.example .env    # fill in the values
+#   cp .env.example .env && chmod 600 .env   # fill in the values
+#   mkdir -p -m 700 secrets                   # the tool's password, from .env:
+#   grep '^NPM_ADMIN_PASSWORD=' .env | cut -d= -f2- | tr -d '\n' > secrets/npm_password.txt
+#   chmod 644 secrets/npm_password.txt        # the tool runs as uid 1000; the folder stays private
 #   docker compose up -d
 #   docker compose ps       # every service healthy; npm-firewall checks itself
 #
@@ -240,8 +243,10 @@ services:
         done
 
 secrets:
+  # The tool's password as a file, so it never shows up in `docker inspect`.
+  # Compose only mounts file secrets into a read-only container.
   npm_password:
-    environment: NPM_ADMIN_PASSWORD # read from .env, mounted as a file
+    file: ./secrets/npm_password.txt
 
 networks:
   npm-frontend: # apps join this network so NPM can reach them
