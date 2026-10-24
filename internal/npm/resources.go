@@ -170,6 +170,10 @@ type ProxyHost struct {
 	// AccessListNames are names that still have to be resolved into ids.
 	// They never reach the API.
 	AccessListNames []string `json:"-"`
+	// AccessLists is the expanded relation NPMplus returns instead of
+	// npmplus_access_list_ids since it moved access lists into a table of
+	// their own. Read into AccessListIDs on decoding, never kept.
+	AccessLists []accessListRef `json:"access_lists,omitempty"`
 }
 
 // Kind implements Resource.
@@ -207,7 +211,28 @@ func (h *ProxyHost) UnmarshalJSON(data []byte) error {
 	if marked {
 		h.OwnerMarker = true
 	}
+	h.AccessListIDs, h.AccessLists = idsOf(h.AccessListIDs, h.AccessLists), nil
+	for i := range h.Locations {
+		l := &h.Locations[i]
+		l.AccessListIDs, l.AccessLists = idsOf(l.AccessListIDs, l.AccessLists), nil
+	}
 	return nil
+}
+
+// accessListRef is an entry of an expanded `access_lists` relation.
+type accessListRef struct {
+	ID int `json:"id"`
+}
+
+// idsOf prefers the id list and falls back to the expanded relation, which is
+// all NPMplus returns once access lists live in a table of their own.
+func idsOf(ids []int, refs []accessListRef) []int {
+	if len(ids) == 0 {
+		for _, ref := range refs {
+			ids = append(ids, ref.ID)
+		}
+	}
+	return ids
 }
 
 // ResourceCertificate implements Resource.

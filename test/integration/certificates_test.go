@@ -175,11 +175,17 @@ func uploadCertificate(t *testing.T, name string, domains ...string) int {
 	certPEM, keyPEM := selfSigned(t, domains...)
 	session := apiLogin(t)
 
-	created := apiPost(t, session, "/api/nginx/certificates", map[string]any{
-		"provider":     "other",
-		"nice_name":    name,
-		"domain_names": domains,
-	})
+	// NPMplus' development branch reads the domains of an uploaded
+	// certificate from the certificate itself and refuses them in the body;
+	// every other release wants them there.
+	request := map[string]any{"provider": "other", "nice_name": name, "domain_names": domains}
+	created, status, raw := apiTryPost(t, session, "/api/nginx/certificates", request)
+	if status == http.StatusBadRequest && strings.Contains(raw, "domain_names") {
+		delete(request, "domain_names")
+		created = apiPost(t, session, "/api/nginx/certificates", request)
+	} else if status >= 300 {
+		t.Fatalf("POST /api/nginx/certificates: %d %s", status, raw)
+	}
 	id, ok := created["id"].(float64)
 	if !ok {
 		t.Fatalf("certificate response without an id: %v", created)
@@ -323,6 +329,17 @@ func apiDelete(t *testing.T, format string, id int) {
 // apiPost sends a JSON body and returns the decoded answer.
 func apiPost(t *testing.T, session apiSession, path string, payload any) map[string]any {
 	t.Helper()
+	decoded, status, raw := apiTryPost(t, session, path, payload)
+	if status >= 300 {
+		t.Fatalf("POST %s: %d %s", path, status, raw)
+	}
+	return decoded
+}
+
+// apiTryPost sends a POST and hands back the decoded body, the status and the
+// raw body, so the caller can react to a rejection.
+func apiTryPost(t *testing.T, session apiSession, path string, payload any) (map[string]any, int, string) {
+	t.Helper()
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -341,13 +358,13 @@ func apiPost(t *testing.T, session apiSession, path string, payload any) map[str
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode >= 300 {
-		t.Fatalf("POST %s: %s %s", path, resp.Status, raw)
+		return nil, resp.StatusCode, string(raw)
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("decode %s: %v (%s)", path, err, raw)
 	}
-	return decoded
+	return decoded, resp.StatusCode, string(raw)
 }
 
 // selfSigned builds a certificate the tests can upload. Let's Encrypt is not
