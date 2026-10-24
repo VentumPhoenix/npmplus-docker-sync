@@ -897,6 +897,13 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body io.Re
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if method == http.MethodPut || method == http.MethodDelete {
+		// NPM closes idle keep-alive connections after a few seconds, and a
+		// request that races that close fails with EOF. net/http replays only
+		// requests it knows to be idempotent; an empty Idempotency-Key marks
+		// these as such without sending the header.
+		req.Header["Idempotency-Key"] = nil
+	}
 	return req, nil
 }
 

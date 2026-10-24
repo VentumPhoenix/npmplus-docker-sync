@@ -527,6 +527,57 @@ func TestClientRejectsUnknownKind(t *testing.T) {
 	}
 }
 
+// NPM drops idle keep-alive connections; a write that races the close must be
+// replayed on a fresh connection instead of failing the run with EOF.
+func TestClientReplaysWritesOnAClosedConnection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		call func(*Client) error
+	}{
+		{"delete", func(c *Client) error { return c.DeleteProxyHost(context.Background(), 7) }},
+		{"update", func(c *Client) error {
+			_, err := c.UpdateProxyHost(context.Background(), 7, &ProxyHost{DomainNames: []string{"a.example.com"}})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var writes atomic.Int64
+			mux := http.NewServeMux()
+			mux.HandleFunc("/api/tokens", func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"token":"jwt"}`))
+			})
+			mux.HandleFunc("/api/nginx/proxy-hosts/7", func(w http.ResponseWriter, _ *http.Request) {
+				if writes.Add(1) == 1 {
+					// Close the reused connection without an answer, as a
+					// server does whose keep-alive timeout just expired.
+					conn, _, err := w.(http.Hijacker).Hijack()
+					if err != nil {
+						t.Errorf("hijack: %v", err)
+						return
+					}
+					_ = conn.Close()
+					return
+				}
+				_, _ = w.Write([]byte(`{"id":7,"domain_names":["a.example.com"]}`))
+			})
+			srv := httptest.NewServer(mux)
+			defer srv.Close()
+
+			if err := tt.call(newTestClient(t, srv)); err != nil {
+				t.Fatalf("error = %v, want the write replayed", err)
+			}
+			if got := writes.Load(); got != 2 {
+				t.Errorf("writes = %d, want 2 (dropped + replayed)", got)
+			}
+		})
+	}
+}
+
 // npmKinds returns the package level kind list (kept local so the test reads
 // independently of the exported slice being mutated elsewhere).
 func npmKinds() []Kind { return []Kind{KindProxy, KindRedirect, KindStream, KindDead} }

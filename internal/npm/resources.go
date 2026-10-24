@@ -287,6 +287,7 @@ func (h *ProxyHost) AdoptServerState(current Resource) {
 	if h.AuthRequest == "" {
 		h.AuthRequest = live.AuthRequest
 	}
+	adoptLocationDefaults(h.Locations, live.Locations)
 	if len(h.Locations) == 0 {
 		h.Locations = []Location{}
 	}
@@ -296,6 +297,17 @@ func (h *ProxyHost) AdoptServerState(current Resource) {
 func (h *ProxyHost) Fingerprint() string {
 	managedBy, container, index, instance := ownership(h.Meta)
 	ids, listType := h.accessLists()
+	forward := Location{
+		ForwardScheme:            h.ForwardScheme,
+		DisableCrowdsecAppsec:    h.DisableCrowdsecAppsec,
+		DisableRequestBuffering:  h.DisableRequestBuffering,
+		DisableResponseBuffering: h.DisableResponseBuffering,
+		UpstreamCompression:      h.UpstreamCompression,
+		FancyIndex:               h.FancyIndex,
+		AuthRequest:              h.AuthRequest,
+		AuthRequestUpstream:      h.AuthRequestUpstream,
+	}
+	forward.cleanForwardOptions()
 	return fingerprint(struct {
 		Kind           string     `json:"kind"`
 		Domains        []string   `json:"domains"`
@@ -357,13 +369,13 @@ func (h *ProxyHost) Fingerprint() string {
 
 		NoIndex:             h.NoIndex,
 		CrowdsecOff:         h.DisableCrowdsecAppsec,
-		RequestBufferingOff: h.DisableRequestBuffering,
-		ResponseBufferOff:   h.DisableResponseBuffering,
-		UpstreamCompression: h.UpstreamCompression,
-		FancyIndex:          h.FancyIndex,
+		RequestBufferingOff: forward.DisableRequestBuffering,
+		ResponseBufferOff:   forward.DisableResponseBuffering,
+		UpstreamCompression: forward.UpstreamCompression,
+		FancyIndex:          forward.FancyIndex,
 		XFrameOptions:       strings.TrimSpace(h.XFrameOptions),
 		AuthRequest:         strings.TrimSpace(h.AuthRequest),
-		AuthRequestUpstream: strings.TrimSpace(h.AuthRequestUpstream),
+		AuthRequestUpstream: strings.TrimSpace(forward.AuthRequestUpstream),
 		LocationConfig:      strings.TrimSpace(h.LocationConfig),
 		Directory:           h.Meta.Directory(),
 
@@ -844,6 +856,28 @@ func normalizeIDs(ids []int) []int {
 	return out
 }
 
+// adoptLocationDefaults does for every location what AdoptServerState does for
+// the host: NPMplus keeps locations in a table of their own since 2026-10,
+// whose columns default to SAMEORIGIN and none, so an unset value takes the
+// one stored for the location with the same path.
+func adoptLocationDefaults(desired, live []Location) {
+	for i := range desired {
+		l := &desired[i]
+		for _, stored := range live {
+			if stored.Path != l.Path || stored.LocationType != l.LocationType {
+				continue
+			}
+			if l.XFrameOptions == "" {
+				l.XFrameOptions = stored.XFrameOptions
+			}
+			if l.AuthRequest == "" {
+				l.AuthRequest = stored.AuthRequest
+			}
+			break
+		}
+	}
+}
+
 // canonicalLocations normalises location blocks for the fingerprint so the hash
 // does not depend on how the server filled in the optional fields. NPMplus
 // drops the id list of any location that is not "custom"
@@ -852,6 +886,7 @@ func normalizeIDs(ids []int) []int {
 func canonicalLocations(locations []Location) []Location {
 	out := make([]Location, 0, len(locations))
 	for _, l := range locations {
+		l.cleanForwardOptions()
 		listType := l.accessListType()
 		var ids []int
 		if listType == AccessListCustom {

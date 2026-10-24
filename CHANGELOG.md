@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   expanded `access_lists` relation instead of `npmplus_access_list_ids` - for the
   host and for its custom locations. Both are read now, and the flavour
   detection recognises NPMplus by any `npmplus_*` property.
+- **Hosts with custom locations did not converge on NPMplus `develop`.** It
+  keeps locations in a table of their own that fills an unset X-Frame-Options
+  and auth service with `SAMEORIGIN` and `none`; those are adopted now, as for
+  the host itself. The comparison also follows the rules the server applies to
+  a host and each location (buffering only for http(s), fancyindex only for
+  `path`, request buffering stays on while CrowdSec AppSec runs, …).
+- **A sync could fail with `EOF`** when a write raced NPM closing an idle
+  keep-alive connection. Updates and deletes are idempotent and are now
+  replayed on a fresh connection, as reads already were.
 - The integration suite uploads certificates without `domain_names` where the
   server reads them from the certificate itself.
 
