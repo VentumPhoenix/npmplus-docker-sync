@@ -8,7 +8,6 @@ name: Deployment examples
 
 on:
   push:
-    branches: [main]
     paths: ["deploy/**", "scripts/deploy-smoke.sh", ".github/workflows/deploy.yml"]
   pull_request:
     paths: ["deploy/**", "scripts/deploy-smoke.sh", ".github/workflows/deploy.yml"]
