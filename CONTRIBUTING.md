@@ -1,108 +1,73 @@
 # Contributing
 
-Thanks for taking the time to improve `npmplus-docker-sync`. Bug reports, new
-labels, documentation fixes and PRs are all welcome.
+Bug reports, missing labels, doc fixes and pull requests are welcome. For a
+larger feature, please open an issue first so we can agree on the design.
 
-## Getting started
+## Setup
+
+Go 1.26 or newer, and [golangci-lint](https://golangci-lint.run/welcome/install/)
+for `make lint`.
 
 ```bash
 git clone https://github.com/VentumPhoenix/npmplus-docker-sync.git
 cd npmplus-docker-sync
-make test     # race-enabled unit tests, no Docker or NPM required
-make check    # fmt + vet + lint + test — this is what CI runs
+make test     # unit tests with -race; no Docker or NPM needed
+make check    # fmt + vet + lint + test — what CI runs
 ```
 
-Requirements: Go 1.26 or newer. `golangci-lint` for `make lint`
-([install](https://golangci-lint.run/welcome/install/)); everything else is
-standard Go tooling.
+Try it against a test instance with `cp .env.example .env`, then `make run`
+with `DRY_RUN=true`. A complete playground:
+`docker compose -f docker-compose.yml -f docker-compose.example-app.yml up -d`.
 
-## Running it locally
-
-```bash
-cp .env.example .env    # point NPM_URL at a test instance
-make run
-```
-
-Use `DRY_RUN=true` while developing: the reconcile logic runs and logs every
-intended change without writing to the API.
-
-A full local playground:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.example-app.yml up -d
-```
-
-## Project layout
+## Layout
 
 | Path | Responsibility |
 |---|---|
-| `main.go` | wiring, signal handling, health endpoint |
+| `main.go` | wiring, signals, health endpoint, subcommands |
 | `internal/config` | environment parsing and validation |
-| `internal/npm` | API client, the four resource models, dual-auth detection |
-| `internal/docker` | event listener, indexed label parser, IP resolution |
-| `internal/syncer` | debouncer, per-kind state cache, reconcile worker |
+| `internal/fields` | the field table: every label, alias, env variable, default |
+| `internal/docker` | event listener, label parser, upstream resolution |
+| `internal/npm` | API client, resource models, ownership marker, server capabilities |
+| `internal/certs` | certificate matching |
+| `internal/syncer` | debouncer, cache, the reconcile worker |
+| `test/integration` | tests against real NPM and NPMplus containers |
 
-Keep the boundaries: `internal/npm` knows nothing about Docker,
-`internal/docker` knows nothing about the NPM API, and only `internal/syncer`
-maps between them (`BuildResource`).
+`internal/npm` knows nothing about Docker and `internal/docker` nothing about
+the NPM API; only `internal/syncer` connects them.
 
-Adding a resource type means: a struct implementing `npm.Resource`, a `Kind`
-with its API path, a label section in `internal/docker/build.go`, a case in
-`syncer.BuildResource` — the worker itself does not change.
+**A new label** is a row in the field table (`internal/fields/fields.go`), the
+parsing in `internal/docker/build.go`, the mapping in `syncer.BuildResource`
+and the payload field. Then regenerate the reference:
+`go test ./internal/fields -update` (it rewrites `docs/FIELDS.md`).
 
-## Code style
+**A new server version:** see [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#adding-a-version).
 
-* `gofmt -s` formatted, `go vet` and `golangci-lint` clean.
-* Exported identifiers carry doc comments; comments explain *why*, not *what*.
-* Errors are wrapped with `%w` and contextual, lower-case messages.
-* Structured logging via `log/slog` — never log credentials or tokens.
-* No new third-party dependencies without a good reason. The Docker SDK is the
-  only direct dependency and should stay that way.
+## Code and tests
 
-## Tests
+- `gofmt`, `go vet` and `golangci-lint` clean; comments explain *why*.
+- Errors wrapped with `%w`, lower-case messages; logging via `log/slog`, never
+  credentials.
+- Avoid new dependencies.
+- Every behaviour change needs a test. Unit tests are hermetic — the NPM API is
+  faked with `httptest`, Docker through a small interface.
+- `internal/npm/contract_test.go` checks every request body against the real
+  NPM and NPMplus schemas; `make schemas` refreshes them.
+- Integration tests need Docker: `make integration`, see
+  [test/integration/README.md](test/integration/README.md).
 
-Every behavioural change needs a test. The suite is hermetic: no Docker daemon
-and no NPM instance are involved.
-
-* Table-driven tests with the standard `testing` package.
-* The NPM API is mocked with `net/http/httptest`.
-* The Docker API is mocked through the narrow `docker.APIClient` interface.
-* Concurrency-sensitive code must pass `go test -race`.
-
-```bash
-go test -race ./...
-make cover      # writes coverage.html
-```
-
-## Commits and pull requests
+## Pull requests
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/):
+`feat(labels): …`, `fix(npm): …`, `docs: …`.
 
-```
-feat(labels): support custom location blocks
-fix(npm): re-authenticate after a 403 response
-docs(readme): clarify forward_host defaults
-```
+Before opening one: `make check` passes, new labels or variables are documented,
+and the description says what changed, why, and how it was tested — ideally
+against both NPM and NPMplus.
 
-Before opening a PR:
+## Bugs and security
 
-1. `make check` passes.
-2. New labels or environment variables are documented in `README.md` and
-   `docs/LABELS.md` / `docs/CONFIGURATION.md`.
-3. The PR description says what changed, why, and how it was tested — ideally
-   against both NPM and NPMplus.
-
-Please open an issue first for larger features so we can agree on the design
-before you spend time on it.
-
-## Reporting bugs
-
-Use the issue template and include the version, the proxy manager flavour
-(NPM or NPMplus), your container labels and `LOG_LEVEL=debug` output. Redact
-passwords and real domain names.
-
-Security issues go through [SECURITY.md](SECURITY.md), never a public issue.
-
-## Code of conduct
+Use the issue template with the version, NPM or NPMplus, your labels and
+`LOG_LEVEL=debug` output (redact passwords and real domains). Security issues
+go through [SECURITY.md](SECURITY.md), never a public issue.
 
 This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md).
