@@ -266,6 +266,36 @@ func (l *Location) stripPlus() {
 	l.AuthRequestUpstream = ""
 }
 
+// cleanForwardOptions applies the rules NPMplus enforces on a host and on each
+// of its locations before storing them (internalProxyHost.cleanForwardOptions,
+// since 2026-10): a switch that does nothing for the scheme or the combination
+// is cleared. Older releases store what they get, so only the fingerprint
+// applies the rules - a combination the server normalises must not count as a
+// drift on every run.
+func (l *Location) cleanForwardOptions() {
+	scheme := strings.ToLower(l.ForwardScheme)
+	if scheme == "" {
+		scheme = "http"
+	}
+	if scheme != "empty" {
+		if scheme != "http" && scheme != "https" {
+			l.DisableRequestBuffering = false
+			l.DisableResponseBuffering = false
+		}
+		if scheme == "path" {
+			l.UpstreamCompression = false
+		} else {
+			l.FancyIndex = false
+		}
+	}
+	if !l.DisableCrowdsecAppsec {
+		l.DisableRequestBuffering = false
+	}
+	if auth := strings.TrimSpace(l.AuthRequest); auth == "" || auth == "none" {
+		l.AuthRequestUpstream = ""
+	}
+}
+
 // IsEnabled reports whether the location is active.
 func (l Location) IsEnabled() bool { return l.Enabled == nil || *l.Enabled }
 

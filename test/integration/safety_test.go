@@ -157,20 +157,20 @@ func TestDryRunChangesNothing(t *testing.T) {
 	mustSync(t)
 	requireHost(t, c, npm.KindProxy, domain)
 
-	// And a dry-run update reports a field diff instead of writing.
+	// And a dry-run update reports a field diff instead of writing. The port
+	// is a field every server version keeps.
 	removeContainer("it-dryrun")
 	startContainer(t, "it-dryrun", map[string]string{
-		"npm.proxy.domains":    domain,
-		"npm.proxy.port":       "80",
-		"npm.proxy.websockets": "false",
+		"npm.proxy.domains": domain,
+		"npm.proxy.port":    "8080",
 	})
 	update := mustSync(t, "DRY_RUN=true")
-	if !strings.Contains(update.Output, "would update resource") || !strings.Contains(update.Output, "allow_websocket_upgrade") {
+	if !strings.Contains(update.Output, "would update resource") || !strings.Contains(update.Output, "forward_port") {
 		t.Errorf("the dry run should show the field diff:\n%s", update.Output)
 	}
 	host := requireHost(t, c, npm.KindProxy, domain)
-	if proxy, ok := host.(*npm.ProxyHost); ok && !bool(proxy.AllowWebsocketUpgrade) {
-		t.Error("the dry run wrote the change")
+	if proxy, ok := host.(*npm.ProxyHost); ok && proxy.ForwardPort != 80 {
+		t.Errorf("the dry run wrote the change: forward_port = %d", proxy.ForwardPort)
 	}
 }
 

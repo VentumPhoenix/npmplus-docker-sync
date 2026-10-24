@@ -318,3 +318,92 @@ func TestAccessListsFromTheRelation(t *testing.T) {
 		t.Error("the expanded relation is kept on the model")
 	}
 }
+
+// TestLocationsConvergeWithTheirOwnTable: NPMplus keeps locations in a table
+// of their own, whose columns fill in what a label left unset. The stored row
+// must hash like the desired location, or the host is rewritten on every run.
+func TestLocationsConvergeWithTheirOwnTable(t *testing.T) {
+	t.Parallel()
+
+	desired := func() *ProxyHost {
+		return &ProxyHost{
+			DomainNames: []string{"a.example.com"}, ForwardScheme: "http", ForwardHost: "10.0.0.2", ForwardPort: 80,
+			Locations: []Location{{Path: "/api", ForwardScheme: "http", ForwardHost: "10.0.0.2", ForwardPort: 80}},
+		}
+	}
+	body := `{"id":1,"domain_names":["a.example.com"],"forward_scheme":"http","forward_host":"10.0.0.2","forward_port":80,
+		"locations":[{"id":4,"proxy_host_id":1,"path":"/api","location_type":"","forward_scheme":"http",
+		"forward_host":"10.0.0.2","forward_port":80,"npmplus_enabled":true,"npmplus_x_frame_options":"SAMEORIGIN",
+		"npmplus_auth_request":"none","npmplus_auth_request_upstream":"","advanced_config":"",
+		"npmplus_access_list_type":"global","access_lists":[]}]}`
+	var stored ProxyHost
+	if err := json.Unmarshal([]byte(body), &stored); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	host := desired()
+	host.AdoptServerState(&stored)
+	if host.Fingerprint() != stored.Fingerprint() {
+		t.Errorf("a location with the server's defaults does not converge:\n%s", Diff(&stored, host))
+	}
+
+	explicit := desired()
+	explicit.Locations[0].XFrameOptions = "DENY"
+	explicit.AdoptServerState(&stored)
+	if explicit.Locations[0].XFrameOptions != "DENY" {
+		t.Error("an explicit location value must win over the stored one")
+	}
+}
+
+// TestFingerprintFollowsTheForwardRules: NPMplus clears the switches that do
+// nothing for a scheme or a combination before storing a host or a location.
+// A label combination the server normalises must not count as a drift.
+func TestFingerprintFollowsTheForwardRules(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		desired, stored Location
+	}{
+		{"request buffering stays on while AppSec runs",
+			Location{ForwardScheme: "http", DisableRequestBuffering: true},
+			Location{ForwardScheme: "http"}},
+		{"buffering applies to http only",
+			Location{ForwardScheme: "grpc", DisableCrowdsecAppsec: true, DisableRequestBuffering: true, DisableResponseBuffering: true},
+			Location{ForwardScheme: "grpc", DisableCrowdsecAppsec: true}},
+		{"fancyindex applies to path only",
+			Location{ForwardScheme: "http", FancyIndex: true},
+			Location{ForwardScheme: "http"}},
+		{"upstream compression does not apply to path",
+			Location{ForwardScheme: "path", UpstreamCompression: true},
+			Location{ForwardScheme: "path"}},
+		{"an auth upstream needs an auth service",
+			Location{ForwardScheme: "http", AuthRequest: "none", AuthRequestUpstream: "http://auth:9091"},
+			Location{ForwardScheme: "http", AuthRequest: "none"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			host := func(l Location) *ProxyHost {
+				return &ProxyHost{
+					DomainNames: []string{"a.example.com"}, ForwardScheme: l.ForwardScheme,
+					DisableCrowdsecAppsec: l.DisableCrowdsecAppsec, DisableRequestBuffering: l.DisableRequestBuffering,
+					DisableResponseBuffering: l.DisableResponseBuffering, UpstreamCompression: l.UpstreamCompression,
+					FancyIndex: l.FancyIndex, AuthRequest: l.AuthRequest, AuthRequestUpstream: l.AuthRequestUpstream,
+					Locations: []Location{l},
+				}
+			}
+			if host(tt.desired).Fingerprint() != host(tt.stored).Fingerprint() {
+				t.Error("the combination the server normalises counts as a drift")
+			}
+		})
+	}
+
+	kept := &ProxyHost{DomainNames: []string{"a.example.com"}, ForwardScheme: "http",
+		DisableCrowdsecAppsec: true, DisableRequestBuffering: true}
+	plain := &ProxyHost{DomainNames: []string{"a.example.com"}, ForwardScheme: "http", DisableCrowdsecAppsec: true}
+	if kept.Fingerprint() == plain.Fingerprint() {
+		t.Error("a combination the server keeps must still count")
+	}
+}
