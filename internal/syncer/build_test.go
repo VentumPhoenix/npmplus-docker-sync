@@ -37,3 +37,25 @@ func TestNormalizeSSLClampsHTTP2WithoutACertificate(t *testing.T) {
 		})
 	}
 }
+
+// NPMplus switches HTTP/3 off for a host without a certificate - a pending
+// certificate request counts as one - from the release that retired the meta
+// object on. Asking for it anyway would rewrite every certificate-less host on
+// every run.
+func TestNormalizeSSLClampsHTTP3WithoutACertificate(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		certificate npm.CertificateID
+		want        bool
+	}{
+		{"no certificate clears http3", npm.CertificateID{}, false},
+		{"a certificate keeps http3", npm.CertificateID{ID: 7}, true},
+		{"a certificate request keeps http3", npm.NewCertificate(), true},
+	} {
+		if got := normalizeSSL(&docker.Target{HTTP3Support: true}, tc.certificate).http3; got != tc.want {
+			t.Errorf("%s: http3 = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

@@ -161,7 +161,9 @@ func buildFrom(t *testing.T, kind npm.Kind, labels map[string]string) (npm.Resou
 		if target.Kind != kind {
 			continue
 		}
-		return BuildResource(target, npm.CertificateID{}, "", "npm"), target
+		// With a certificate: without one the TLS cascade switches HTTP/3 off,
+		// and a field that is off cannot be reported as unsupported.
+		return BuildResource(target, npm.CertificateRef(1), "", "npm"), target
 	}
 	t.Fatalf("no %s target from %v", kind, labels)
 	return nil, nil

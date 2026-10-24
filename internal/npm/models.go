@@ -232,6 +232,8 @@ type Location struct {
 	// AccessListNames are names that still have to be resolved into ids. They
 	// never reach the API.
 	AccessListNames []string `json:"-"`
+	// AccessLists is the expanded relation; see ProxyHost.AccessLists.
+	AccessLists []accessListRef `json:"access_lists,omitempty"`
 
 	// Enabled is nil when the server did not report it; a location without
 	// the flag is enabled.

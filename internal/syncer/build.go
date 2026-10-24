@@ -28,7 +28,7 @@ func BuildResource(t *docker.Target, certificate npm.CertificateID, instance, pr
 			HSTSSubdomains:        npm.Flag(ssl.hstsSubdomains),
 			TrustForwardedProto:   npm.Flag(t.TrustForwardedProto),
 			HTTP2Support:          npm.Flag(ssl.http2),
-			HTTP3Support:          npm.Flag(t.HTTP3Support),
+			HTTP3Support:          npm.Flag(ssl.http3),
 			BlockExploits:         npm.Flag(t.BlockExploits),
 			CachingEnabled:        npm.Flag(t.Caching),
 			AllowWebsocketUpgrade: npm.Flag(t.Websockets),
@@ -66,7 +66,7 @@ func BuildResource(t *docker.Target, certificate npm.CertificateID, instance, pr
 			HSTSEnabled:       npm.Flag(ssl.hsts),
 			HSTSSubdomains:    npm.Flag(ssl.hstsSubdomains),
 			HTTP2Support:      npm.Flag(ssl.http2),
-			HTTP3Support:      npm.Flag(t.HTTP3Support),
+			HTTP3Support:      npm.Flag(ssl.http3),
 			BlockExploits:     npm.Flag(t.BlockExploits),
 			AdvancedConfig:    t.AdvancedConfig,
 			Enabled:           npm.Flag(t.Enabled),
@@ -97,7 +97,7 @@ func BuildResource(t *docker.Target, certificate npm.CertificateID, instance, pr
 			HSTSEnabled:    npm.Flag(ssl.hsts),
 			HSTSSubdomains: npm.Flag(ssl.hstsSubdomains),
 			HTTP2Support:   npm.Flag(ssl.http2),
-			HTTP3Support:   npm.Flag(t.HTTP3Support),
+			HTTP3Support:   npm.Flag(ssl.http3),
 			AdvancedConfig: t.AdvancedConfig,
 			Enabled:        npm.Flag(t.Enabled),
 			Meta:           meta,
@@ -114,6 +114,7 @@ type sslSettings struct {
 	hsts           bool
 	hstsSubdomains bool
 	http2          bool
+	http3          bool
 }
 
 // normalizeSSL applies the same cascade the server does before storing a host
@@ -121,6 +122,7 @@ type sslSettings struct {
 //
 //	no certificate     -> ssl_forced      = false
 //	no certificate     -> http2_support   = false
+//	no certificate     -> http3_support   = false (NPMplus)
 //	no ssl_forced      -> hsts_enabled    = false
 //	no hsts_enabled    -> hsts_subdomains = false
 //
@@ -129,7 +131,9 @@ type sslSettings struct {
 // without a certificate, 2.12 stores what it was sent. Applying the rule here
 // converges against both - and against whichever way a later release settles,
 // because the tool then already asks for what the rule prescribes. HTTP/2
-// needs TLS, so a certificate-less host loses nothing by it.
+// needs TLS, so a certificate-less host loses nothing by it. The same holds
+// for HTTP/3, which NPMplus started switching off without a certificate in
+// the release that retired the meta object.
 //
 // Without this the fingerprint is taken over the raw label values while the
 // API stores the cleaned ones, the two never match, and every Docker event and
@@ -147,10 +151,12 @@ func normalizeSSL(t *docker.Target, certificate npm.CertificateID) sslSettings {
 		hsts:           t.HSTSEnabled,
 		hstsSubdomains: t.HSTSSubdomains,
 		http2:          t.HTTP2Support,
+		http3:          t.HTTP3Support,
 	}
 	if certificate.IsZero() {
 		s.forced = false
 		s.http2 = false
+		s.http3 = false
 	}
 	if !s.forced {
 		s.hsts = false

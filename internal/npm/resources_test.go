@@ -2,6 +2,7 @@ package npm
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -290,5 +291,30 @@ func TestDescribe(t *testing.T) {
 		if got := tc.resource.Describe(); got != tc.want {
 			t.Errorf("Describe() = %q, want %q", got, tc.want)
 		}
+	}
+}
+
+// TestAccessListsFromTheRelation: NPMplus moved access lists into a table of
+// their own and returns them as an expanded `access_lists` relation instead of
+// npmplus_access_list_ids - for the host and for each custom location. Read
+// as "no access list", every protected host would be rewritten as public.
+func TestAccessListsFromTheRelation(t *testing.T) {
+	t.Parallel()
+
+	body := `{"id":1,"domain_names":["a.example.com"],"npmplus_access_list_type":"custom",
+		"access_lists":[{"id":5,"name":"VPN"},{"id":3,"name":"Intern"}],
+		"locations":[{"path":"/api","npmplus_access_list_type":"custom","access_lists":[{"id":7}]}]}`
+	var host ProxyHost
+	if err := json.Unmarshal([]byte(body), &host); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if ids, listType := host.accessLists(); !reflect.DeepEqual(ids, []int{3, 5}) || listType != AccessListCustom {
+		t.Errorf("accessLists() = %v, %s; want [3 5], custom", ids, listType)
+	}
+	if got := host.Locations[0].AccessListIDs; !reflect.DeepEqual(got, []int{7}) {
+		t.Errorf("location access lists = %v, want [7]", got)
+	}
+	if host.AccessLists != nil || host.Locations[0].AccessLists != nil {
+		t.Error("the expanded relation is kept on the model")
 	}
 }

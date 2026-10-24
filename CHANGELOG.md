@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hosts without a certificate did not converge on NPMplus `develop`.** It
+  switches HTTP/3 off for them, like HTTP/2; the TLS cascade now does the same
+  before comparing, so such a host is no longer rewritten on every run. HTTP/3
+  needs TLS anyway.
+- **Access lists read as "none" on NPMplus `develop`**, which returns them as an
+  expanded `access_lists` relation instead of `npmplus_access_list_ids` - for the
+  host and for its custom locations. Both are read now, and the flavour
+  detection recognises NPMplus by any `npmplus_*` property.
+- The integration suite uploads certificates without `domain_names` where the
+  server reads them from the certificate itself.
+
 ## [1.0.0-beta.10] - 2026-10-23
 
 Update this release **before** NPMplus: the next NPMplus release empties the

@@ -206,8 +206,12 @@ func (c *Client) probeFlavour(ctx context.Context) (flavour Flavour, how string,
 // version GET /api/ reports.
 func (c *Client) flavourOf(ctx context.Context, hosts []map[string]json.RawMessage) (Flavour, string) {
 	for _, host := range hosts {
-		if _, ok := host["npmplus_access_list_ids"]; ok {
-			return FlavourNPMplus, "proxy host schema"
+		// Every NPMplus release reports npmplus_* properties; which ones has
+		// changed over time (npmplus_access_list_ids moved into a relation).
+		for key := range host {
+			if strings.HasPrefix(key, "npmplus_") {
+				return FlavourNPMplus, "proxy host schema"
+			}
 		}
 		if _, ok := host["access_list_id"]; ok {
 			return FlavourNPM, "proxy host schema"
