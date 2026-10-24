@@ -18,8 +18,8 @@ NPM**. The default setup keeps both as small as possible.
 ### Docker access
 
 The Docker socket is root on the host — even mounted `:ro`, because `:ro` only
-protects the socket *file*, not the API behind it. So the recommended
-`docker-compose.yml` puts a
+protects the socket *file*, not the API behind it. So the
+[standard and hardened stacks](deploy/README.md) put a
 [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) in
 between and never mounts the socket into this container:
 
@@ -44,8 +44,13 @@ Note: `CONTAINERS=1` can read the labels **and environment** of every container
 on the host — true for any such tool, worth knowing if containers keep secrets
 in `environment:`.
 
-Mounting the socket directly (`docker-compose.simple.yml`) works, but keep it
-`:ro`, drop all capabilities and treat it as root access.
+Mounting the socket directly (the *simple* stacks) works, but keep it `:ro`,
+drop all capabilities and treat it as root access.
+
+The hardened stacks go further: an allowlist proxy
+([wollomatic/socket-proxy](https://github.com/wollomatic/socket-proxy)) that
+answers nothing but `_ping`, `version`, `info`, `events` and `containers/json`
+— the container list carries labels, but no environment variables.
 
 ### NPM credentials
 
@@ -78,7 +83,7 @@ One static binary on `scratch` — no shell, no package manager.
 
 ## Checklist
 
-- [ ] `docker-compose.yml` with the socket proxy, not the raw socket
+- [ ] a [standard or hardened stack](deploy/README.md), not the raw socket
 - [ ] `NPM_SECRET_FILE` instead of an inline password
 - [ ] socket-proxy network `internal: true`
 - [ ] NPM admin port 81 not reachable from the internet

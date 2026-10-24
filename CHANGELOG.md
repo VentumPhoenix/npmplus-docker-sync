@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Deployment examples in [deploy/](deploy/README.md)** replace the compose
+  files in the repository root: simple, standard and hardened stacks for NPM
+  and NPMplus each, plus one for an NPM you already run. The hardened ones add
+  an allowlist socket proxy, container isolation through a firewall and, for
+  NPMplus, CrowdSec with its WAF. CI boots every stack and checks it end to end.
+
 ## [1.0.0-beta.11] - 2026-10-24
 
 Fixes found by running the integration suite against NPMplus `develop`, the

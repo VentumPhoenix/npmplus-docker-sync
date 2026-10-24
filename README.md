@@ -84,31 +84,29 @@ you keep NPM and its UI exactly as they are.
 
 ## 🚀 Quick start
 
-**You need:** Docker with Compose, and a running Nginx Proxy Manager or NPMplus
-in a Docker network (here called `npm`).
+**You need:** Docker with Compose. Ready-made stacks for NPM and NPMplus live in
+[deploy/](deploy/README.md) — from a two-container try-out to a hardened setup
+with CrowdSec:
 
-**1. Get the files**
+|  | NPM | NPMplus |
+|---|---|---|
+| **1 · Simple** — try it out | [npm/1-simple](deploy/npm/1-simple/compose.yaml) | [npmplus/1-simple](deploy/npmplus/1-simple/compose.yaml) |
+| **2 · Standard** — recommended | [npm/2-standard](deploy/npm/2-standard/compose.yaml) | [npmplus/2-standard](deploy/npmplus/2-standard/compose.yaml) |
+| **3 · Hardened** — exposed servers | [npm/3-hardened](deploy/npm/3-hardened/compose.yaml) | [npmplus/3-hardened](deploy/npmplus/3-hardened/compose.yaml) |
+| **Already running NPM?** | [existing-npm](deploy/existing-npm/compose.yaml) | same file |
+
+**1. Pick a stack**
 
 ```bash
 git clone https://github.com/VentumPhoenix/npmplus-docker-sync.git
-cd npmplus-docker-sync
-cp .env.example .env
+cd npmplus-docker-sync/deploy/npmplus/2-standard
 ```
 
-**2. Enter your NPM login**
-
-Put your NPM admin e-mail into `.env` (`NPM_IDENTITY=...`) and the password into
-a secret file:
+**2. Fill in `.env`**
 
 ```bash
-mkdir -p secrets
-printf '%s' 'your-npm-password' > secrets/npm_password.txt
-chmod 600 secrets/npm_password.txt
+cp .env.example .env    # domain of the admin UI, e-mail, password
 ```
-
-> [!TIP]
-> Your first run against a real NPM? Set `DRY_RUN=true` in `.env`. The tool then
-> only **logs** what it would change, without touching anything.
 
 **3. Start it**
 
@@ -117,7 +115,13 @@ docker compose up -d
 docker compose logs -f npmplus-docker-sync
 ```
 
-**4. Label your apps** — as in the example above. Done! 🎉
+**4. Label your apps** — as in the example above, or start
+[deploy/example-app](deploy/example-app/compose.yaml). Done! 🎉
+
+> [!TIP]
+> Adding it to an NPM that already has hosts? `existing-npm` starts with
+> `DRY_RUN=true`: the tool only **logs** what it would change. Check the log,
+> then set it to `false`.
 
 <details>
 <summary><b>Without Compose (<code>docker run</code>)</b></summary>
@@ -134,7 +138,7 @@ docker run -d --name npmplus-docker-sync \
 ```
 
 For a quick test without a socket proxy, see
-[docker-compose.simple.yml](docker-compose.simple.yml).
+[deploy/npm/1-simple](deploy/npm/1-simple/compose.yaml).
 </details>
 
 <details>
@@ -505,9 +509,9 @@ instance"* means your NPM doesn't offer that type.
 <details>
 <summary><b><code>permission denied</code> on /var/run/docker.sock</b></summary>
 
-Only with `docker-compose.simple.yml`: set
+Only with the *simple* stacks, which mount the socket directly: set
 `DOCKER_GID=$(getent group docker | cut -d: -f3)` in `.env`. The socket-proxy
-setup avoids this entirely.
+stacks avoid this entirely.
 </details>
 
 ## 🔄 Coming from Redth/npm-docker-sync?

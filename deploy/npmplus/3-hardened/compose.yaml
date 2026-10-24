@@ -1,0 +1,373 @@
+# NPMplus + npmplus-docker-sync - hardened
+#
+# A complete, defence-in-depth reverse proxy stack:
+#   npmplus-init         writes the CrowdSec bouncer config before NPMplus starts
+#   npmplus              reverse proxy, certificates, built-in CrowdSec bouncer
+#   crowdsec             reads the NPMplus logs, WAF (AppSec), community blocklist
+#   socket-proxy         allowlisted, read-only Docker API
+#   npmplus-docker-sync  creates proxy hosts from container labels
+#   npm-firewall         iptables: only NPMplus may open connections to the apps
+#
+# On top of ../2-standard: fixed addresses, no container-to-container traffic
+# on the shared networks except what the firewall allows, CrowdSec, resource
+# limits and an allowlist socket proxy that answers nothing but the five
+# endpoints the tool needs.
+#
+#   cp .env.example .env    # fill in the values
+#   docker compose up -d
+#   docker compose ps       # every service healthy; npm-firewall checks itself
+#
+# Apps join the "npm-frontend" network and get labels - see ../../example-app.
+# Subnets collide with something else? Change NPM_NET_PREFIX / SOCKPRX_NET_PREFIX.
+
+x-base: &base
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+x-hardened: &hardened
+  <<: *base
+  read_only: true
+  cap_drop:
+    - ALL
+
+services:
+  # One-shot job: sets URL, key and fail-open in /data/crowdsec/crowdsec.conf.
+  npmplus-init:
+    <<: *hardened
+    image: ghcr.io/zoeyvid/npmplus:latest # same image -> ships the example config
+    container_name: npmplus-init
+    restart: "no"
+    network_mode: none
+    entrypoint: ["/bin/sh", "-c"]
+    environment:
+      CS_API_KEY: ${CROWDSEC_BOUNCER_KEY:?openssl rand -hex 32}
+      CS_HOST: ${NPM_NET_PREFIX:-172.30.0}.4
+    command:
+      - |
+        set -e
+        mkdir -p /data/crowdsec /data/nginx/logs
+        F=/data/crowdsec/crowdsec.conf
+        [ -s "$$F" ] || cp /etc/crowdsec.conf.example "$$F"
+        set_kv() {
+          if grep -q "^$$1=" "$$F"; then
+            sed -i "s|^$$1=.*|$$1=$$2|" "$$F"
+          else
+            echo "$$1=$$2" >> "$$F"
+          fi
+        }
+        set_kv ENABLED true
+        set_kv API_URL "http://$$CS_HOST:8080"
+        set_kv API_KEY "$$CS_API_KEY"
+        set_kv APPSEC_URL "http://$$CS_HOST:7422"
+        set_kv APPSEC_FAILURE_ACTION passthrough # CrowdSec down -> let traffic through instead of blocking everything
+        echo "crowdsec.conf written"
+    volumes:
+      - npm-data:/data
+
+  npmplus:
+    <<: *base
+    image: ghcr.io/zoeyvid/npmplus:latest # pin a release tag for production
+    container_name: npmplus
+    depends_on:
+      npmplus-init:
+        condition: service_completed_successfully
+    cap_drop:
+      - ALL
+    cap_add: # the minimum according to the NPMplus docs (PUID=0)
+      - NET_BIND_SERVICE
+      - SETGID
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+      # The admin UI is served through NPM_UI_DOMAIN. Emergency access only
+      # from the host itself:
+      # - "127.0.0.1:81:81"
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+      INITIAL_ADMIN_EMAIL: ${NPM_ADMIN_EMAIL:?set NPM_ADMIN_EMAIL in .env}
+      INITIAL_ADMIN_PASSWORD: ${NPM_ADMIN_PASSWORD:?set NPM_ADMIN_PASSWORD in .env}
+      LOGROTATE: "true" # access logs for CrowdSec
+      LOGROTATIONS: "7"
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # only for services running directly on the host
+    volumes:
+      - npm-data:/data
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      npm-frontend:
+        ipv4_address: ${NPM_NET_PREFIX:-172.30.0}.2
+    pids_limit: 300
+    mem_limit: 512m
+    labels:
+      # The admin UI as a proxy host. Keep these labels: without them the tool
+      # would delete the host it created for the UI.
+      npm.proxy.domains: ${NPM_UI_DOMAIN:?set NPM_UI_DOMAIN in .env}
+      npm.proxy.port: "81"
+      npm.proxy.scheme: https
+
+  # No published ports; only NPMplus reaches 8080 (LAPI) and 7422 (AppSec).
+  crowdsec:
+    <<: *base
+    image: crowdsecurity/crowdsec:latest # pin a version for production
+    container_name: crowdsec
+    depends_on:
+      npmplus-init:
+        condition: service_completed_successfully # creates nginx/logs
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      USE_WAL: "true"
+      COLLECTIONS: ZoeyVid/npmplus crowdsecurity/appsec-virtual-patching crowdsecurity/appsec-generic-rules
+      BOUNCER_KEY_npmplus: ${CROWDSEC_BOUNCER_KEY:?openssl rand -hex 32}
+      # Optional: connect to the CrowdSec console.
+      # ENROLL_KEY: ${CROWDSEC_ENROLL_KEY}
+      # ENROLL_INSTANCE_NAME: npmplus
+    configs:
+      - source: crowdsec-acquis-npmplus
+        target: /etc/crowdsec/acquis.d/npmplus.yaml
+      - source: crowdsec-acquis-appsec
+        target: /etc/crowdsec/acquis.d/appsec.yaml
+    volumes:
+      - crowdsec-config:/etc/crowdsec
+      - crowdsec-data:/var/lib/crowdsec/data
+      - type: volume # only the log folder, read-only (no database, no certificates)
+        source: npm-data
+        target: /opt/npmplus/nginx/logs
+        read_only: true
+        volume:
+          subpath: nginx/logs
+    healthcheck: # LAPI answers and the AppSec port listens
+      test: ["CMD-SHELL", "cscli lapi status >/dev/null 2>&1 && wget -S -O /dev/null http://127.0.0.1:7422/ 2>&1 | grep -q 'HTTP/'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      npm-frontend:
+        ipv4_address: ${NPM_NET_PREFIX:-172.30.0}.4
+    pids_limit: 200
+    mem_limit: 512m
+
+  socket-proxy:
+    <<: *hardened
+    image: wollomatic/socket-proxy:1 # scratch image, signed, allowlist only
+    container_name: socket-proxy
+    user: "65534"
+    group_add:
+      - "${DOCKER_GID:?getent group docker | cut -d: -f3}"
+    command:
+      - "-loglevel=info"
+      - "-listenip=0.0.0.0"
+      - "-allowfrom=${SOCKPRX_NET_PREFIX:-172.31.0}.0/24"
+      # Read-only, and only what npmplus-docker-sync calls. The container list
+      # carries labels and networks, but no environment variables.
+      # Other trusted clients on this network (Homepage, Uptime Kuma, ...) may
+      # need per-container details as well; those include the environment -
+      # passwords - of every container:
+      #   ...|containers/json|containers/[a-zA-Z0-9][a-zA-Z0-9_.-]*/(json|stats))
+      - '-allowGET=/(v1\.\d+/)?(_ping|version|info|events|containers/json)'
+      - '-allowHEAD=/(v1\.\d+/)?_ping'
+      - "-watchdoginterval=3600" # socket gone (e.g. Docker update) -> restart
+      - "-stoponwatchdog"
+      - "-allowhealthcheck"
+    healthcheck:
+      test: ["CMD", "./healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      socket-proxy:
+        ipv4_address: ${SOCKPRX_NET_PREFIX:-172.31.0}.2
+    pids_limit: 50
+    mem_limit: 64m
+
+  npmplus-docker-sync:
+    <<: *hardened
+    image: ghcr.io/ventumphoenix/npmplus-docker-sync:1.0.0-beta.11
+    container_name: npmplus-docker-sync
+    depends_on:
+      npmplus:
+        condition: service_healthy
+      socket-proxy:
+        condition: service_healthy
+    environment:
+      DOCKER_HOST: tcp://${SOCKPRX_NET_PREFIX:-172.31.0}.2:2375
+      NPM_URL: https://${NPM_NET_PREFIX:-172.30.0}.2:81
+      NPM_INSECURE_SKIP_VERIFY: "true" # NPMplus' self-signed UI certificate
+      NPM_IDENTITY: ${NPM_ADMIN_EMAIL}
+      NPM_SECRET_FILE: /run/secrets/npm_password
+      NPM_FLAVOUR: npmplus
+      NPM_NETWORK: npm-frontend
+      SYNC_INSTANCE_ID: npmplus-docker-sync
+      DRY_RUN: ${DRY_RUN:-false}
+      HEALTH_ADDR: 127.0.0.1:8080
+      # Global defaults for every host; a label on a container wins.
+      # See docs/FIELDS.md for all of them.
+      # NPM_DEFAULT_GROUP: Docker          # sort managed hosts into one UI group
+      # NPM_CERTIFICATE_AUTO_CREATE: "true" # request Let's Encrypt when none matches
+    secrets:
+      - npm_password
+    networks:
+      npm-frontend:
+        ipv4_address: ${NPM_NET_PREFIX:-172.30.0}.3
+      socket-proxy:
+    pids_limit: 100
+    mem_limit: 256m
+
+  # Adds targeted exceptions to Docker's ICC block (enable_icc=false):
+  #   npm-frontend: only NPMplus (.2) opens connections, the sync (.3) only to NPMplus
+  #   socket-proxy: clients only to the socket proxy (.2)
+  # A missing rule means blocked (fail-closed). The healthcheck verifies it all.
+  npm-firewall:
+    <<: *base
+    image: alpine:3.24
+    container_name: npm-firewall
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/fw-health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    command:
+      - /bin/sh
+      - -c
+      - |
+        until apk add --no-cache iptables >/dev/null 2>&1; do
+          echo "apk add failed, retrying in 10s"
+          sleep 10
+        done
+        if iptables-nft -n -L DOCKER-USER >/dev/null 2>&1; then
+          IPT=iptables-nft
+        else
+          IPT=iptables-legacy
+        fi
+        echo "using $$IPT"
+        TAG="npmplus-stack"
+        D=/run/fw
+        mkdir -p $$D
+        echo "$$IPT" > $$D/ipt
+        echo "$$TAG" > $$D/tag
+
+        # Desired rules - the single source for the loop and the healthcheck.
+        cat > $$D/rules <<'EOF'
+        -i ${NPM_BRIDGE:-br-npm} -o ${NPM_BRIDGE:-br-npm} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        -i ${NPM_BRIDGE:-br-npm} -o ${NPM_BRIDGE:-br-npm} -s ${NPM_NET_PREFIX:-172.30.0}.2 -j ACCEPT
+        -i ${NPM_BRIDGE:-br-npm} -o ${NPM_BRIDGE:-br-npm} -s ${NPM_NET_PREFIX:-172.30.0}.3 -d ${NPM_NET_PREFIX:-172.30.0}.2 -j ACCEPT
+        -i ${SOCKPRX_BRIDGE:-br-sockprx} -o ${SOCKPRX_BRIDGE:-br-sockprx} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        -i ${SOCKPRX_BRIDGE:-br-sockprx} -o ${SOCKPRX_BRIDGE:-br-sockprx} -d ${SOCKPRX_NET_PREFIX:-172.31.0}.2 -j ACCEPT
+        EOF
+
+        # Healthcheck: loop alive, bridges and ICC drop present, rules complete and on top.
+        cat > /usr/local/bin/fw-health <<'EOF'
+        #!/bin/sh
+        D=/run/fw
+        [ -s $$D/ipt ] || { echo "not initialised yet"; exit 1; }
+        IPT=$$(cat $$D/ipt); TAG=$$(cat $$D/tag); fail=0
+
+        hb=$$(cat $$D/heartbeat 2>/dev/null || echo 0)
+        age=$$(( $$(date +%s) - hb ))
+        [ "$$age" -lt 150 ] || { echo "loop is stuck: last heartbeat $${age}s ago"; exit 1; }
+
+        for br in ${NPM_BRIDGE:-br-npm} ${SOCKPRX_BRIDGE:-br-sockprx}; do
+          [ -d /sys/class/net/$$br ] || { echo "bridge $$br does not exist"; fail=1; }
+          $$IPT -S | grep -q -- "-i $$br -o $$br -j DROP" \
+            || { echo "ICC drop for $$br missing - isolation NOT active"; fail=1; }
+        done
+
+        want=0
+        while read -r r; do
+          [ -n "$$r" ] || continue
+          want=$$((want + 1))
+          $$IPT -C DOCKER-USER $$r -m comment --comment "$$TAG" 2>/dev/null \
+            || { echo "MISSING: $$r"; fail=1; }
+        done < $$D/rules
+
+        have=$$($$IPT -S DOCKER-USER | grep -c -- "--comment $$TAG")
+        [ "$$have" -eq "$$want" ] || { echo "$$have tagged rules, expected $$want"; fail=1; }
+
+        top=$$($$IPT -S DOCKER-USER | grep '^-A' | head -n "$$want" | grep -c -- "--comment $$TAG")
+        [ "$$top" -eq "$$want" ] || { echo "a foreign rule sits above our rules in DOCKER-USER"; fail=1; }
+
+        [ $$fail -eq 0 ] && echo "OK: $$want rules active ($$IPT), ICC drop present, heartbeat $${age}s ago"
+        exit $$fail
+        EOF
+        chmod +x /usr/local/bin/fw-health
+
+        cleanup() {
+          $$IPT -S DOCKER-USER | grep -- "--comment $$TAG" | sed 's/^-A/-D/' \
+            | while read -r rule; do eval "$$IPT $$rule"; done
+        }
+        cleanup # remove leftovers of a run that was killed
+        trap 'echo "removing rules"; cleanup; exit 0' TERM INT
+
+        while true; do
+          while read -r r; do
+            [ -n "$$r" ] || continue
+            $$IPT -C DOCKER-USER $$r -m comment --comment "$$TAG" 2>/dev/null \
+              || $$IPT -I DOCKER-USER $$r -m comment --comment "$$TAG"
+          done < $$D/rules
+          date +%s > $$D/heartbeat
+          sleep 60 &
+          wait $$!
+        done
+
+configs: # CrowdSec acquisition inline - no files on the host
+  crowdsec-acquis-npmplus:
+    content: |
+      filenames:
+        - /opt/npmplus/nginx/logs/*.log
+      labels:
+        type: npmplus
+  crowdsec-acquis-appsec:
+    content: |
+      source: appsec
+      listen_addr: 0.0.0.0:7422
+      appsec_config: crowdsecurity/appsec-default
+      labels:
+        type: appsec
+
+secrets:
+  npm_password:
+    environment: NPM_ADMIN_PASSWORD # read from .env, mounted as a file
+
+networks:
+  npm-frontend: # apps join this network so NPMplus can reach them
+    name: npm-frontend
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: ${NPM_BRIDGE:-br-npm}
+      com.docker.network.bridge.enable_icc: "false"
+    ipam:
+      config:
+        - subnet: ${NPM_NET_PREFIX:-172.30.0}.0/24
+  socket-proxy: # internal: no way out
+    name: socket-proxy
+    driver: bridge
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.name: ${SOCKPRX_BRIDGE:-br-sockprx}
+      com.docker.network.bridge.enable_icc: "false"
+    ipam:
+      config:
+        - subnet: ${SOCKPRX_NET_PREFIX:-172.31.0}.0/24
+
+volumes:
+  npm-data:
+  crowdsec-config:
+  crowdsec-data:

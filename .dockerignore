@@ -16,3 +16,4 @@ npm-docker-sync
 secrets/
 .env
 .env.*
+deploy/

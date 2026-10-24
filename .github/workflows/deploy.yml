@@ -1,0 +1,66 @@
+name: Deployment examples
+
+# Every stack in deploy/ is booted for real and checked end to end by
+# scripts/deploy-smoke.sh: healthy containers, the admin UI's host, a labelled
+# app served through the proxy and - for the hardened stacks - the isolation
+# between containers. Weekly as well, because the examples follow moving image
+# tags (:latest, :2) of NPM, NPMplus and CrowdSec.
+
+on:
+  push:
+    branches: [main]
+    paths: ["deploy/**", "scripts/deploy-smoke.sh", ".github/workflows/deploy.yml"]
+  pull_request:
+    paths: ["deploy/**", "scripts/deploy-smoke.sh", ".github/workflows/deploy.yml"]
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: docker compose config
+        run: |
+          for file in $(find deploy -name compose.yaml | sort); do
+            dir=$(dirname "$file")
+            env=()
+            if [ -f "$dir/.env.example" ]; then
+              # The examples leave secrets empty on purpose; fill them in.
+              sed 's/^CROWDSEC_BOUNCER_KEY=$/CROWDSEC_BOUNCER_KEY=x/' "$dir/.env.example" > "$RUNNER_TEMP/env"
+              env=(--env-file "$RUNNER_TEMP/env")
+            fi
+            echo "== $dir"
+            docker compose --project-directory "$dir" "${env[@]}" -f "$file" config -q
+          done
+
+  smoke:
+    name: ${{ matrix.stack }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        stack:
+          - npm/1-simple
+          - npm/2-standard
+          - npm/3-hardened
+          - npmplus/1-simple
+          - npmplus/2-standard
+          - npmplus/3-hardened
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Boot and check
+        run: scripts/deploy-smoke.sh deploy/${{ matrix.stack }}

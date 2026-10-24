@@ -16,8 +16,9 @@ make check    # fmt + vet + lint + test — what CI runs
 ```
 
 Try it against a test instance with `cp .env.example .env`, then `make run`
-with `DRY_RUN=true`. A complete playground:
-`docker compose -f docker-compose.yml -f docker-compose.example-app.yml up -d`.
+with `DRY_RUN=true`. A complete playground: any stack in [deploy/](deploy/README.md)
+plus `deploy/example-app`; `scripts/deploy-smoke.sh deploy/<flavour>/<level>`
+boots one and checks it end to end, as CI does.
 
 ## Layout
 

@@ -1,0 +1,118 @@
+# NPMplus + npmplus-docker-sync - standard (recommended)
+#
+# What changes compared to ../1-simple:
+#   - the tool reaches Docker only through a read-only socket proxy on an
+#     internal network; the raw socket is never mounted into it
+#   - its NPM password is a Docker secret, not an environment variable
+#     (environment variables show up in `docker inspect`)
+#   - healthchecks, start order and log rotation
+#   - the admin UI is no longer published on port 81
+#
+#   cp .env.example .env    # fill in the values
+#   docker compose up -d
+#
+# Apps join the "npm" network and get labels - see ../../example-app.
+
+x-defaults: &defaults
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  npmplus:
+    <<: *defaults
+    image: ghcr.io/zoeyvid/npmplus:latest # pin a release tag for production
+    container_name: npmplus
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+      # The admin UI is served through NPM_UI_DOMAIN. Emergency access only
+      # from the host itself:
+      # - "127.0.0.1:81:81"
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+      INITIAL_ADMIN_EMAIL: ${NPM_ADMIN_EMAIL:?set NPM_ADMIN_EMAIL in .env}
+      INITIAL_ADMIN_PASSWORD: ${NPM_ADMIN_PASSWORD:?set NPM_ADMIN_PASSWORD in .env}
+    volumes:
+      - npm-data:/data
+    networks:
+      - npm
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    labels:
+      # The admin UI as a proxy host. Keep these labels: without them the tool
+      # would delete the host it created for the UI.
+      npm.proxy.domains: ${NPM_UI_DOMAIN:?set NPM_UI_DOMAIN in .env}
+      npm.proxy.port: "81"
+      npm.proxy.scheme: https
+
+  socket-proxy:
+    <<: *defaults
+    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
+    container_name: socket-proxy
+    environment:
+      # Everything not listed is denied. This is exactly what the tool needs:
+      CONTAINERS: 1 # list containers (labels, networks, state)
+      EVENTS: 1 # react to start/stop
+      PING: 1
+      VERSION: 1
+      INFO: 1 # daemon id, the default SYNC_INSTANCE_ID
+      POST: 0 # no write call at all
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - socket-proxy
+    read_only: true
+    tmpfs:
+      - /run
+
+  npmplus-docker-sync:
+    <<: *defaults
+    image: ghcr.io/ventumphoenix/npmplus-docker-sync:1.0.0-beta.11
+    container_name: npmplus-docker-sync
+    depends_on:
+      npmplus:
+        condition: service_healthy
+      socket-proxy:
+        condition: service_started
+    environment:
+      DOCKER_HOST: tcp://socket-proxy:2375
+      NPM_URL: https://npmplus:81
+      NPM_INSECURE_SKIP_VERIFY: "true" # NPMplus' self-signed UI certificate
+      NPM_IDENTITY: ${NPM_ADMIN_EMAIL}
+      NPM_SECRET_FILE: /run/secrets/npm_password
+      NPM_NETWORK: npm
+      # First run against an NPMplus that already has hosts? Set DRY_RUN=true
+      # in .env: the tool then only logs what it would change.
+      DRY_RUN: ${DRY_RUN:-false}
+      HEALTH_ADDR: 127.0.0.1:8080
+    secrets:
+      - npm_password
+    networks:
+      - npm
+      - socket-proxy
+    read_only: true
+    cap_drop:
+      - ALL
+
+secrets:
+  npm_password:
+    environment: NPM_ADMIN_PASSWORD # read from .env, mounted as a file
+
+networks:
+  npm:
+    name: npm # fixed name, so apps in other compose projects can join it
+  socket-proxy:
+    internal: true # no way out of this network
+
+volumes:
+  npm-data:

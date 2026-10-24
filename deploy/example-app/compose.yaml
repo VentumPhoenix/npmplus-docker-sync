@@ -1,6 +1,11 @@
-# Example workload: label a container and the resources appear in NPM.
+# Example apps: label a container and its hosts appear in NPM.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.example-app.yml up -d
+# Start one of the stacks first, then:
+#
+#   docker compose up -d                            # network "npm"
+#   NPM_NETWORK=npm-frontend docker compose up -d   # the hardened stacks
+#
+# Replace example.com with your own domains.
 services:
   whoami:
     image: traefik/whoami:latest
@@ -62,13 +67,14 @@ services:
 
   # The proxy manager itself needs labels too: once this tool has created a
   # host for it, removing the labels makes that host an orphan, and
-  # DELETE_ORPHANS=true would take down the admin UI with it.
+  # DELETE_ORPHANS=true would take down the admin UI with it. The bundled
+  # stacks already carry them; with your own NPM (../existing-npm) add:
   #
   # npmplus:
-  #   image: ghcr.io/zoeyvid/npmplus:<pin-a-version>   # not :latest
   #   labels:
   #     npm.proxy.domains: "npm.example.com"
   #     npm.proxy.port: "81"
+  #     npm.proxy.scheme: "https"   # NPMplus serves its UI over https
 
   # A container that should not be touched at all:
   #
@@ -79,4 +85,5 @@ services:
 
 networks:
   npm:
-    external: true
+    name: ${NPM_NETWORK:-npm}
+    external: true # created by the proxy stack

@@ -1,0 +1,76 @@
+# npmplus-docker-sync for an NPM or NPMplus you already run
+#
+# Only the tool and its socket proxy. It joins the Docker network your proxy
+# manager lives in and logs in with an existing account.
+#
+#   cp .env.example .env    # fill in the values
+#   docker compose up -d
+#   docker compose logs -f npmplus-docker-sync
+#
+# The proxy manager itself needs labels too, once the tool has created a host
+# for it - see ../example-app.
+
+services:
+  socket-proxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
+    container_name: socket-proxy
+    restart: unless-stopped
+    environment:
+      # Everything not listed is denied. This is exactly what the tool needs:
+      CONTAINERS: 1 # list containers (labels, networks, state)
+      EVENTS: 1 # react to start/stop
+      PING: 1
+      VERSION: 1
+      INFO: 1 # daemon id, the default SYNC_INSTANCE_ID
+      POST: 0 # no write call at all
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - socket-proxy
+    read_only: true
+    tmpfs:
+      - /run
+    security_opt:
+      - no-new-privileges:true
+
+  npmplus-docker-sync:
+    image: ghcr.io/ventumphoenix/npmplus-docker-sync:1.0.0-beta.11
+    container_name: npmplus-docker-sync
+    restart: unless-stopped
+    depends_on:
+      - socket-proxy
+    environment:
+      DOCKER_HOST: tcp://socket-proxy:2375
+      NPM_URL: ${NPM_URL:?set NPM_URL in .env}
+      NPM_INSECURE_SKIP_VERIFY: ${NPM_INSECURE_SKIP_VERIFY:-false}
+      NPM_IDENTITY: ${NPM_IDENTITY:?set NPM_IDENTITY in .env}
+      NPM_SECRET_FILE: /run/secrets/npm_password
+      NPM_NETWORK: ${NPM_NETWORK:-npm}
+      # Strongly recommended for the first run against hosts that already
+      # exist: the tool only logs what it would change.
+      DRY_RUN: ${DRY_RUN:-true}
+      HEALTH_ADDR: 127.0.0.1:8080
+    secrets:
+      - npm_password
+    networks:
+      - npm
+      - socket-proxy
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+secrets:
+  npm_password:
+    environment: NPM_SECRET # read from .env, mounted as a file
+
+networks:
+  npm:
+    name: ${NPM_NETWORK:-npm}
+    external: true # the network of your NPM / NPMplus
+  socket-proxy:
+    internal: true # no way out of this network
