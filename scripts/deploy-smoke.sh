@@ -93,7 +93,9 @@ while :; do
     read -r status code health <<<"$state"
     case "$status:$health" in
       running:healthy | running:) ;;
-      exited:) [ "$code" = 0 ] || { echo "$c exited with $code"; exit 1; } ;;
+      # A one-shot job is done once it exited 0 - whatever the healthcheck it
+      # inherited from its image last said.
+      exited:*) [ "$code" = 0 ] || { echo "$c exited with $code"; exit 1; } ;;
       *) pending+=("$c=$status${health:+/$health}") ;;
     esac
   done

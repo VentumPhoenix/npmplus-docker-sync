@@ -55,7 +55,7 @@ services:
 
   socket-proxy:
     <<: *defaults
-    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
+    image: ghcr.io/tecnativa/docker-socket-proxy:v0.5.0
     container_name: socket-proxy
     environment:
       # Everything not listed is denied. This is exactly what the tool needs:
@@ -70,7 +70,8 @@ services:
     networks:
       - socket-proxy
     read_only: true
-    tmpfs:
+    tmpfs: # the rendered haproxy.cfg and the runtime socket
+      - /tmp
       - /run
 
   npmplus-docker-sync:
