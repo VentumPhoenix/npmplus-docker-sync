@@ -273,7 +273,11 @@ func (w *Worker) warnUnsupported(log *slog.Logger, key string, t *docker.Target,
 	}
 	unavailable := intersect(npm.Unavailable(resource.Kind(), dialect), t.Explicit)
 	downgraded := intersect(npm.Downgraded(resource, dialect), t.Explicit)
-	if len(plusOnly) == 0 && len(unavailable) == 0 && len(downgraded) == 0 {
+	var inert []string
+	if dialect.Flavour != npm.FlavourNPM {
+		inert = intersect(npm.Inert(resource), t.Explicit)
+	}
+	if len(plusOnly) == 0 && len(unavailable) == 0 && len(downgraded) == 0 && len(inert) == 0 {
 		return
 	}
 
@@ -299,6 +303,13 @@ func (w *Worker) warnUnsupported(log *slog.Logger, key string, t *docker.Target,
 		log.Warn("settings this server can only store in a weaker form",
 			slog.String("key", key), slog.String("flavour", dialect.Flavour.String()),
 			slog.String("fields", strings.Join(downgraded, ",")))
+	}
+	if len(inert) > 0 {
+		log.Warn("settings without effect for this scheme or combination are left out",
+			slog.String("key", key), slog.String("fields", strings.Join(inert, ",")),
+			slog.String("rules", "request_buffering=false needs crowdsec_appsec=false; "+
+				"buffering applies to http and https only; fancyindex to scheme path only; "+
+				"upstream_compression not to path; auth_request_upstream needs auth_request"))
 	}
 }
 

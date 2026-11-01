@@ -199,6 +199,7 @@ func (h *ProxyHost) Payload(dialect Dialect) (any, error) {
 
 	locations := make([]locationPayloadNPMplus, 0, len(h.Locations))
 	for _, l := range h.Locations {
+		l.cleanForwardOptions()
 		// The server keeps the ids only for a "custom" location; sending them
 		// alongside "global" or "public" would come straight back cleared and
 		// look like a permanent drift.
@@ -229,6 +230,7 @@ func (h *ProxyHost) Payload(dialect Dialect) (any, error) {
 			AuthRequestUpstream:      l.AuthRequestUpstream,
 		})
 	}
+	forward := h.forwardOptions()
 	return &proxyPayloadNPMplus{
 		DomainNames:           NormalizeDomains(h.DomainNames),
 		ForwardScheme:         h.ForwardScheme,
@@ -252,13 +254,13 @@ func (h *ProxyHost) Payload(dialect Dialect) (any, error) {
 
 		NoIndex:                  h.NoIndex,
 		DisableCrowdsecAppsec:    h.DisableCrowdsecAppsec,
-		DisableRequestBuffering:  h.DisableRequestBuffering,
-		DisableResponseBuffering: h.DisableResponseBuffering,
-		UpstreamCompression:      h.UpstreamCompression,
-		FancyIndex:               h.FancyIndex,
+		DisableRequestBuffering:  forward.DisableRequestBuffering,
+		DisableResponseBuffering: forward.DisableResponseBuffering,
+		UpstreamCompression:      forward.UpstreamCompression,
+		FancyIndex:               forward.FancyIndex,
 		XFrameOptions:            h.XFrameOptions,
 		AuthRequest:              h.AuthRequest,
-		AuthRequestUpstream:      h.AuthRequestUpstream,
+		AuthRequestUpstream:      forward.AuthRequestUpstream,
 
 		npmplusColumns: columnsFor(dialect, KindProxy, h.Meta, h.CertificateID),
 		Meta:           metaForWrite(dialect, KindProxy, h.Meta),
@@ -474,6 +476,18 @@ func (s *Stream) Payload(dialect Dialect) (any, error) {
 	// meaning here and the schema types the field as a plain integer.
 	if s.CertificateID.New {
 		return nil, fmt.Errorf("certificate_id=%q is not supported for streams; reference an existing certificate id", CertificateNew)
+	}
+	// TLS and the PROXY protocol v1 work over TCP only; NPMplus refuses them
+	// for a stream that also forwards UDP. The labels are checked for this
+	// already (docker.validateStream), this keeps any other caller honest.
+	if s.UDPForwarding {
+		switch {
+		case s.CertificateID.ID > 0, bool(s.ProxyTLS):
+			return nil, fmt.Errorf("a stream that forwards UDP cannot use TLS: certificate_id and npmplus_proxy_tls work over TCP only")
+		// On a server that only knows "on" and "off", 1 is "on", not v1.
+		case s.ProxyProtocol == 1 && dialect.TypeOf(KindStream, fieldProxyProtocol) != "boolean":
+			return nil, fmt.Errorf("a stream that forwards UDP cannot send the PROXY protocol v1; use v2")
+		}
 	}
 	description := s.Description
 	if len(description) > MaxDescriptionLength {
@@ -758,6 +772,34 @@ func Downgraded(r Resource, d Dialect) []string {
 		return []string{"proxy_protocol"}
 	}
 	return nil
+}
+
+// Inert returns the labels of the proxy host switches that do nothing for its
+// scheme or in their combination and are therefore left out of the request
+// (Location.cleanForwardOptions). The caller reports those a label set
+// explicitly.
+func Inert(r Resource) []string {
+	h, ok := r.(*ProxyHost)
+	if !ok {
+		return nil
+	}
+	cleaned := h.forwardOptions()
+	var out []string
+	for _, f := range []struct {
+		label         string
+		before, after bool
+	}{
+		{"request_buffering", bool(h.DisableRequestBuffering), bool(cleaned.DisableRequestBuffering)},
+		{"response_buffering", bool(h.DisableResponseBuffering), bool(cleaned.DisableResponseBuffering)},
+		{"upstream_compression", bool(h.UpstreamCompression), bool(cleaned.UpstreamCompression)},
+		{"fancyindex", bool(h.FancyIndex), bool(cleaned.FancyIndex)},
+		{"auth_request_upstream", h.AuthRequestUpstream != "", cleaned.AuthRequestUpstream != ""},
+	} {
+		if f.before != f.after {
+			out = append(out, f.label)
+		}
+	}
+	return out
 }
 
 // keepIf clears a switch the server does not store.

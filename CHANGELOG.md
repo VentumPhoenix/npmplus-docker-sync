@@ -14,6 +14,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and NPMplus each, plus one for an NPM you already run. The hardened ones add
   an allowlist socket proxy, container isolation through a firewall and, for
   NPMplus, CrowdSec with its WAF. CI boots every stack and checks it end to end.
+- **Streams: TLS and the PROXY protocol v1 together with UDP forwarding are a
+  label error now**, as is a certificate request (`new`) for a stream. Both
+  work over TCP only, and newer NPMplus releases refuse the combination. A
+  certificate that only comes from a global default is not attached to such a
+  stream.
+
+### Fixed
+
+- **Switches without effect in their combination are left out of the request.**
+  Newer NPMplus releases refuse what they used to clear: request buffering
+  switched off while CrowdSec AppSec runs, buffering for a `grpc`/`path`
+  upstream, `fancyindex` for anything but `path`, `upstream_compression` for
+  `path`, an auth service address without an auth service - for the host and
+  each location. Such a host would have been rejected with `400` on every run;
+  an explicit label is now named in a warning instead.
+- The deployment examples' socket proxy (`tecnativa/docker-socket-proxy`
+  0.3.0) did not start read-only; v0.5.0 does, on a current HAProxy.
 
 ## [1.0.0-beta.11] - 2026-10-24
 

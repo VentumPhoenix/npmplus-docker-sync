@@ -621,6 +621,9 @@ func buildStream(t *Target, c Container, opts ParseOptions, f fieldSet) error {
 	if t.ProxyTLS, err = f.boolean(fields.ProxyTLS); err != nil {
 		return err
 	}
+	if err := validateStream(t, f); err != nil {
+		return err
+	}
 
 	t.Description = f.string(fields.Description)
 	if t.Description == "" {
@@ -628,6 +631,43 @@ func buildStream(t *Target, c Container, opts ParseOptions, f fieldSet) error {
 	}
 	if len(t.Description) > npm.MaxDescriptionLength {
 		t.Description = t.Description[:npm.MaxDescriptionLength]
+	}
+	return nil
+}
+
+// validateStream rejects what NPMplus refuses for a stream: a certificate
+// request (a stream has no domain to request one for), and TLS or the PROXY
+// protocol v1 together with UDP forwarding - both work over TCP only.
+//
+// A certificate that only comes from a configured default (e.g. a global
+// NPM_DEFAULT_CERTIFICATE) is dropped for such a stream instead: the default
+// was meant for the hosts, not for this stream.
+func validateStream(t *Target, f fieldSet) error {
+	labelled := f.has(fields.Certificate)
+	if t.Certificate.Mode == certs.ModeNew {
+		if labelled {
+			return fmt.Errorf("%s: a stream cannot request a certificate - create it in NPM and reference it by id or name",
+				f.source(fields.Certificate))
+		}
+		t.Certificate = certs.Spec{Mode: certs.ModeNone}
+	}
+	if !t.UDPForwarding {
+		return nil
+	}
+	switch {
+	case t.ProxyTLS:
+		return fmt.Errorf("%s works over TCP only and cannot be combined with UDP forwarding", f.source(fields.ProxyTLS))
+	case t.ProxyProtocol == 1:
+		return fmt.Errorf("%s=v1 works over TCP only; use v2 with UDP forwarding", f.source(fields.ProxyProtocol))
+	}
+	switch t.Certificate.Mode {
+	case certs.ModeAuto, certs.ModeNone:
+	default:
+		if labelled {
+			return fmt.Errorf("%s: TLS works over TCP only - a stream that forwards UDP cannot have a certificate",
+				f.source(fields.Certificate))
+		}
+		t.Certificate = certs.Spec{Mode: certs.ModeNone}
 	}
 	return nil
 }

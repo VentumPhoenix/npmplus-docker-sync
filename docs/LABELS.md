@@ -196,7 +196,7 @@ npm.proxy.location.0.path: "/api"
 npm.proxy.location.0.forward_port: "3000"
 npm.proxy.location.1.path: "/static"
 npm.proxy.location.1.type: "prefer"        # nginx "^~"
-npm.proxy.location.1.fancyindex: "true"
+npm.proxy.location.1.noindex: "true"
 ```
 
 `type`: `prefix` (default), `exact` (`=`), `regex` (`~`), `iregex` (`~*`),
@@ -217,6 +217,11 @@ npm.1.stream.protocol: "udp"
 `description` defaults to the container name. NPM only listens on ports its own
 container publishes — publish the port on the NPM container first.
 
+TLS (`certificate`, `proxy_tls`) and `proxy_protocol: v1` work over TCP only, so
+a stream that forwards UDP cannot have them; such labels are an error. A
+certificate from a global default is simply not attached to it. Streams cannot
+request a certificate (`new`) — create it in NPM and reference it.
+
 ## NPMplus-only and retired fields
 
 **NPMplus only:** `group`, `ssl.http3`, `noindex`, `crowdsec_appsec`,
@@ -228,6 +233,13 @@ left out and reported once — nothing fails.
 
 The labels are positive even where the API is inverted:
 `crowdsec_appsec: "false"` turns AppSec off.
+
+Some only work in combination, for the host and each location alike:
+`request_buffering: "false"` needs `crowdsec_appsec: "false"`, buffering applies
+to `http`/`https` upstreams only, `fancyindex` to scheme `path` only,
+`upstream_compression` not to `path`, and `auth_request_upstream` needs an
+`auth_request`. Anything else is left out of the request (newer NPMplus
+releases refuse it) and an explicit label is named in a warning.
 
 **Retired by newer NPMplus releases:** `websockets` and `ssl.http2` are always
 on, `caching` and `block_exploits` no longer exist, `trust_forwarded_proto` is

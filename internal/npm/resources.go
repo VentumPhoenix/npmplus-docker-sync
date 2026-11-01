@@ -293,10 +293,9 @@ func (h *ProxyHost) AdoptServerState(current Resource) {
 	}
 }
 
-// Fingerprint implements Resource.
-func (h *ProxyHost) Fingerprint() string {
-	managedBy, container, index, instance := ownership(h.Meta)
-	ids, listType := h.accessLists()
+// forwardOptions returns the host's forward switches after the rules of
+// Location.cleanForwardOptions, which hold for the host as for each location.
+func (h *ProxyHost) forwardOptions() Location {
 	forward := Location{
 		ForwardScheme:            h.ForwardScheme,
 		DisableCrowdsecAppsec:    h.DisableCrowdsecAppsec,
@@ -308,6 +307,14 @@ func (h *ProxyHost) Fingerprint() string {
 		AuthRequestUpstream:      h.AuthRequestUpstream,
 	}
 	forward.cleanForwardOptions()
+	return forward
+}
+
+// Fingerprint implements Resource.
+func (h *ProxyHost) Fingerprint() string {
+	managedBy, container, index, instance := ownership(h.Meta)
+	ids, listType := h.accessLists()
+	forward := h.forwardOptions()
 	return fingerprint(struct {
 		Kind           string     `json:"kind"`
 		Domains        []string   `json:"domains"`

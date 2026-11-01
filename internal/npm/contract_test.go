@@ -116,8 +116,9 @@ func sampleResources(t *testing.T) map[Kind]Resource {
 			IncomingPort:   PortOf(5432),
 			ForwardingHost: "172.20.0.7",
 			ForwardingPort: PortOf(5432),
+			// TLS works over TCP only; the UDP variant is its own request
+			// below.
 			TCPForwarding:  true,
-			UDPForwarding:  true,
 			CertificateID:  CertificateRef(7),
 			ProxyProtocol:  2,
 			ProxyTLS:       true,
@@ -290,6 +291,19 @@ func validateAgainst(t *testing.T, dialect Dialect, ref string) {
 			r.CertificateID = NewCertificate()
 		}
 		requests[string(kind)+"+new-certificate"] = resource
+	}
+
+	// A stream that forwards UDP as well: no TLS, PROXY protocol v2.
+	requests["stream+udp"] = &Stream{
+		IncomingPort:   PortOf(5353),
+		ForwardingHost: "172.20.0.8",
+		ForwardingPort: PortOf(53),
+		TCPForwarding:  true,
+		UDPForwarding:  true,
+		ProxyProtocol:  2,
+		Description:    "dns",
+		Enabled:        true,
+		Meta:           resources[KindStream].ResourceMeta(),
 	}
 
 	for name, resource := range requests {

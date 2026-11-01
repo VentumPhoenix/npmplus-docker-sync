@@ -367,7 +367,7 @@ func proxyFields() []Field {
 		{
 			Name: AuthRequestUpstream, Aliases: []string{"auth.upstream"},
 			Type: TypeString, APIField: "npmplus_auth_request_upstream", Plus: true,
-			Doc: "address of the auth service",
+			Doc: "address of the auth service; needs auth_request",
 		},
 		{
 			Name: LocationConfig, Type: TypeString, APIField: "npmplus_location_config", Plus: true,
@@ -391,22 +391,22 @@ func proxyFields() []Field {
 		{
 			Name: RequestBuffering, Aliases: []string{"proxy_request_buffering"},
 			Type: TypeBool, Default: "true", APIField: "npmplus_proxy_request_buffering", Plus: true, Invert: true,
-			Doc: "buffer the request body before passing it upstream",
+			Doc: "buffer the request body before passing it upstream; http/https only, and only off while crowdsec_appsec is off",
 		},
 		{
 			Name: ResponseBuffering, Aliases: []string{"proxy_response_buffering"},
 			Type: TypeBool, Default: "true", APIField: "npmplus_proxy_response_buffering", Plus: true, Invert: true,
-			Doc: "buffer the upstream response",
+			Doc: "buffer the upstream response; http/https only",
 		},
 		{
 			Name: UpstreamCompression, Aliases: []string{"compression"},
 			Type: TypeBool, Default: "false", APIField: "npmplus_upstream_compression", Plus: true,
-			Doc: "let the upstream compress instead of nginx",
+			Doc: "let the upstream compress instead of nginx; not for scheme path",
 		},
 		{
 			Name: FancyIndex, Aliases: []string{"fancy_index"},
 			Type: TypeBool, Default: "false", APIField: "npmplus_fancyindex", Plus: true,
-			Doc: "pretty directory listings",
+			Doc: "pretty directory listings; scheme path only",
 		},
 		{
 			Name: XFrameOptions, Aliases: []string{"xframe_options", "frame_options"},
@@ -505,12 +505,12 @@ func streamFields() []Field {
 			Name: ProxyProtocol, Aliases: []string{"proxy_protocol_forwarding"},
 			Type: TypeEnum, Enum: ProxyProtocolValues, Default: "off",
 			APIField: "npmplus_proxy_protocol_forwarding", Plus: true,
-			Doc: "send a PROXY protocol header upstream",
+			Doc: "send a PROXY protocol header upstream; only v2 together with udp",
 		},
 		{
 			Name: ProxyTLS, Aliases: []string{"proxy_ssl"},
 			Type: TypeBool, Default: "false", APIField: "npmplus_proxy_tls", Plus: true,
-			Doc: "terminate TLS towards the upstream",
+			Doc: "terminate TLS towards the upstream; TCP only, not together with udp",
 		},
 		{
 			Name: AdvancedConfig, Aliases: []string{"advanced", "custom_config", "advanced.config"},

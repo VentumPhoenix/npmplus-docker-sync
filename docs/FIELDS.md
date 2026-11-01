@@ -60,14 +60,14 @@ and do not end up in any API field.
 | `access_list_type` **+** | `public`, `custom` | — | public or custom; derived from access_list when unset | `accesslist.type` | `NPM_PROXY_ACCESS_LIST_TYPE` | `npmplus_access_list_type` |
 | `advanced_config` | string | — | nginx snippet inserted into the server block, below the ownership marker line | `advanced`, `custom_config`, `advanced.config` | `NPM_PROXY_ADVANCED_CONFIG` | `advanced_config` |
 | `auth_request` **+** | `none`, `anubis`, `tinyauth`, `oauth2proxy`, `voidauth`, `authelia`, `authentik`, `authentik-send-basic-auth` | `none` | forward authentication integration | `auth`, `forward_auth` | `NPM_PROXY_AUTH_REQUEST` | `npmplus_auth_request` |
-| `auth_request_upstream` **+** | string | — | address of the auth service | `auth.upstream` | `NPM_PROXY_AUTH_REQUEST_UPSTREAM` | `npmplus_auth_request_upstream` |
+| `auth_request_upstream` **+** | string | — | address of the auth service; needs auth_request | `auth.upstream` | `NPM_PROXY_AUTH_REQUEST_UPSTREAM` | `npmplus_auth_request_upstream` |
 | `block_exploits` | bool | `true` | block common exploit patterns (not offered in NPMplus releases without the meta object) | `block_common_exploits`, `exploits` | `NPM_PROXY_BLOCK_EXPLOITS` | `block_exploits` |
 | `caching` | bool | `false` | cache static assets (can break dynamic content; not offered in NPMplus releases without the meta object) | `cache`, `caching_enabled` | `NPM_PROXY_CACHING` | `caching_enabled` |
 | `certificate` | certificate | `auto` | auto, a certificate id, a domain, `name:<nice name>`, `new` or `none` | `certificate_id`, `cert`, `ssl.certificate`, `ssl.certificate.id`, `ssl.cert` | `NPM_PROXY_CERTIFICATE` | `certificate_id` |
 | `crowdsec_appsec` **+** | bool | `true` | run requests through the CrowdSec AppSec component | `crowdsec`, `appsec` | `NPM_PROXY_CROWDSEC_APPSEC` | `npmplus_crowdsec_appsec` |
 | `domains` | domains | — | domain names served by this resource (required) | `domain`, `domain_names`, `domain_name` | `NPM_PROXY_DOMAINS` | `domain_names` |
 | `enabled` | bool | `true` | switch this resource off in NPM without deleting it (create/update still runs) | `enable` | `NPM_PROXY_ENABLED` | `enabled` |
-| `fancyindex` **+** | bool | `false` | pretty directory listings | `fancy_index` | `NPM_PROXY_FANCYINDEX` | `npmplus_fancyindex` |
+| `fancyindex` **+** | bool | `false` | pretty directory listings; scheme path only | `fancy_index` | `NPM_PROXY_FANCYINDEX` | `npmplus_fancyindex` |
 | `forward_host` | string | — | upstream address; defaults to the container itself | `host`, `upstream`, `forward_ip`, `ip`, `target` | `NPM_PROXY_FORWARD_HOST` | `forward_host` |
 | `forward_port` | port | `auto` | upstream port; auto reads it from the container's exposed ports | `port`, `upstream_port` | `NPM_PROXY_FORWARD_PORT` | `forward_port` |
 | `forward_scheme` | `http`, `https`, `grpc`, `grpcs` | `http` | how to talk to the upstream | `scheme`, `upstream_scheme` | `NPM_PROXY_FORWARD_SCHEME` | `forward_scheme` |
@@ -80,16 +80,16 @@ and do not end up in any API field.
 | `letsencrypt.propagation_seconds` | int | `0` | how long to wait for the DNS record to propagate (npmplus_propagation_seconds on NPMplus without the meta object) | `le.propagation_seconds`, `propagation_seconds` | `NPM_PROXY_LETSENCRYPT_PROPAGATION_SECONDS` | `meta.propagation_seconds` |
 | `location_config` **+** | string | — | nginx snippet inserted into location / | — | `NPM_PROXY_LOCATION_CONFIG` | `npmplus_location_config` |
 | `noindex` **+** | bool | `false` | send X-Robots-Tag: noindex and block scrapers | `no_index` | `NPM_PROXY_NOINDEX` | `npmplus_noindex` |
-| `request_buffering` **+** | bool | `true` | buffer the request body before passing it upstream | `proxy_request_buffering` | `NPM_PROXY_REQUEST_BUFFERING` | `npmplus_proxy_request_buffering` |
+| `request_buffering` **+** | bool | `true` | buffer the request body before passing it upstream; http/https only, and only off while crowdsec_appsec is off | `proxy_request_buffering` | `NPM_PROXY_REQUEST_BUFFERING` | `npmplus_proxy_request_buffering` |
 | `resolve_ip` | bool | — | use the container IP instead of its name as upstream; defaults to RESOLVE_CONTAINER_IP | `resolve_container_ip` | `NPM_PROXY_RESOLVE_IP` | `forward_host` |
-| `response_buffering` **+** | bool | `true` | buffer the upstream response | `proxy_response_buffering` | `NPM_PROXY_RESPONSE_BUFFERING` | `npmplus_proxy_response_buffering` |
+| `response_buffering` **+** | bool | `true` | buffer the upstream response; http/https only | `proxy_response_buffering` | `NPM_PROXY_RESPONSE_BUFFERING` | `npmplus_proxy_response_buffering` |
 | `ssl.forced` | bool | `auto` | redirect http to https; auto means "on as soon as a certificate is attached" | `ssl.force`, `force_ssl`, `ssl_forced` | `NPM_PROXY_SSL_FORCED` | `ssl_forced` |
 | `ssl.hsts` | bool | `false` | send Strict-Transport-Security (hard to undo, opt-in) | `hsts`, `hsts_enabled` | `NPM_PROXY_SSL_HSTS` | `hsts_enabled` |
 | `ssl.hsts_subdomains` | bool | `false` | extend HSTS to all subdomains | `hsts_subdomains`, `hsts.sub` | `NPM_PROXY_SSL_HSTS_SUBDOMAINS` | `hsts_subdomains` |
 | `ssl.http2` | bool | `true` | HTTP/2 support (always on in NPMplus releases without the meta object) | `http2`, `http2_support` | `NPM_PROXY_SSL_HTTP2` | `http2_support` |
 | `ssl.http3` **+** | bool | `true` | HTTP/3 (QUIC) support | `http3`, `http3_support`, `quic` | `NPM_PROXY_SSL_HTTP3` | `npmplus_http3_support` |
 | `trust_forwarded_proto` | bool | `false` | trust X-Forwarded-Proto (only behind another proxy; always on in NPMplus releases without the meta object) | `trust_proto` | `NPM_PROXY_TRUST_FORWARDED_PROTO` | `trust_forwarded_proto` |
-| `upstream_compression` **+** | bool | `false` | let the upstream compress instead of nginx | `compression` | `NPM_PROXY_UPSTREAM_COMPRESSION` | `npmplus_upstream_compression` |
+| `upstream_compression` **+** | bool | `false` | let the upstream compress instead of nginx; not for scheme path | `compression` | `NPM_PROXY_UPSTREAM_COMPRESSION` | `npmplus_upstream_compression` |
 | `websockets` | bool | `true` | allow websocket upgrades (always on in NPMplus releases without the meta object) | `websocket`, `ws`, `allow_websocket_upgrade` | `NPM_PROXY_WEBSOCKETS` | `allow_websocket_upgrade` |
 | `x_frame_options` **+** | `deny`, `sameorigin`, `upstream`, `none` | — | X-Frame-Options header; unset keeps the NPMplus default | `xframe_options`, `frame_options` | `NPM_PROXY_X_FRAME_OPTIONS` | `npmplus_x_frame_options` |
 
@@ -132,8 +132,8 @@ and do not end up in any API field.
 | `group` **+** | string | — | NPMplus UI group this resource is listed under (meta.directory on releases before the column); none clears it | `directory`, `folder`, `category`, `ui.group` | `NPM_STREAM_GROUP` | `npmplus_directory` |
 | `incoming_port` | port | — | port NPM listens on (required) | `port`, `listen_port`, `incoming.port`, `listen` | `NPM_STREAM_INCOMING_PORT` | `incoming_port` |
 | `protocol` | `tcp`, `udp`, `both` | — | shorthand for the tcp and udp switches: tcp, udp or both | — | `NPM_STREAM_PROTOCOL` | `tcp_forwarding/udp_forwarding` |
-| `proxy_protocol` **+** | `off`, `v1`, `v2` | `off` | send a PROXY protocol header upstream | `proxy_protocol_forwarding` | `NPM_STREAM_PROXY_PROTOCOL` | `npmplus_proxy_protocol_forwarding` |
-| `proxy_tls` **+** | bool | `false` | terminate TLS towards the upstream | `proxy_ssl` | `NPM_STREAM_PROXY_TLS` | `npmplus_proxy_tls` |
+| `proxy_protocol` **+** | `off`, `v1`, `v2` | `off` | send a PROXY protocol header upstream; only v2 together with udp | `proxy_protocol_forwarding` | `NPM_STREAM_PROXY_PROTOCOL` | `npmplus_proxy_protocol_forwarding` |
+| `proxy_tls` **+** | bool | `false` | terminate TLS towards the upstream; TCP only, not together with udp | `proxy_ssl` | `NPM_STREAM_PROXY_TLS` | `npmplus_proxy_tls` |
 | `resolve_ip` | bool | — | use the container IP as upstream; defaults to RESOLVE_CONTAINER_IP | `resolve_container_ip` | `NPM_STREAM_RESOLVE_IP` | `forwarding_host` |
 | `tcp` | bool | `true` | forward TCP | `forward.tcp`, `tcp_forwarding` | `NPM_STREAM_TCP` | `tcp_forwarding` |
 | `udp` | bool | `false` | forward UDP | `forward.udp`, `udp_forwarding` | `NPM_STREAM_UDP` | `udp_forwarding` |
@@ -195,24 +195,24 @@ them, never because of a default.
 |---|---|---|---|
 | `proxy` | `access_list_type` | `npmplus_access_list_type` | public or custom; derived from access_list when unset |
 | `proxy` | `auth_request` | `npmplus_auth_request` | forward authentication integration |
-| `proxy` | `auth_request_upstream` | `npmplus_auth_request_upstream` | address of the auth service |
+| `proxy` | `auth_request_upstream` | `npmplus_auth_request_upstream` | address of the auth service; needs auth_request |
 | `proxy` | `crowdsec_appsec` | `npmplus_crowdsec_appsec` | run requests through the CrowdSec AppSec component |
-| `proxy` | `fancyindex` | `npmplus_fancyindex` | pretty directory listings |
+| `proxy` | `fancyindex` | `npmplus_fancyindex` | pretty directory listings; scheme path only |
 | `proxy` | `group` | `npmplus_directory` | NPMplus UI group this resource is listed under (meta.directory on releases before the column); none clears it |
 | `proxy` | `location_config` | `npmplus_location_config` | nginx snippet inserted into location / |
 | `proxy` | `noindex` | `npmplus_noindex` | send X-Robots-Tag: noindex and block scrapers |
-| `proxy` | `request_buffering` | `npmplus_proxy_request_buffering` | buffer the request body before passing it upstream |
-| `proxy` | `response_buffering` | `npmplus_proxy_response_buffering` | buffer the upstream response |
+| `proxy` | `request_buffering` | `npmplus_proxy_request_buffering` | buffer the request body before passing it upstream; http/https only, and only off while crowdsec_appsec is off |
+| `proxy` | `response_buffering` | `npmplus_proxy_response_buffering` | buffer the upstream response; http/https only |
 | `proxy` | `ssl.http3` | `npmplus_http3_support` | HTTP/3 (QUIC) support |
-| `proxy` | `upstream_compression` | `npmplus_upstream_compression` | let the upstream compress instead of nginx |
+| `proxy` | `upstream_compression` | `npmplus_upstream_compression` | let the upstream compress instead of nginx; not for scheme path |
 | `proxy` | `x_frame_options` | `npmplus_x_frame_options` | X-Frame-Options header; unset keeps the NPMplus default |
 | `redirect` | `group` | `npmplus_directory` | NPMplus UI group this resource is listed under (meta.directory on releases before the column); none clears it |
 | `redirect` | `ssl.http3` | `npmplus_http3_support` | HTTP/3 (QUIC) support |
 | `stream` | `advanced_config` | `npmplus_advanced_config` | nginx snippet inserted into the stream block, below the ownership marker line |
 | `stream` | `description` | `npmplus_description` | free text shown in the UI; defaults to the container name |
 | `stream` | `group` | `npmplus_directory` | NPMplus UI group this resource is listed under (meta.directory on releases before the column); none clears it |
-| `stream` | `proxy_protocol` | `npmplus_proxy_protocol_forwarding` | send a PROXY protocol header upstream |
-| `stream` | `proxy_tls` | `npmplus_proxy_tls` | terminate TLS towards the upstream |
+| `stream` | `proxy_protocol` | `npmplus_proxy_protocol_forwarding` | send a PROXY protocol header upstream; only v2 together with udp |
+| `stream` | `proxy_tls` | `npmplus_proxy_tls` | terminate TLS towards the upstream; TCP only, not together with udp |
 | `dead` | `group` | `npmplus_directory` | NPMplus UI group this resource is listed under (meta.directory on releases before the column); none clears it |
 | `dead` | `ssl.http3` | `npmplus_http3_support` | HTTP/3 (QUIC) support |
 

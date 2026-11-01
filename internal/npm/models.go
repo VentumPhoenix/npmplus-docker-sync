@@ -267,11 +267,11 @@ func (l *Location) stripPlus() {
 }
 
 // cleanForwardOptions applies the rules NPMplus enforces on a host and on each
-// of its locations before storing them (internalProxyHost.cleanForwardOptions,
-// since 2026-10): a switch that does nothing for the scheme or the combination
-// is cleared. Older releases store what they get, so only the fingerprint
-// applies the rules - a combination the server normalises must not count as a
-// drift on every run.
+// of its locations (internalProxyHost.cleanForwardOptions): a switch that does
+// nothing for the scheme or the combination is cleared. NPMplus first cleared
+// such switches itself, its newer request schema refuses them outright - so
+// requests leave them out, and the fingerprint applies the same rules to what
+// an older server stored as sent.
 func (l *Location) cleanForwardOptions() {
 	scheme := strings.ToLower(l.ForwardScheme)
 	if scheme == "" {

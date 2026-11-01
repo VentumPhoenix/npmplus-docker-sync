@@ -407,3 +407,59 @@ func TestFingerprintFollowsTheForwardRules(t *testing.T) {
 		t.Error("a combination the server keeps must still count")
 	}
 }
+
+// TestRequestsLeaveOutInertSwitches: NPMplus refuses a switch that does
+// nothing for the scheme or the combination it is set with. Requests leave it
+// out - for the host and for each location - and Inert names it for the
+// warning.
+func TestRequestsLeaveOutInertSwitches(t *testing.T) {
+	t.Parallel()
+
+	host := &ProxyHost{
+		DomainNames: []string{"a.example.com"}, ForwardScheme: "http", ForwardHost: "10.0.0.2", ForwardPort: 80,
+		// Buffering stays on while CrowdSec AppSec runs; fancyindex is for
+		// "path" only; an auth upstream needs an auth service.
+		DisableRequestBuffering: true,
+		FancyIndex:              true,
+		AuthRequest:             "none",
+		AuthRequestUpstream:     "http://auth:9091",
+		// Kept: response buffering may be switched off on its own.
+		DisableResponseBuffering: true,
+		Locations: []Location{{
+			Path: "/rpc", ForwardScheme: "grpc", ForwardHost: "10.0.0.3", ForwardPort: 50051,
+			DisableCrowdsecAppsec: true, DisableRequestBuffering: true, DisableResponseBuffering: true,
+		}},
+	}
+
+	payload, err := host.Payload(Dialect{Flavour: FlavourNPMplus})
+	if err != nil {
+		t.Fatalf("Payload() error: %v", err)
+	}
+	raw, _ := json.Marshal(payload)
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	for field, want := range map[string]any{
+		"npmplus_proxy_request_buffering":  false,
+		"npmplus_fancyindex":               false,
+		"npmplus_auth_request_upstream":    "",
+		"npmplus_proxy_response_buffering": true,
+	} {
+		if body[field] != want {
+			t.Errorf("%s = %v, want %v", field, body[field], want)
+		}
+	}
+	location := body["locations"].([]any)[0].(map[string]any)
+	if location["npmplus_proxy_request_buffering"] != false || location["npmplus_proxy_response_buffering"] != false {
+		t.Errorf("a grpc location keeps its buffering switches: %v", location)
+	}
+
+	want := []string{"request_buffering", "fancyindex", "auth_request_upstream"}
+	if got := Inert(host); !reflect.DeepEqual(got, want) {
+		t.Errorf("Inert() = %v, want %v", got, want)
+	}
+	if host.DisableRequestBuffering != true {
+		t.Error("building the request changed the desired state")
+	}
+}

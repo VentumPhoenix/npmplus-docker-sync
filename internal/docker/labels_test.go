@@ -477,6 +477,71 @@ func TestStreamForwardPortDefaultsToIncoming(t *testing.T) {
 	}
 }
 
+// TLS and the PROXY protocol v1 work over TCP only, and a stream has no domain
+// to request a certificate for - NPMplus refuses all three, so the labels say
+// so up front instead of the server answering 400 on every run.
+func TestStreamRejectsWhatOnlyTCPCanDo(t *testing.T) {
+	t.Parallel()
+
+	base := map[string]string{"npm.stream.incoming_port": "5353", "npm.stream.forward_host": "10.0.0.9"}
+	tests := []struct {
+		name    string
+		labels  map[string]string
+		wantErr string
+	}{
+		{"udp with tls", map[string]string{"npm.stream.udp": "true", "npm.stream.proxy_tls": "true"}, "proxy_tls"},
+		{"udp with proxy protocol v1", map[string]string{"npm.stream.udp": "true", "npm.stream.proxy_protocol": "v1"}, "use v2"},
+		{"udp with a certificate", map[string]string{"npm.stream.udp": "true", "npm.stream.certificate": "7"}, "cannot have a certificate"},
+		{"certificate request", map[string]string{"npm.stream.certificate": "new"}, "cannot request a certificate"},
+		{"udp with proxy protocol v2", map[string]string{"npm.stream.udp": "true", "npm.stream.proxy_protocol": "v2"}, ""},
+		{"tcp with tls", map[string]string{"npm.stream.certificate": "7", "npm.stream.proxy_tls": "true"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			labels := map[string]string{}
+			for k, v := range base {
+				labels[k] = v
+			}
+			for k, v := range tt.labels {
+				labels[k] = v
+			}
+			res := Parse(withLabels("dns", labels), opts("npm"))
+			switch {
+			case tt.wantErr == "" && len(res.Errors) > 0:
+				t.Fatalf("unexpected errors: %v", res.Errors)
+			case tt.wantErr != "" && (len(res.Errors) == 0 || !strings.Contains(res.Errors[0].Error(), tt.wantErr)):
+				t.Fatalf("errors = %v, want one mentioning %q", res.Errors, tt.wantErr)
+			}
+		})
+	}
+}
+
+// A certificate that only comes from a global default was meant for the hosts:
+// a UDP stream drops it instead of failing.
+func TestStreamIgnoresADefaultCertificate(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{"NPM_DEFAULT_CERTIFICATE": "7"}
+	defaults, _, err := fields.LoadDefaults(func(k string) string { return env[k] }, nil)
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+	o := opts("npm")
+	o.Defaults = defaults
+	res := Parse(withLabels("dns", map[string]string{
+		"npm.stream.incoming_port": "5353",
+		"npm.stream.forward_host":  "10.0.0.9",
+		"npm.stream.udp":           "true",
+	}), o)
+	if len(res.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", res.Errors)
+	}
+	if got := res.Targets[0].Certificate.Mode; got != certs.ModeNone {
+		t.Errorf("certificate mode = %s, want none", got)
+	}
+}
+
 func TestRedirectAndDeadHosts(t *testing.T) {
 	t.Parallel()
 

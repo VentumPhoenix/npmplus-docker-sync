@@ -478,3 +478,37 @@ func TestRetiredSettingsAreReportedOnlyWhenAsked(t *testing.T) {
 		t.Errorf("proxy protocol v2 reported as weakened on a server that knows it:\n%s", out)
 	}
 }
+
+// TestInertSettingsAreReportedOnlyWhenAsked: a switch that does nothing in its
+// combination - here request buffering off while CrowdSec AppSec runs - is left
+// out of the request, named once for the host whose labels asked for it, and
+// does not keep the host from converging.
+func TestInertSettingsAreReportedOnlyWhenAsked(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	server := newRawServer(npm.Dialect{Flavour: npm.FlavourNPMplus, MetaRetired: true})
+
+	asked := proxyTarget("asked", "asked.example.com", 80)
+	asked.CrowdsecAppsec, asked.RequestBuffering = true, false
+	asked.Explicit = []string{"domains", "request_buffering"}
+	quiet := proxyTarget("quiet", "quiet.example.com", 80)
+	quiet.CrowdsecAppsec, quiet.RequestBuffering = true, false
+
+	w := NewWorker(server, newFakeSource(asked, quiet), ownershipOptions(), log)
+	if res := reconcile(t, w); res.Created != 2 || res.Failed != 0 {
+		t.Fatalf("Result = %+v, want both created", res)
+	}
+	if res := reconcile(t, w); res.Updated != 0 || res.Unchanged != 2 {
+		t.Errorf("second Result = %+v, want both unchanged", res)
+	}
+
+	out := logs.String()
+	if got := strings.Count(out, "without effect"); got != 1 {
+		t.Fatalf("warned %d times about inert settings, want once:\n%s", got, out)
+	}
+	if !strings.Contains(out, "key=asked.example.com fields=request_buffering") {
+		t.Errorf("want the warning for the host that asked, naming request_buffering:\n%s", out)
+	}
+}
