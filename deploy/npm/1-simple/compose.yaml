@@ -34,7 +34,7 @@ services:
       npm.proxy.port: "81"
 
   npmplus-docker-sync:
-    image: ghcr.io/ventumphoenix/npmplus-docker-sync:1.0.0-beta.11
+    image: ghcr.io/ventumphoenix/npmplus-docker-sync:1 # every 1.x release, no breaking changes
     container_name: npmplus-docker-sync
     restart: unless-stopped
     depends_on:

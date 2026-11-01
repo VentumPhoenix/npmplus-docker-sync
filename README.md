@@ -536,17 +536,12 @@ hosts Redth's tool created, set `MIGRATE_FROM_REDTH=true` — see
 
 ## 🗺️ Roadmap
 
-**1.0.0** — the label and marker format are final; what is left:
+**1.0.0** ✅ — labels, variables and the ownership marker are stable
+([what that means](docs/COMPATIBILITY.md#the-10-promise)).
 
-- [x] Ownership that survives NPMplus' meta-to-columns migration *(beta.10)*
-- [x] Server capabilities read from `/api/schema` *(beta.10)*
-- [x] Upgrade tests against real NPM and NPMplus containers *(beta.10)*
-- [x] Fixes from testing against the next NPMplus release *(beta.11)*
-- [ ] A few weeks of beta.11 in real use
-- [ ] The NPMplus release with the new API in the test matrix
+**Next** — in 1.x releases, without breaking changes:
 
-**After 1.0** — new features in 1.x releases, without breaking changes:
-
+- The next NPMplus release in the test matrix (its development branch is tested every night already)
 - Upstream modes: container name, or host IP with published ports
 - Waiting for a container to be healthy before publishing it (`NPM_WAIT_HEALTHY`)
 - Docker Swarm service labels

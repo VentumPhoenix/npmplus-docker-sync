@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-01
+
+The first stable release. Labels, environment variables, the ownership marker
+and the `/status` and `/metrics` output now follow semantic versioning - see
+[the 1.0 promise](docs/COMPATIBILITY.md#the-10-promise). Coming from a beta:
+nothing to do, see [MIGRATION.md](docs/MIGRATION.md). The image is available
+as `:1.0.0`, `:1.0`, `:1` and `:latest`.
+
 ### Changed
 
 - **Deployment examples in [deploy/](deploy/README.md)** replace the compose
@@ -771,7 +779,8 @@ Upstreams also change from container names to container IPs in 2.0. Set
 - Multi-stage `scratch` image running as `1000:1000`, published for
   linux/amd64, arm64 and arm/v7.
 
-[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.11...HEAD
+[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.11...v1.0.0
 [1.0.0-beta.11]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.10...v1.0.0-beta.11
 [1.0.0-beta.10]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.9...v1.0.0-beta.10
 [1.0.0-beta.9]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.8...v1.0.0-beta.9

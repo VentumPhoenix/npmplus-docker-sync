@@ -56,9 +56,11 @@ unhealthy the moment one is missing.
 - **The admin UI gets a proxy host** through the labels on the proxy manager
   container (`NPM_UI_DOMAIN`). Keep those labels — removing them makes the tool
   delete that host.
-- **Images:** the proxy managers use moving tags (`:latest`, `:2`) so the
-  examples start out current. Pin exact versions in production, and update this
-  tool before NPMplus ([why](../docs/MIGRATION.md)).
+- **Images:** this tool runs as `:1` — every 1.x release, never a breaking
+  change ([the 1.0 promise](../docs/COMPATIBILITY.md#the-10-promise)). The proxy
+  managers use moving tags (`:latest`, `:2`) so the examples start out current;
+  pin exact versions in production, and update this tool before NPMplus
+  ([why](../docs/MIGRATION.md)).
 - **Apps in other Compose projects** join the network as external:
 
   ```yaml
