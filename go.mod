@@ -6,7 +6,7 @@ require (
 	github.com/dlclark/regexp2 v1.12.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 )
 
 require (
