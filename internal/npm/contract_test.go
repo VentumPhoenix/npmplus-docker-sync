@@ -156,7 +156,8 @@ func TestPayloadsSatisfyTheAPISchemas(t *testing.T) {
 				// exactly the same verdicts on every field a payload decides
 				// about, or a server without a schema endpoint breaks.
 				_, hasMeta := schema[KindProxy]["meta"]
-				builtin := Dialect{Flavour: flavour, MetaRetired: !hasMeta}
+				_, renamed := schema[KindProxy][fieldDisableCrowdsec]
+				builtin := Dialect{Flavour: flavour, MetaRetired: !hasMeta, SwitchesRenamed: renamed}
 				assertSameVerdicts(t, Dialect{Flavour: flavour, Schema: schema}, builtin)
 				validateAgainst(t, builtin, ref)
 			})
@@ -194,6 +195,10 @@ var decidedFields = map[Kind][]string{
 		"caching_enabled", "allow_websocket_upgrade", "npmplus_directory", "npmplus_dns_challenge",
 		"npmplus_dns_provider", "npmplus_dns_provider_credentials", "npmplus_propagation_seconds",
 		"locations/npmplus_location_config",
+		"npmplus_crowdsec_appsec", "npmplus_proxy_request_buffering",
+		fieldDisableCrowdsec, fieldDisableRequestBuffering,
+		"locations/npmplus_crowdsec_appsec", "locations/npmplus_proxy_request_buffering",
+		"locations/" + fieldDisableCrowdsec, "locations/" + fieldDisableRequestBuffering,
 	},
 	KindRedirect: {
 		"meta", "advanced_config", "http2_support", "block_exploits", "npmplus_directory",
@@ -226,6 +231,17 @@ func assertSameVerdicts(t *testing.T, fromSchema, builtin Dialect) {
 		got, want := builtin.TypeOf(KindStream, fieldProxyProtocol), fromSchema.TypeOf(KindStream, fieldProxyProtocol)
 		if got != want {
 			t.Errorf("built-in knowledge types the proxy protocol as %q, the schema as %q", got, want)
+		}
+		for _, field := range []string{fieldResponseBuffering, "locations/" + fieldResponseBuffering} {
+			if got, want := builtin.TypeOf(KindProxy, field), fromSchema.TypeOf(KindProxy, field); got != want {
+				t.Errorf("built-in knowledge types %s as %q, the schema as %q", field, got, want)
+			}
+		}
+		for _, modifier := range []string{LocationPrefix, LocationNamed, LocationExact, "=", LocationPrefer, "^~"} {
+			got := builtin.AcceptsValue(KindProxy, fieldLocationType, modifier)
+			if want := fromSchema.AcceptsValue(KindProxy, fieldLocationType, modifier); got != want {
+				t.Errorf("built-in knowledge says a location accepts the modifier %q = %t, the schema says %t", modifier, got, want)
+			}
 		}
 	}
 }

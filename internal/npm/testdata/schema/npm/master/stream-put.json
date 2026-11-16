@@ -24,7 +24,7 @@
 				{
 					"description": "Domain Name",
 					"example": "example.com",
-					"pattern": "^(?:[^.*]+\\.?)+[^.]$",
+					"pattern": "^(?=[^\\s\\p{Cc};{}\"'#\\\\$/]+$)[^.*]+(?:\\.[^.*]+)*\\.?[^.]$",
 					"type": "string"
 				},
 				{

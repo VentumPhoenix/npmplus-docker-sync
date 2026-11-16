@@ -101,6 +101,8 @@ type Client struct {
 	// metaRetired records an NPMplus release without the meta object, as read
 	// from the hosts it returns; only consulted without a schema.
 	metaRetired bool
+	// switchesRenamed is Dialect.SwitchesRenamed, read the same way.
+	switchesRenamed bool
 	// lastProbe throttles re-detection after a schema rejection.
 	lastProbe time.Time
 
@@ -765,7 +767,10 @@ func (c *Client) dialectLocked() Dialect {
 	if flavour == "" || flavour == FlavourAuto {
 		flavour = FlavourNPMplus
 	}
-	return Dialect{Flavour: flavour, Version: c.version, Schema: c.schema, MetaRetired: c.metaRetired}
+	return Dialect{
+		Flavour: flavour, Version: c.version, Schema: c.schema,
+		MetaRetired: c.metaRetired, SwitchesRenamed: c.switchesRenamed,
+	}
 }
 
 // readVersion reads GET /api/ and remembers the version it reports. It runs

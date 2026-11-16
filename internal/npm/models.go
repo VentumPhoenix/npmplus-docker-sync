@@ -180,8 +180,14 @@ const (
 	AccessListGlobal = "global"
 )
 
-// Location modifiers. NPMplus stores the nginx prefix of a custom location
-// verbatim, including the trailing space it needs in the generated config.
+// AuthRequestGlobal is the forward authentication of a location that inherits
+// the one of its proxy host, the default since NPMplus 2026-11.
+const AuthRequestGlobal = "global"
+
+// Location modifiers. NPMplus stored the nginx prefix of a custom location
+// verbatim, including the trailing space it needs in the generated config,
+// and dropped that space in 2026-11. The model keeps the older spelling;
+// canonicalLocationType and locationTypeFor translate.
 const (
 	LocationPrefix = ""
 	LocationExact  = "= "
@@ -190,6 +196,17 @@ const (
 	LocationPrefer = "^~ "
 	LocationNamed  = "@"
 )
+
+// canonicalLocationType returns the model's spelling of a location modifier
+// as either generation of NPMplus reports it.
+func canonicalLocationType(value string) string {
+	switch trimmed := strings.TrimSpace(value); trimmed {
+	case "=", "~", "~*", "^~":
+		return trimmed + " "
+	default:
+		return trimmed
+	}
+}
 
 // MaxDescriptionLength is the limit NPMplus puts on `npmplus_description`.
 const MaxDescriptionLength = 255
@@ -218,6 +235,7 @@ func XFrameOptionsValue(value string) string {
 // structs decide which of them are sent. Three of them are inverted in the
 // API - `npmplus_crowdsec_appsec: true` *disables* the AppSec component - so
 // the model spells them out as Disable* and the label parser negates them.
+// NPMplus renamed two of them to say so in 2026-11; see renamedSwitches.
 type Location struct {
 	Path           string `json:"path"`
 	LocationType   string `json:"location_type"`
@@ -237,16 +255,45 @@ type Location struct {
 
 	// Enabled is nil when the server did not report it; a location without
 	// the flag is enabled.
-	Enabled                  *bool  `json:"npmplus_enabled,omitempty"`
-	NoIndex                  Flag   `json:"npmplus_noindex"`
-	DisableCrowdsecAppsec    Flag   `json:"npmplus_crowdsec_appsec"`
-	DisableRequestBuffering  Flag   `json:"npmplus_proxy_request_buffering"`
-	DisableResponseBuffering Flag   `json:"npmplus_proxy_response_buffering"`
-	UpstreamCompression      Flag   `json:"npmplus_upstream_compression"`
-	FancyIndex               Flag   `json:"npmplus_fancyindex"`
-	XFrameOptions            string `json:"npmplus_x_frame_options,omitempty"`
-	AuthRequest              string `json:"npmplus_auth_request,omitempty"`
-	AuthRequestUpstream      string `json:"npmplus_auth_request_upstream,omitempty"`
+	Enabled                  *bool        `json:"npmplus_enabled,omitempty"`
+	NoIndex                  Flag         `json:"npmplus_noindex"`
+	DisableCrowdsecAppsec    Flag         `json:"npmplus_crowdsec_appsec"`
+	DisableRequestBuffering  Flag         `json:"npmplus_proxy_request_buffering"`
+	DisableResponseBuffering BufferingOff `json:"npmplus_proxy_response_buffering"`
+	UpstreamCompression      Flag         `json:"npmplus_upstream_compression"`
+	FancyIndex               Flag         `json:"npmplus_fancyindex"`
+	XFrameOptions            string       `json:"npmplus_x_frame_options,omitempty"`
+	AuthRequest              string       `json:"npmplus_auth_request,omitempty"`
+	AuthRequestUpstream      string       `json:"npmplus_auth_request_upstream,omitempty"`
+
+	renamedSwitches
+}
+
+// renamedSwitches are the names NPMplus gave two of the inverted switches in
+// 2026-11. They are read into the model's own fields when a resource is
+// decoded and never kept here.
+type renamedSwitches struct {
+	RenamedCrowdsecAppsec   *Flag `json:"npmplus_disable_crowdsec_appsec,omitempty"`
+	RenamedRequestBuffering *Flag `json:"npmplus_disable_proxy_request_buffering,omitempty"`
+}
+
+// fold moves the renamed switches into the fields of the model.
+func (r *renamedSwitches) fold(crowdsec, requestBuffering *Flag) {
+	if r.RenamedCrowdsecAppsec != nil {
+		*crowdsec = *r.RenamedCrowdsecAppsec
+	}
+	if r.RenamedRequestBuffering != nil {
+		*requestBuffering = *r.RenamedRequestBuffering
+	}
+	*r = renamedSwitches{}
+}
+
+// normalize brings a location as the server reports it into the model's
+// spelling, whichever generation of NPMplus returned it.
+func (l *Location) normalize() {
+	l.fold(&l.DisableCrowdsecAppsec, &l.DisableRequestBuffering)
+	l.LocationType = canonicalLocationType(l.LocationType)
+	l.AccessListIDs, l.AccessLists = idsOf(l.AccessListIDs, l.AccessLists), nil
 }
 
 // stripPlus removes the NPMplus-only settings of a location block.
@@ -291,7 +338,8 @@ func (l *Location) cleanForwardOptions() {
 	if !l.DisableCrowdsecAppsec {
 		l.DisableRequestBuffering = false
 	}
-	if auth := strings.TrimSpace(l.AuthRequest); auth == "" || auth == "none" {
+	// "global" is a location inheriting the integration of its host.
+	if auth := strings.TrimSpace(l.AuthRequest); auth == "" || auth == "none" || auth == AuthRequestGlobal {
 		l.AuthRequestUpstream = ""
 	}
 }
@@ -425,6 +473,40 @@ func (f *Flag) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("enabled: %w", err)
 	}
 	*f = Flag(b)
+	return nil
+}
+
+// BufferingOff models NPMplus' `npmplus_proxy_response_buffering`. It was a
+// switch that turns the buffering off until 2026-11 and is a mode since:
+// on, ram_only or off, each as "_auto" (the upstream may override it with
+// X-Accel-Buffering, which is what the switch did) or "_forced".
+//
+// Labels only know on and off, so that is all the model keeps; every "off"
+// mode decodes to true and everything else to false.
+type BufferingOff bool
+
+// Response buffering modes written to a server that knows them.
+const (
+	bufferingOn  = "on_auto"
+	bufferingOff = "off_auto"
+)
+
+// MarshalJSON writes the switch, which keeps the fingerprint independent of
+// the server's generation; requests go through responseBufferingFor.
+func (b BufferingOff) MarshalJSON() ([]byte, error) { return json.Marshal(bool(b)) }
+
+// UnmarshalJSON accepts the switch in every spelling Flag does, and the modes.
+func (b *BufferingOff) UnmarshalJSON(data []byte) error {
+	var mode string
+	if json.Unmarshal(data, &mode) == nil && strings.Contains(mode, "_") {
+		*b = BufferingOff(strings.HasPrefix(mode, "off_"))
+		return nil
+	}
+	var flag Flag
+	if err := flag.UnmarshalJSON(data); err != nil {
+		return fmt.Errorf("response buffering: %w", err)
+	}
+	*b = BufferingOff(flag)
 	return nil
 }
 

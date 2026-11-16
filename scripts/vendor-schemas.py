@@ -43,12 +43,13 @@ REPOS = {
     "npm": "NginxProxyManager/nginx-proxy-manager",
 }
 
-# (kind, collection path segment, id placeholder used in the path tree)
+# (kind, collection path segment, id placeholders used in the path tree).
+# NPMplus renamed the placeholders to snake case in 2026-11.
 KINDS = [
-    ("proxy", "proxy-hosts", "hostID"),
-    ("redirect", "redirection-hosts", "hostID"),
-    ("stream", "streams", "streamID"),
-    ("dead", "dead-hosts", "hostID"),
+    ("proxy", "proxy-hosts", ("hostID", "host_id")),
+    ("redirect", "redirection-hosts", ("hostID", "host_id")),
+    ("stream", "streams", ("streamID", "stream_id")),
+    ("dead", "dead-hosts", ("hostID", "host_id")),
 ]
 
 
@@ -169,18 +170,20 @@ def vendor(flavour: str, ref: str) -> None:
     target = OUT / flavour / safe(ref)
     target.mkdir(parents=True, exist_ok=True)
 
-    for kind, collection, id_segment in KINDS:
-        for method, source in (
-            ("post", f"paths/nginx/{collection}/post.json"),
-            ("put", f"paths/nginx/{collection}/{id_segment}/put.json"),
+    for kind, collection, id_segments in KINDS:
+        for method, candidates in (
+            ("post", [f"paths/nginx/{collection}/post.json"]),
+            ("put", [f"paths/nginx/{collection}/{segment}/put.json" for segment in id_segments]),
         ):
-            if source not in files:
-                print(f"  skip {flavour}/{ref}/{kind}-{method}: {source} not in tree", file=sys.stderr)
-                continue
+            source = next((path for path in candidates if path in files), None)
+            if source is None:
+                # A missing schema must fail: a stale file left in place would
+                # keep the contract test green against a schema that is gone.
+                raise SystemExit(f"{flavour}/{ref}/{kind}-{method}: none of {candidates} in tree")
             schema = request_schema(files, source)
             schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
             out = target / f"{kind}-{method}.json"
-            out.write_text(json.dumps(schema, indent="\t", sort_keys=True) + "\n")
+            out.write_text(json.dumps(schema, indent="\t", sort_keys=True) + "\n", newline="\n")
             print(f"  wrote {out.relative_to(ROOT)}")
 
 
@@ -218,7 +221,7 @@ def main() -> int:
             vendor(flavour, ref)
             provenance.append(f"- `{flavour}/{safe(ref)}/` from https://github.com/{REPOS[flavour]} (`{ref}`)")
 
-    (OUT / "README.md").write_text("\n".join(provenance) + "\n")
+    (OUT / "README.md").write_text("\n".join(provenance) + "\n", newline="\n")
     return 0
 
 

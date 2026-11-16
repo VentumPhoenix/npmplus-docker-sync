@@ -40,6 +40,13 @@ var columnFields = []string{
 	"npmplus_dns_provider_credentials", "npmplus_propagation_seconds",
 }
 
+// renamedFields are the names NPMplus gave two inverted switches of a proxy
+// host and of its locations in 2026-11, legacySwitchFields the ones before.
+var (
+	renamedFields      = []string{fieldDisableCrowdsec, fieldDisableRequestBuffering}
+	legacySwitchFields = []string{"npmplus_crowdsec_appsec", "npmplus_proxy_request_buffering"}
+)
+
 // Accepts reports whether a create/update body of the kind may carry the
 // field. The schema read from the server decides when there is one; without it
 // the answer comes from what is known about the flavour and its releases.
@@ -66,6 +73,14 @@ func (d Dialect) TypeOf(kind Kind, field string) string {
 		}
 		return "boolean"
 	}
+	// The response buffering of a proxy host became a mode when the switches
+	// next to it were renamed.
+	if d.Flavour == FlavourNPMplus && kind == KindProxy && strings.TrimPrefix(field, "locations/") == fieldResponseBuffering {
+		if d.SwitchesRenamed {
+			return "string"
+		}
+		return "boolean"
+	}
 	return ""
 }
 
@@ -86,6 +101,11 @@ func (d Dialect) AcceptsValue(kind Kind, field, value string) bool {
 		case d.MetaRetired:
 			return value != SchemeAuto
 		}
+	}
+	// A location modifier lost its trailing space with the renamed switches;
+	// the plain prefix and "@" never had one.
+	if kind == KindProxy && field == fieldLocationType && value != LocationPrefix && value != LocationNamed {
+		return strings.HasSuffix(value, " ") != d.SwitchesRenamed
 	}
 	return true
 }
@@ -118,6 +138,10 @@ func (d Dialect) assumes(kind Kind, field string) bool {
 	switch {
 	case field == "meta", field == "locations/npmplus_location_config":
 		return !retired
+	case slices.Contains(renamedFields, strings.TrimPrefix(field, "locations/")):
+		return d.SwitchesRenamed
+	case slices.Contains(legacySwitchFields, strings.TrimPrefix(field, "locations/")):
+		return !d.SwitchesRenamed
 	case slices.Contains(columnFields, field):
 		return retired
 	case kind == KindProxy && slices.Contains(legacyProxySwitches, field):

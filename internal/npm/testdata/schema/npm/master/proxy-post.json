@@ -50,7 +50,7 @@
 				"www.example.com"
 			],
 			"items": {
-				"pattern": "^[^&| @!#%^();:/\\\\}{=+?<>,~`'\"]+$",
+				"pattern": "^[^&| @!#%^();:/\\\\}{=+?<>,~`'\"\\s\\p{Cc}]+$",
 				"type": "string"
 			},
 			"maxItems": 100,
@@ -67,6 +67,7 @@
 			"example": "127.0.0.1",
 			"maxLength": 255,
 			"minLength": 1,
+			"pattern": "^[^\\s\\p{Cc};{}\"'#\\\\$/]+(?:/[^\\s\\p{Cc};{}\"'#\\\\]*)?$",
 			"type": "string"
 		},
 		"forward_port": {
@@ -124,9 +125,11 @@
 						"example": "127.0.0.1",
 						"maxLength": 255,
 						"minLength": 1,
+						"pattern": "^[^\\s\\p{Cc};{}\"'#\\\\$/]+(?:/[^\\s\\p{Cc};{}\"'#\\\\]*)?$",
 						"type": "string"
 					},
 					"forward_path": {
+						"pattern": "^[^\\s\\p{Cc};{}\"'#\\\\]*$",
 						"type": "string"
 					},
 					"forward_port": {
@@ -151,6 +154,7 @@
 					},
 					"path": {
 						"minLength": 1,
+						"pattern": "^(?!(?:=|~\\*?|\\^~)$)(?:(?:=|~\\*?|\\^~) +)?(?:\"(?:[^\"\\\\\\p{Cc}]|\\\\[^\\p{Cc}])+\"|(?:[^\\s\\p{Cc};{}\"'#\\\\]|\\\\[^\\s\\p{Cc}])+)$",
 						"type": "string"
 					}
 				},

@@ -103,10 +103,12 @@ func TestCapabilitiesFallBackToTheHostShape(t *testing.T) {
 		name        string
 		proxyHosts  string
 		wantRetired bool
+		wantRenamed bool
 	}{
-		{"meta object", `[{"id":1,"npmplus_access_list_ids":[],"meta":{}}]`, false},
-		{"group column", `[{"id":1,"npmplus_access_list_ids":[],"npmplus_directory":""}]`, true},
-		{"no host to look at", `[]`, false},
+		{"meta object", `[{"id":1,"npmplus_access_list_ids":[],"meta":{}}]`, false, false},
+		{"group column", `[{"id":1,"npmplus_access_list_ids":[],"npmplus_directory":""}]`, true, false},
+		{"renamed switches", `[{"id":1,"npmplus_access_list_ids":[],"npmplus_directory":"","npmplus_disable_crowdsec_appsec":false}]`, true, true},
+		{"no host to look at", `[]`, false, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -121,6 +123,9 @@ func TestCapabilitiesFallBackToTheHostShape(t *testing.T) {
 			if dialect.Schema != nil || dialect.MetaRetired != tc.wantRetired {
 				t.Errorf("Dialect() = schema %v, meta retired %t; want no schema, %t",
 					dialect.Schema != nil, dialect.MetaRetired, tc.wantRetired)
+			}
+			if dialect.SwitchesRenamed != tc.wantRenamed {
+				t.Errorf("Dialect().SwitchesRenamed = %t, want %t", dialect.SwitchesRenamed, tc.wantRenamed)
 			}
 		})
 	}

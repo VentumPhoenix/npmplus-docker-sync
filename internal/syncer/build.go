@@ -46,7 +46,7 @@ func BuildResource(t *docker.Target, certificate npm.CertificateID, instance, pr
 			NoIndex:                  npm.Flag(t.NoIndex),
 			DisableCrowdsecAppsec:    npm.Flag(!t.CrowdsecAppsec),
 			DisableRequestBuffering:  npm.Flag(!t.RequestBuffering),
-			DisableResponseBuffering: npm.Flag(!t.ResponseBuffering),
+			DisableResponseBuffering: npm.BufferingOff(!t.ResponseBuffering),
 			UpstreamCompression:      npm.Flag(t.UpstreamCompression),
 			FancyIndex:               npm.Flag(t.FancyIndex),
 			XFrameOptions:            t.XFrameOptions,

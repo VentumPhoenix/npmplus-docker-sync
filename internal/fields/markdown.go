@@ -125,6 +125,11 @@ value is negated on the way into the API:
 
 The explicit spellings ` + "`disable_crowdsec_appsec`" + `, ` + "`disable_request_buffering`" + ` and
 ` + "`disable_response_buffering`" + ` are accepted too and mean the opposite.
+
+NPMplus releases from 2026-11 on call the first two ` + "`npmplus_disable_crowdsec_appsec`" + ` and
+` + "`npmplus_disable_proxy_request_buffering`" + `, and store the response buffering as a mode:
+` + "`response_buffering: true`" + ` writes ` + "`on_auto`" + `, ` + "`false`" + ` writes ` + "`off_auto`" + `. The labels are
+the same for every release; the tool writes what the server it talks to expects.
 `)
 	return sb.String()
 }

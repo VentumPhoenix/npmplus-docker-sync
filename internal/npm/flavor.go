@@ -133,11 +133,11 @@ func (c *Client) DetectFlavour(ctx context.Context) (Flavour, error) {
 // it returns. hosts may carry a listing the caller already fetched.
 func (c *Client) readCapabilities(ctx context.Context, hosts []map[string]json.RawMessage) {
 	schema, schemaErr := c.fetchWriteSchema(ctx)
-	retired, conclusive := false, false
+	retired, renamed, conclusive := false, false, false
 	if schemaErr != nil {
 		c.log.Debug("the npm api serves no usable schema, falling back to the host shape",
 			slog.String("error", schemaErr.Error()))
-		retired, conclusive = c.metaRetiredFromHosts(ctx, hosts)
+		retired, renamed, conclusive = c.metaRetiredFromHosts(ctx, hosts)
 	}
 
 	c.mu.Lock()
@@ -145,6 +145,7 @@ func (c *Client) readCapabilities(ctx context.Context, hosts []map[string]json.R
 	c.schema = schema
 	if schema != nil || conclusive {
 		c.metaRetired = retired
+		c.switchesRenamed = renamed
 	}
 	current := c.dialectLocked()
 	c.mu.Unlock()
@@ -177,8 +178,9 @@ func (c *Client) fetchWriteSchema(ctx context.Context) (WriteSchema, error) {
 }
 
 // metaRetiredFromHosts inspects the proxy hosts the server returns, listing
-// them first when the caller has not.
-func (c *Client) metaRetiredFromHosts(ctx context.Context, hosts []map[string]json.RawMessage) (retired, conclusive bool) {
+// them first when the caller has not. renamed reports the release that renamed
+// the inverted switches, see Dialect.SwitchesRenamed.
+func (c *Client) metaRetiredFromHosts(ctx context.Context, hosts []map[string]json.RawMessage) (retired, renamed, conclusive bool) {
 	if hosts == nil {
 		if err := c.do(ctx, http.MethodGet, KindProxy.Path(), nil, &hosts); err != nil && !IsNotFound(err) {
 			c.log.Debug("could not list proxy hosts", slog.String("error", err.Error()))
@@ -186,10 +188,11 @@ func (c *Client) metaRetiredFromHosts(ctx context.Context, hosts []map[string]js
 	}
 	for _, host := range hosts {
 		if retired, conclusive = metaRetiredFrom(host); conclusive {
-			return retired, true
+			_, renamed = host[fieldDisableCrowdsec]
+			return retired, renamed, true
 		}
 	}
-	return false, false
+	return false, false, false
 }
 
 // probeFlavour runs the detection without touching the client state. It hands
@@ -314,6 +317,11 @@ type Dialect struct {
 	// MetaRetired records an NPMplus release that moved the meta object into
 	// columns. Only consulted without a schema.
 	MetaRetired bool
+	// SwitchesRenamed records an NPMplus release from 2026-11 on, which
+	// renamed the inverted switches of a proxy host, made its response
+	// buffering a mode and stores location modifiers without the trailing
+	// space. Only consulted without a schema.
+	SwitchesRenamed bool
 }
 
 // SupportsTrustForwardedProto reports whether proxy hosts accept

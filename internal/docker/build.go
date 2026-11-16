@@ -471,7 +471,7 @@ func buildLocation(t *Target, f fieldSet, n int, values map[string]string) (npm.
 		NoIndex:                  npm.Flag(noIndex),
 		DisableCrowdsecAppsec:    npm.Flag(!crowdsec),
 		DisableRequestBuffering:  npm.Flag(!requestBuffering),
-		DisableResponseBuffering: npm.Flag(!responseBuffering),
+		DisableResponseBuffering: npm.BufferingOff(!responseBuffering),
 		UpstreamCompression:      npm.Flag(upstreamCompression),
 		FancyIndex:               npm.Flag(fancyIndex),
 		XFrameOptions:            xFrame,

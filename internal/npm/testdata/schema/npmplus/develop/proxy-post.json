@@ -149,7 +149,10 @@
 											"properties": {
 												"npmplus_auth_request": {
 													"not": {
-														"const": "none"
+														"enum": [
+															"none",
+															"global"
+														]
 													}
 												}
 											},
@@ -321,13 +324,13 @@
 					},
 					"then": {
 						"properties": {
-							"npmplus_proxy_request_buffering": {
+							"npmplus_disable_proxy_request_buffering": {
 								"const": false,
 								"type": "boolean"
 							},
 							"npmplus_proxy_response_buffering": {
-								"const": false,
-								"type": "boolean"
+								"const": "on_auto",
+								"type": "string"
 							}
 						}
 					}
@@ -377,24 +380,24 @@
 				{
 					"if": {
 						"properties": {
-							"npmplus_proxy_request_buffering": {
+							"npmplus_disable_proxy_request_buffering": {
 								"const": true,
 								"type": "boolean"
 							}
 						},
 						"required": [
-							"npmplus_proxy_request_buffering"
+							"npmplus_disable_proxy_request_buffering"
 						]
 					},
 					"then": {
 						"properties": {
-							"npmplus_crowdsec_appsec": {
+							"npmplus_disable_crowdsec_appsec": {
 								"const": true,
 								"type": "boolean"
 							}
 						},
 						"required": [
-							"npmplus_crowdsec_appsec"
+							"npmplus_disable_crowdsec_appsec"
 						]
 					}
 				},
@@ -402,7 +405,10 @@
 					"if": {
 						"properties": {
 							"npmplus_auth_request": {
-								"const": "none"
+								"enum": [
+									"none",
+									"global"
+								]
 							}
 						}
 					},
@@ -488,7 +494,7 @@
 			"items": {
 				"maxLength": 253,
 				"minLength": 1,
-				"pattern": "^(~\\S*|(?!.*:[0-9]+$)[^\\s/]+)$",
+				"pattern": "^(~\\S*|(?!.*:[0-9]+$)[^\\s/\\\\?#%]+)$",
 				"type": "string"
 			},
 			"maxItems": 100,
@@ -594,13 +600,13 @@
 								},
 								"then": {
 									"properties": {
-										"npmplus_proxy_request_buffering": {
+										"npmplus_disable_proxy_request_buffering": {
 											"const": false,
 											"type": "boolean"
 										},
 										"npmplus_proxy_response_buffering": {
-											"const": false,
-											"type": "boolean"
+											"const": "on_auto",
+											"type": "string"
 										}
 									}
 								}
@@ -650,24 +656,24 @@
 							{
 								"if": {
 									"properties": {
-										"npmplus_proxy_request_buffering": {
+										"npmplus_disable_proxy_request_buffering": {
 											"const": true,
 											"type": "boolean"
 										}
 									},
 									"required": [
-										"npmplus_proxy_request_buffering"
+										"npmplus_disable_proxy_request_buffering"
 									]
 								},
 								"then": {
 									"properties": {
-										"npmplus_crowdsec_appsec": {
+										"npmplus_disable_crowdsec_appsec": {
 											"const": true,
 											"type": "boolean"
 										}
 									},
 									"required": [
-										"npmplus_crowdsec_appsec"
+										"npmplus_disable_crowdsec_appsec"
 									]
 								}
 							},
@@ -675,7 +681,10 @@
 								"if": {
 									"properties": {
 										"npmplus_auth_request": {
-											"const": "none"
+											"enum": [
+												"none",
+												"global"
+											]
 										}
 									}
 								},
@@ -767,10 +776,11 @@
 						"enum": [
 							"",
 							"@",
-							"= ",
-							"~ ",
-							"~* ",
-							"^~ "
+							"$",
+							"=",
+							"~",
+							"~*",
+							"^~"
 						],
 						"type": "string"
 					},
@@ -794,8 +804,9 @@
 						"type": "string"
 					},
 					"npmplus_auth_request": {
-						"default": "none",
+						"default": "global",
 						"enum": [
+							"global",
 							"none",
 							"anubis",
 							"tinyauth",
@@ -805,7 +816,7 @@
 							"authentik",
 							"authentik-send-basic-auth"
 						],
-						"example": "none",
+						"example": "global",
 						"type": "string"
 					},
 					"npmplus_auth_request_upstream": {
@@ -815,9 +826,15 @@
 						"pattern": "^(https?://(([^\\s/:]+|\\[[a-fA-F0-9:]+\\]):[0-9]+|cu_[^\\s/:]+))?$",
 						"type": "string"
 					},
-					"npmplus_crowdsec_appsec": {
+					"npmplus_disable_crowdsec_appsec": {
 						"default": false,
 						"description": "Disable Crowdsec Appsec",
+						"example": false,
+						"type": "boolean"
+					},
+					"npmplus_disable_proxy_request_buffering": {
+						"default": false,
+						"description": "Disable Request Buffering",
 						"example": false,
 						"type": "boolean"
 					},
@@ -839,17 +856,19 @@
 						"example": false,
 						"type": "boolean"
 					},
-					"npmplus_proxy_request_buffering": {
-						"default": false,
-						"description": "Disable Request Buffering",
-						"example": false,
-						"type": "boolean"
-					},
 					"npmplus_proxy_response_buffering": {
-						"default": false,
-						"description": "Disable Response Buffering",
-						"example": false,
-						"type": "boolean"
+						"default": "on_auto",
+						"description": "Response Buffering",
+						"enum": [
+							"on_auto",
+							"on_forced",
+							"ram_only_auto",
+							"ram_only_forced",
+							"off_auto",
+							"off_forced"
+						],
+						"example": "on_auto",
+						"type": "string"
 					},
 					"npmplus_upstream_compression": {
 						"default": false,
@@ -922,18 +941,24 @@
 			"pattern": "^(https?://(([^\\s/:]+|\\[[a-fA-F0-9:]+\\]):[0-9]+|cu_[^\\s/:]+))?$",
 			"type": "string"
 		},
-		"npmplus_crowdsec_appsec": {
-			"default": false,
-			"description": "Disable Crowdsec Appsec",
-			"example": false,
-			"type": "boolean"
-		},
 		"npmplus_directory": {
 			"default": "",
 			"description": "Directory to group this host in the UI",
 			"example": "Production",
 			"maxLength": 255,
 			"type": "string"
+		},
+		"npmplus_disable_crowdsec_appsec": {
+			"default": false,
+			"description": "Disable Crowdsec Appsec",
+			"example": false,
+			"type": "boolean"
+		},
+		"npmplus_disable_proxy_request_buffering": {
+			"default": false,
+			"description": "Disable Request Buffering",
+			"example": false,
+			"type": "boolean"
 		},
 		"npmplus_dns_challenge": {
 			"default": false,
@@ -1005,17 +1030,19 @@
 			"minimum": 0,
 			"type": "integer"
 		},
-		"npmplus_proxy_request_buffering": {
-			"default": false,
-			"description": "Disable Request Buffering",
-			"example": false,
-			"type": "boolean"
-		},
 		"npmplus_proxy_response_buffering": {
-			"default": false,
-			"description": "Disable Response Buffering",
-			"example": false,
-			"type": "boolean"
+			"default": "on_auto",
+			"description": "Response Buffering",
+			"enum": [
+				"on_auto",
+				"on_forced",
+				"ram_only_auto",
+				"ram_only_forced",
+				"off_auto",
+				"off_forced"
+			],
+			"example": "on_auto",
+			"type": "string"
 		},
 		"npmplus_reuse_key": {
 			"default": false,

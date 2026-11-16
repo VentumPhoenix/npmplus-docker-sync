@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Proxy hosts on the NPMplus development branch (the release after
+  `2026-10-22-r1`) are written again.** It renamed `npmplus_crowdsec_appsec`
+  and `npmplus_proxy_request_buffering` to `npmplus_disable_*`, turned the
+  response buffering into a mode (`on_auto`, `off_auto`, ...), stores location
+  modifiers without their trailing space and lets a location inherit its
+  forward authentication (`global`). Every create and update of a proxy host
+  failed there with `400 data must NOT have additional properties`. The tool
+  reads which spelling the server expects from its schema, so the labels stay
+  as they are and older releases keep working.
+
 ## [1.0.0] - 2026-11-01
 
 The first stable release. Labels, environment variables, the ownership marker

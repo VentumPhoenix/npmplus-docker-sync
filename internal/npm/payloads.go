@@ -49,16 +49,76 @@ type locationPayloadNPMplus struct {
 	AccessListIDs  []int   `json:"npmplus_access_list_ids"`
 	AccessListType string  `json:"npmplus_access_list_type"`
 
-	Enabled                  Flag   `json:"npmplus_enabled"`
-	NoIndex                  Flag   `json:"npmplus_noindex"`
-	DisableCrowdsecAppsec    Flag   `json:"npmplus_crowdsec_appsec"`
-	DisableRequestBuffering  Flag   `json:"npmplus_proxy_request_buffering"`
-	DisableResponseBuffering Flag   `json:"npmplus_proxy_response_buffering"`
-	UpstreamCompression      Flag   `json:"npmplus_upstream_compression"`
-	FancyIndex               Flag   `json:"npmplus_fancyindex"`
-	XFrameOptions            string `json:"npmplus_x_frame_options,omitempty"`
-	AuthRequest              string `json:"npmplus_auth_request,omitempty"`
-	AuthRequestUpstream      string `json:"npmplus_auth_request_upstream"`
+	Enabled Flag `json:"npmplus_enabled"`
+	NoIndex Flag `json:"npmplus_noindex"`
+	invertedSwitches
+	UpstreamCompression Flag   `json:"npmplus_upstream_compression"`
+	FancyIndex          Flag   `json:"npmplus_fancyindex"`
+	XFrameOptions       string `json:"npmplus_x_frame_options,omitempty"`
+	AuthRequest         string `json:"npmplus_auth_request,omitempty"`
+	AuthRequestUpstream string `json:"npmplus_auth_request_upstream"`
+}
+
+// invertedSwitches are the three switches of a proxy host and of each of its
+// locations that turn something off. NPMplus renamed the first two in 2026-11
+// (`npmplus_disable_*`) and made the third a mode; switchesFor fills in the
+// names and the type the server declares.
+type invertedSwitches struct {
+	CrowdsecAppsec          *Flag `json:"npmplus_crowdsec_appsec,omitempty"`
+	RequestBuffering        *Flag `json:"npmplus_proxy_request_buffering,omitempty"`
+	DisableCrowdsecAppsec   *Flag `json:"npmplus_disable_crowdsec_appsec,omitempty"`
+	DisableRequestBuffering *Flag `json:"npmplus_disable_proxy_request_buffering,omitempty"`
+	ResponseBuffering       any   `json:"npmplus_proxy_response_buffering"`
+}
+
+// Properties of the inverted switches NPMplus changed in 2026-11.
+const (
+	fieldDisableCrowdsec         = "npmplus_disable_crowdsec_appsec"
+	fieldDisableRequestBuffering = "npmplus_disable_proxy_request_buffering"
+	fieldResponseBuffering       = "npmplus_proxy_response_buffering"
+	fieldLocationType            = "locations/location_type"
+)
+
+// switchesFor writes the inverted switches the way the server declares them.
+// scope is "" for the host and "locations/" for one of its locations.
+func switchesFor(d Dialect, scope string, crowdsec, requestBuffering Flag, responseBuffering BufferingOff) invertedSwitches {
+	var out invertedSwitches
+	if d.Accepts(KindProxy, scope+fieldDisableCrowdsec) {
+		out.DisableCrowdsecAppsec = &crowdsec
+	} else {
+		out.CrowdsecAppsec = &crowdsec
+	}
+	if d.Accepts(KindProxy, scope+fieldDisableRequestBuffering) {
+		out.DisableRequestBuffering = &requestBuffering
+	} else {
+		out.RequestBuffering = &requestBuffering
+	}
+	out.ResponseBuffering = responseBufferingFor(d, scope, responseBuffering)
+	return out
+}
+
+// responseBufferingFor writes the response buffering as the switch or as the
+// mode, whichever the server declares. The "_auto" modes are what the switch
+// stood for.
+func responseBufferingFor(d Dialect, scope string, off BufferingOff) any {
+	if d.TypeOf(KindProxy, scope+fieldResponseBuffering) != "string" {
+		return bool(off)
+	}
+	if off {
+		return bufferingOff
+	}
+	return bufferingOn
+}
+
+// locationTypeFor spells a location modifier the way the server stores it:
+// with the trailing space of the nginx config, or without it since 2026-11.
+func locationTypeFor(d Dialect, locationType string) string {
+	trimmed := strings.TrimSpace(locationType)
+	if trimmed != locationType && d.AcceptsValue(KindProxy, fieldLocationType, trimmed) &&
+		!d.AcceptsValue(KindProxy, fieldLocationType, locationType) {
+		return trimmed
+	}
+	return locationType
 }
 
 type locationPayloadNPM struct {
@@ -90,15 +150,13 @@ type proxyPayloadNPMplus struct {
 	LocationConfig        string                   `json:"npmplus_location_config"`
 	Locations             []locationPayloadNPMplus `json:"locations"`
 
-	NoIndex                  Flag   `json:"npmplus_noindex"`
-	DisableCrowdsecAppsec    Flag   `json:"npmplus_crowdsec_appsec"`
-	DisableRequestBuffering  Flag   `json:"npmplus_proxy_request_buffering"`
-	DisableResponseBuffering Flag   `json:"npmplus_proxy_response_buffering"`
-	UpstreamCompression      Flag   `json:"npmplus_upstream_compression"`
-	FancyIndex               Flag   `json:"npmplus_fancyindex"`
-	XFrameOptions            string `json:"npmplus_x_frame_options,omitempty"`
-	AuthRequest              string `json:"npmplus_auth_request,omitempty"`
-	AuthRequestUpstream      string `json:"npmplus_auth_request_upstream"`
+	NoIndex Flag `json:"npmplus_noindex"`
+	invertedSwitches
+	UpstreamCompression Flag   `json:"npmplus_upstream_compression"`
+	FancyIndex          Flag   `json:"npmplus_fancyindex"`
+	XFrameOptions       string `json:"npmplus_x_frame_options,omitempty"`
+	AuthRequest         string `json:"npmplus_auth_request,omitempty"`
+	AuthRequestUpstream string `json:"npmplus_auth_request_upstream"`
 
 	*npmplusColumns
 	Meta Meta `json:"meta,omitempty"`
@@ -209,25 +267,23 @@ func (h *ProxyHost) Payload(dialect Dialect) (any, error) {
 			locationIDs = l.AccessListIDs
 		}
 		locations = append(locations, locationPayloadNPMplus{
-			Path:                     l.Path,
-			LocationType:             l.LocationType,
-			ForwardScheme:            l.ForwardScheme,
-			ForwardHost:              l.ForwardHost,
-			ForwardPort:              l.ForwardPort,
-			AdvancedConfig:           l.AdvancedConfig,
-			LocationConfig:           textIf(dialect, KindProxy, "locations/npmplus_location_config", l.LocationConfig),
-			AccessListIDs:            idList(locationIDs),
-			AccessListType:           listType,
-			Enabled:                  Flag(l.IsEnabled()),
-			NoIndex:                  l.NoIndex,
-			DisableCrowdsecAppsec:    l.DisableCrowdsecAppsec,
-			DisableRequestBuffering:  l.DisableRequestBuffering,
-			DisableResponseBuffering: l.DisableResponseBuffering,
-			UpstreamCompression:      l.UpstreamCompression,
-			FancyIndex:               l.FancyIndex,
-			XFrameOptions:            l.XFrameOptions,
-			AuthRequest:              l.AuthRequest,
-			AuthRequestUpstream:      l.AuthRequestUpstream,
+			Path:                l.Path,
+			LocationType:        locationTypeFor(dialect, l.LocationType),
+			ForwardScheme:       l.ForwardScheme,
+			ForwardHost:         l.ForwardHost,
+			ForwardPort:         l.ForwardPort,
+			AdvancedConfig:      l.AdvancedConfig,
+			LocationConfig:      textIf(dialect, KindProxy, "locations/npmplus_location_config", l.LocationConfig),
+			AccessListIDs:       idList(locationIDs),
+			AccessListType:      listType,
+			Enabled:             Flag(l.IsEnabled()),
+			NoIndex:             l.NoIndex,
+			invertedSwitches:    switchesFor(dialect, "locations/", l.DisableCrowdsecAppsec, l.DisableRequestBuffering, l.DisableResponseBuffering),
+			UpstreamCompression: l.UpstreamCompression,
+			FancyIndex:          l.FancyIndex,
+			XFrameOptions:       l.XFrameOptions,
+			AuthRequest:         l.AuthRequest,
+			AuthRequestUpstream: l.AuthRequestUpstream,
 		})
 	}
 	forward := h.forwardOptions()
@@ -252,15 +308,13 @@ func (h *ProxyHost) Payload(dialect Dialect) (any, error) {
 		LocationConfig:        h.LocationConfig,
 		Locations:             locations,
 
-		NoIndex:                  h.NoIndex,
-		DisableCrowdsecAppsec:    h.DisableCrowdsecAppsec,
-		DisableRequestBuffering:  forward.DisableRequestBuffering,
-		DisableResponseBuffering: forward.DisableResponseBuffering,
-		UpstreamCompression:      forward.UpstreamCompression,
-		FancyIndex:               forward.FancyIndex,
-		XFrameOptions:            h.XFrameOptions,
-		AuthRequest:              h.AuthRequest,
-		AuthRequestUpstream:      forward.AuthRequestUpstream,
+		NoIndex:             h.NoIndex,
+		invertedSwitches:    switchesFor(dialect, "", h.DisableCrowdsecAppsec, forward.DisableRequestBuffering, forward.DisableResponseBuffering),
+		UpstreamCompression: forward.UpstreamCompression,
+		FancyIndex:          forward.FancyIndex,
+		XFrameOptions:       h.XFrameOptions,
+		AuthRequest:         h.AuthRequest,
+		AuthRequestUpstream: forward.AuthRequestUpstream,
 
 		npmplusColumns: columnsFor(dialect, KindProxy, h.Meta, h.CertificateID),
 		Meta:           metaForWrite(dialect, KindProxy, h.Meta),

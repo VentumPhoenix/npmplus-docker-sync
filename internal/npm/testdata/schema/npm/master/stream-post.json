@@ -25,7 +25,7 @@
 				"www.example.com"
 			],
 			"items": {
-				"pattern": "^[^&| @!#%^();:/\\\\}{=+?<>,~`'\"]+$",
+				"pattern": "^[^&| @!#%^();:/\\\\}{=+?<>,~`'\"\\s\\p{Cc}]+$",
 				"type": "string"
 			},
 			"maxItems": 100,
@@ -38,7 +38,7 @@
 				{
 					"description": "Domain Name",
 					"example": "example.com",
-					"pattern": "^(?:[^.*]+\\.?)+[^.]$",
+					"pattern": "^(?=[^\\s\\p{Cc};{}\"'#\\\\$/]+$)[^.*]+(?:\\.[^.*]+)*\\.?[^.]$",
 					"type": "string"
 				},
 				{

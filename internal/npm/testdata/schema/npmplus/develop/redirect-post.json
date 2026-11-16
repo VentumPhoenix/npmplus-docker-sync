@@ -149,7 +149,10 @@
 											"properties": {
 												"npmplus_auth_request": {
 													"not": {
-														"const": "none"
+														"enum": [
+															"none",
+															"global"
+														]
 													}
 												}
 											},
@@ -312,7 +315,7 @@
 			"items": {
 				"maxLength": 253,
 				"minLength": 1,
-				"pattern": "^(~\\S*|(?!.*:[0-9]+$)[^\\s/]+)$",
+				"pattern": "^(~\\S*|(?!.*:[0-9]+$)[^\\s/\\\\?#%]+)$",
 				"type": "string"
 			},
 			"maxItems": 100,

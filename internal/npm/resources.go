@@ -150,16 +150,17 @@ type ProxyHost struct {
 	// NPMplus extensions. The three Disable* switches are inverted in the
 	// API (`npmplus_crowdsec_appsec: true` turns the AppSec component off),
 	// which is why the model spells them out that way.
-	NoIndex                  Flag   `json:"npmplus_noindex"`
-	DisableCrowdsecAppsec    Flag   `json:"npmplus_crowdsec_appsec"`
-	DisableRequestBuffering  Flag   `json:"npmplus_proxy_request_buffering"`
-	DisableResponseBuffering Flag   `json:"npmplus_proxy_response_buffering"`
-	UpstreamCompression      Flag   `json:"npmplus_upstream_compression"`
-	FancyIndex               Flag   `json:"npmplus_fancyindex"`
-	XFrameOptions            string `json:"npmplus_x_frame_options"`
-	AuthRequest              string `json:"npmplus_auth_request"`
-	AuthRequestUpstream      string `json:"npmplus_auth_request_upstream"`
-	LocationConfig           string `json:"npmplus_location_config"`
+	NoIndex                  Flag         `json:"npmplus_noindex"`
+	DisableCrowdsecAppsec    Flag         `json:"npmplus_crowdsec_appsec"`
+	DisableRequestBuffering  Flag         `json:"npmplus_proxy_request_buffering"`
+	DisableResponseBuffering BufferingOff `json:"npmplus_proxy_response_buffering"`
+	UpstreamCompression      Flag         `json:"npmplus_upstream_compression"`
+	FancyIndex               Flag         `json:"npmplus_fancyindex"`
+	XFrameOptions            string       `json:"npmplus_x_frame_options"`
+	AuthRequest              string       `json:"npmplus_auth_request"`
+	AuthRequestUpstream      string       `json:"npmplus_auth_request_upstream"`
+	LocationConfig           string       `json:"npmplus_location_config"`
+	renamedSwitches
 
 	// Access lists: upstream NPM has a single `access_list_id`, NPMplus a
 	// list plus an explicit type. Both spellings are decoded so a host can be
@@ -212,9 +213,9 @@ func (h *ProxyHost) UnmarshalJSON(data []byte) error {
 		h.OwnerMarker = true
 	}
 	h.AccessListIDs, h.AccessLists = idsOf(h.AccessListIDs, h.AccessLists), nil
+	h.fold(&h.DisableCrowdsecAppsec, &h.DisableRequestBuffering)
 	for i := range h.Locations {
-		l := &h.Locations[i]
-		l.AccessListIDs, l.AccessLists = idsOf(l.AccessListIDs, l.AccessLists), nil
+		h.Locations[i].normalize()
 	}
 	return nil
 }
@@ -377,7 +378,7 @@ func (h *ProxyHost) Fingerprint() string {
 		NoIndex:             h.NoIndex,
 		CrowdsecOff:         h.DisableCrowdsecAppsec,
 		RequestBufferingOff: forward.DisableRequestBuffering,
-		ResponseBufferOff:   forward.DisableResponseBuffering,
+		ResponseBufferOff:   Flag(forward.DisableResponseBuffering),
 		UpstreamCompression: forward.UpstreamCompression,
 		FancyIndex:          forward.FancyIndex,
 		XFrameOptions:       strings.TrimSpace(h.XFrameOptions),

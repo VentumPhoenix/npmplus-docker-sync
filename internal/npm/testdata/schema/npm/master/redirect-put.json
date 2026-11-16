@@ -35,7 +35,7 @@
 				"www.example.com"
 			],
 			"items": {
-				"pattern": "^[^&| @!#%^();:/\\\\}{=+?<>,~`'\"]+$",
+				"pattern": "^[^&| @!#%^();:/\\\\}{=+?<>,~`'\"\\s\\p{Cc}]+$",
 				"type": "string"
 			},
 			"maxItems": 100,
@@ -46,7 +46,7 @@
 		"forward_domain_name": {
 			"description": "Domain Name",
 			"example": "jc21.com",
-			"pattern": "^(?:[^.*]+\\.?)+[^.]$",
+			"pattern": "^(?=[^\\s\\p{Cc};{}\"'#\\\\]+$)[^.*]+(?:\\.[^.*]+)*\\.?[^.]$",
 			"type": "string"
 		},
 		"forward_http_code": {

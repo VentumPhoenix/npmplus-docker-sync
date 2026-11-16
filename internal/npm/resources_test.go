@@ -463,3 +463,109 @@ func TestRequestsLeaveOutInertSwitches(t *testing.T) {
 		t.Error("building the request changed the desired state")
 	}
 }
+
+// TestRenamedSwitchesAreReadAndWritten covers the NPMplus release of 2026-11:
+// two inverted switches got a `disable_` name, the response buffering became
+// a mode and location modifiers lost their trailing space. A host reads the
+// same from either generation, and each is written its own spelling.
+func TestRenamedSwitchesAreReadAndWritten(t *testing.T) {
+	t.Parallel()
+
+	const before = `{"id":1,"domain_names":["a.example.com"],"forward_scheme":"http","forward_host":"10.0.0.2","forward_port":80,
+		"npmplus_crowdsec_appsec":true,"npmplus_proxy_request_buffering":true,"npmplus_proxy_response_buffering":true,
+		"locations":[{"path":"/api","location_type":"^~ ","forward_scheme":"http","forward_host":"10.0.0.2","forward_port":80,
+		"npmplus_crowdsec_appsec":true,"npmplus_proxy_request_buffering":true,"npmplus_proxy_response_buffering":false}]}`
+	const after = `{"id":1,"domain_names":["a.example.com"],"forward_scheme":"http","forward_host":"10.0.0.2","forward_port":80,
+		"npmplus_disable_crowdsec_appsec":true,"npmplus_disable_proxy_request_buffering":true,"npmplus_proxy_response_buffering":"off_forced",
+		"locations":[{"path":"/api","location_type":"^~","forward_scheme":"http","forward_host":"10.0.0.2","forward_port":80,
+		"npmplus_disable_crowdsec_appsec":true,"npmplus_disable_proxy_request_buffering":true,"npmplus_proxy_response_buffering":"ram_only_auto"}]}`
+
+	var old, renamed ProxyHost
+	if err := json.Unmarshal([]byte(before), &old); err != nil {
+		t.Fatalf("Unmarshal(before) error = %v", err)
+	}
+	if err := json.Unmarshal([]byte(after), &renamed); err != nil {
+		t.Fatalf("Unmarshal(after) error = %v", err)
+	}
+	if !bool(renamed.DisableCrowdsecAppsec) || !bool(renamed.DisableRequestBuffering) || !bool(renamed.DisableResponseBuffering) {
+		t.Errorf("the renamed host switches were not read: %+v", renamed)
+	}
+	if got := renamed.Locations[0]; got.LocationType != LocationPrefer || !bool(got.DisableCrowdsecAppsec) ||
+		!bool(got.DisableRequestBuffering) || bool(got.DisableResponseBuffering) {
+		t.Errorf("the renamed location was not read: %+v", got)
+	}
+	if old.Fingerprint() != renamed.Fingerprint() {
+		t.Errorf("the same host reads differently from the two generations:\n%s", Diff(&old, &renamed))
+	}
+
+	legacy := Dialect{Flavour: FlavourNPMplus, MetaRetired: true}
+	current := Dialect{Flavour: FlavourNPMplus, MetaRetired: true, SwitchesRenamed: true}
+	for _, tc := range []struct {
+		name    string
+		dialect Dialect
+		want    map[string]any
+		absent  []string
+	}{
+		{"before", legacy,
+			map[string]any{"npmplus_crowdsec_appsec": true, "npmplus_proxy_request_buffering": true, "npmplus_proxy_response_buffering": true},
+			[]string{fieldDisableCrowdsec, fieldDisableRequestBuffering}},
+		{"after", current,
+			map[string]any{fieldDisableCrowdsec: true, fieldDisableRequestBuffering: true, "npmplus_proxy_response_buffering": bufferingOff},
+			[]string{"npmplus_crowdsec_appsec", "npmplus_proxy_request_buffering"}},
+	} {
+		payload, err := renamed.Payload(tc.dialect)
+		if err != nil {
+			t.Fatalf("%s: Payload() error = %v", tc.name, err)
+		}
+		raw, _ := json.Marshal(payload)
+		var body map[string]any
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatalf("%s: decode payload: %v", tc.name, err)
+		}
+		location := body["locations"].([]any)[0].(map[string]any)
+		for field, want := range tc.want {
+			if body[field] != want {
+				t.Errorf("%s: host %s = %v, want %v", tc.name, field, body[field], want)
+			}
+		}
+		for _, field := range tc.absent {
+			if _, ok := body[field]; ok {
+				t.Errorf("%s: the host carries %s", tc.name, field)
+			}
+			if _, ok := location[field]; ok {
+				t.Errorf("%s: the location carries %s", tc.name, field)
+			}
+		}
+		wantType, wantBuffering := any(LocationPrefer), any(false)
+		if tc.dialect.SwitchesRenamed {
+			wantType, wantBuffering = "^~", bufferingOn
+		}
+		if location["location_type"] != wantType || location["npmplus_proxy_response_buffering"] != wantBuffering {
+			t.Errorf("%s: location type %q, response buffering %v; want %q, %v", tc.name,
+				location["location_type"], location["npmplus_proxy_response_buffering"], wantType, wantBuffering)
+		}
+	}
+}
+
+// TestALocationInheritingItsAuthConverges: since 2026-11 a location without
+// its own forward authentication is stored as "global".
+func TestALocationInheritingItsAuthConverges(t *testing.T) {
+	t.Parallel()
+
+	body := `{"id":1,"domain_names":["a.example.com"],"forward_scheme":"http","forward_host":"10.0.0.2","forward_port":80,
+		"locations":[{"path":"/api","location_type":"","forward_scheme":"http","forward_host":"10.0.0.2","forward_port":80,
+		"npmplus_x_frame_options":"SAMEORIGIN","npmplus_auth_request":"global","npmplus_auth_request_upstream":""}]}`
+	var stored ProxyHost
+	if err := json.Unmarshal([]byte(body), &stored); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	host := &ProxyHost{
+		DomainNames: []string{"a.example.com"}, ForwardScheme: "http", ForwardHost: "10.0.0.2", ForwardPort: 80,
+		Locations: []Location{{Path: "/api", ForwardScheme: "http", ForwardHost: "10.0.0.2", ForwardPort: 80,
+			AuthRequestUpstream: "http://auth:9000"}},
+	}
+	host.AdoptServerState(&stored)
+	if host.Fingerprint() != stored.Fingerprint() {
+		t.Errorf("a location inheriting its forward authentication does not converge:\n%s", Diff(&stored, host))
+	}
+}
