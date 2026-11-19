@@ -145,6 +145,7 @@ immediately.
 | Docker unreachable at start | exit — a misconfiguration should be loud |
 | NPM unreachable at start | up to 10 login attempts, then exit |
 | Session expired | log in again, retry once |
+| NPM closes a pooled connection (after each nginx reload) | updates, deletes, logins and enable/disable are replayed on a fresh connection; a create, which cannot be replayed safely, always opens a connection of its own |
 | A collection is missing (404) | warning, that kind is skipped |
 | One host fails | logged and counted; the others continue |
 
