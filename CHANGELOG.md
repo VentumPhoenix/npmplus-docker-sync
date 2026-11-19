@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-11-19
+
 ### Fixed
 
 - **Creating several hosts in one go no longer fails now and then with
@@ -801,7 +803,8 @@ Upstreams also change from container names to container IPs in 2.0. Set
 - Multi-stage `scratch` image running as `1000:1000`, published for
   linux/amd64, arm64 and arm/v7.
 
-[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.11...v1.0.0
 [1.0.0-beta.11]: https://github.com/VentumPhoenix/npmplus-docker-sync/compare/v1.0.0-beta.10...v1.0.0-beta.11
