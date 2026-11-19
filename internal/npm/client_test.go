@@ -591,6 +591,89 @@ func TestClientReplaysWritesOnAClosedConnection(t *testing.T) {
 	}
 }
 
+// A create cannot be replayed, so it must never go out on a pooled connection
+// the server may just be closing - NPM reloads nginx after every write - and
+// the connection it used must not be pooled either.
+func TestClientCreatesOnAConnectionOfTheirOwn(t *testing.T) {
+	t.Parallel()
+
+	type served struct{}
+	var creates, sharedCreates, afterCreate atomic.Int64
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		state := r.Context().Value(served{}).(*struct{ requests, creates atomic.Int64 })
+		reused := state.requests.Add(1) > 1
+		switch {
+		case r.URL.Path == "/api/tokens":
+			_, _ = w.Write([]byte(`{"token":"jwt"}`))
+			return
+		case r.Method == http.MethodPost:
+			creates.Add(1)
+			if reused {
+				sharedCreates.Add(1)
+			}
+			state.creates.Add(1)
+		case state.creates.Load() > 0:
+			afterCreate.Add(1)
+		}
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":7,"domain_names":["a.example.com"]}`))
+	}))
+	srv.Config.ConnContext = func(ctx context.Context, _ net.Conn) context.Context {
+		return context.WithValue(ctx, served{}, new(struct{ requests, creates atomic.Int64 }))
+	}
+	srv.Start()
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	ctx := context.Background()
+	host := &ProxyHost{DomainNames: []string{"a.example.com"}}
+	for range 5 {
+		if _, err := client.ListProxyHosts(ctx); err != nil {
+			t.Fatalf("ListProxyHosts() error = %v", err)
+		}
+		if _, err := client.CreateProxyHost(ctx, host); err != nil {
+			t.Fatalf("CreateProxyHost() error = %v", err)
+		}
+		if _, err := client.UpdateProxyHost(ctx, 7, host); err != nil {
+			t.Fatalf("UpdateProxyHost() error = %v", err)
+		}
+	}
+	if creates.Load() != 5 {
+		t.Fatalf("server saw %d creates, want 5", creates.Load())
+	}
+	if n := sharedCreates.Load(); n != 0 {
+		t.Errorf("%d creates went out on a reused connection", n)
+	}
+	if n := afterCreate.Load(); n != 0 {
+		t.Errorf("%d requests reused the connection of a create", n)
+	}
+}
+
+func TestIdempotent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		method, path string
+		want         bool
+	}{
+		{http.MethodPut, "/api/nginx/proxy-hosts/7", true},
+		{http.MethodDelete, "/api/nginx/proxy-hosts/7", true},
+		{http.MethodPost, "/api/tokens", true},
+		{http.MethodPost, "/api/nginx/proxy-hosts/7/enable", true},
+		{http.MethodPost, "/api/nginx/streams/7/disable", true},
+		{http.MethodPost, "/api/nginx/proxy-hosts", false},
+		{http.MethodGet, "/api/nginx/proxy-hosts", false},
+	}
+	for _, tt := range tests {
+		if got := idempotent(tt.method, tt.path); got != tt.want {
+			t.Errorf("idempotent(%s %s) = %t, want %t", tt.method, tt.path, got, tt.want)
+		}
+	}
+}
+
 // npmKinds returns the package level kind list (kept local so the test reads
 // independently of the exported slice being mutated elsewhere).
 func npmKinds() []Kind { return []Kind{KindProxy, KindRedirect, KindStream, KindDead} }

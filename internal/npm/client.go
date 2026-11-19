@@ -67,6 +67,9 @@ const maxErrorBody = 4 << 10
 // the connection can be reused without an unbounded read.
 const drainLimit = 64 << 10
 
+// tokensPath is where a session is opened.
+const tokensPath = "/api/tokens"
+
 // Client talks to the NPM/NPMplus REST API. It is safe for concurrent use.
 type Client struct {
 	baseURL   *url.URL
@@ -247,7 +250,7 @@ func (c *Client) login(ctx context.Context) error {
 		return fmt.Errorf("npm: encode credentials: %w", err)
 	}
 
-	req, err := c.newRequest(ctx, http.MethodPost, "/api/tokens", bytes.NewReader(payload))
+	req, err := c.newRequest(ctx, http.MethodPost, tokensPath, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -263,7 +266,7 @@ func (c *Client) login(ctx context.Context) error {
 	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return c.statusError(resp, http.MethodPost, "/api/tokens")
+		return c.statusError(resp, http.MethodPost, tokensPath)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -902,14 +905,35 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body io.Re
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if method == http.MethodPut || method == http.MethodDelete {
-		// NPM closes idle keep-alive connections after a few seconds, and a
-		// request that races that close fails with EOF. net/http replays only
-		// requests it knows to be idempotent; an empty Idempotency-Key marks
-		// these as such without sending the header.
+	// NPM closes idle keep-alive connections after a few seconds, and every
+	// write that reloads nginx closes them at once. A request that races that
+	// close fails with EOF.
+	switch {
+	case idempotent(method, path):
+		// net/http replays only requests it knows to be idempotent; an empty
+		// Idempotency-Key marks these as such without sending the header.
 		req.Header["Idempotency-Key"] = nil
+	case method == http.MethodPost:
+		// A create must not be replayed: the server may have stored it. Send
+		// it on a connection of its own instead, which no server has had a
+		// chance to drop, and do not pool it - the reload it triggers closes
+		// it right after the answer.
+		c.hc.CloseIdleConnections()
+		req.Close = true
 	}
 	return req, nil
+}
+
+// idempotent reports whether sending a request twice has the effect of sending
+// it once: updates, deletes, logins and enabling or disabling a host.
+func idempotent(method, path string) bool {
+	switch method {
+	case http.MethodPut, http.MethodDelete:
+		return true
+	case http.MethodPost:
+		return path == tokensPath || strings.HasSuffix(path, "/enable") || strings.HasSuffix(path, "/disable")
+	}
+	return false
 }
 
 // applyAuth injects the bearer token when the server is token based. In

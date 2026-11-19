@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Creating several hosts in one go no longer fails now and then with
+  `EOF`.** NPM reloads nginx after every write, which closes the connection
+  the tool keeps open for the next request. Updates and deletes were already
+  replayed on a fresh connection; a create cannot be replayed safely, so it
+  now always goes out on a connection of its own.
+
 ## [1.0.1] - 2026-11-16
 
 ### Fixed
