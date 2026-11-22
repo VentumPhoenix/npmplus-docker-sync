@@ -703,6 +703,7 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 		// labelled; auth_request_fallback decides what is written instead.
 		// Only a running container is decided for: a stopped one is left as
 		// it is stored anyway.
+		labelled := target
 		if kind == npm.KindProxy && target.Running {
 			decision := decideAuthFallback(target, snapshot.Auth)
 			target = applyAuthFallback(target, decision)
@@ -748,7 +749,9 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 			errs = append(errs, fmt.Errorf("%s: unsupported resource kind %q", target.Describe(), target.Kind))
 			continue
 		}
-		w.warnUnsupported(log, key, target, resource, dialect)
+		// Warnings are about what the labels say, not about what the
+		// fallback made of them.
+		w.warnUnsupported(log, key, labelled, resource, dialect)
 		// What the server neither stores nor returns must not take part in the
 		// comparison either - otherwise every run would see a difference.
 		npm.Conform(resource, dialect)

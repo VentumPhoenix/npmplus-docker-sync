@@ -652,3 +652,22 @@ func TestInertFallbackIsReported(t *testing.T) {
 		t.Errorf("inertFallback() = %v for a host with forward authentication, want none", got)
 	}
 }
+
+// TestOpenFallbackDoesNotCallItsOwnLabelInert: the fallback strips the forward
+// authentication, which must not make the warnings believe the labels never
+// asked for it.
+func TestOpenFallbackDoesNotCallItsOwnLabelInert(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	target := authTarget("authentik", fields.AuthFallbackOpen)
+	target.Explicit = []string{fields.AuthRequest, fields.AuthRequestFallback}
+	src := newFakeSource(target)
+	src.auth = known()
+	w := NewWorker(newFakeAPI(), src, Options{}, log)
+	reconcileOK(t, w)
+	if strings.Contains(buf.String(), "without effect") {
+		t.Errorf("the open fallback was reported as a label without effect:\n%s", buf.String())
+	}
+}

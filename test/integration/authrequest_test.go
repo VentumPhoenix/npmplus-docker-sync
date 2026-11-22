@@ -35,6 +35,9 @@ func TestAuthRequestFallback(t *testing.T) {
 		t.Skip("auth_request is an NPMplus feature")
 	}
 	detect := "NPM_CONTAINER=" + npmContainer
+	// Containers started inside a subtest must outlive it: the last subtest
+	// checks all of them again.
+	suite := t
 
 	labels := func(domain string, extra map[string]string) map[string]string {
 		out := map[string]string{
@@ -86,7 +89,7 @@ func TestAuthRequestFallback(t *testing.T) {
 		}
 
 		removeContainer("it-auth-closed")
-		startContainer(t, "it-auth-closed", labels("auth-closed.test", nil))
+		startContainer(suite, "it-auth-closed", labels("auth-closed.test", nil))
 		run := mustSync(t, detect)
 
 		host = proxyHost(t, c, "auth-closed.test")
