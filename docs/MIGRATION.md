@@ -2,6 +2,7 @@
 
 Newest first. Most upgrades need no action — the ones that do say so at the top.
 
+- [1.0.x → 1.1.0](#from-v10-to-v110) — no action unless a container uses `auth_request`
 - 1.0.1 → 1.0.2 — no action, only a fix ([changelog](../CHANGELOG.md#102---2026-11-19))
 - 1.0.0 → 1.0.1 — no action; update before the NPMplus release that follows `2026-10-22-r1` ([changelog](../CHANGELOG.md#101---2026-11-16))
 - beta.11 → 1.0.0 — no action; a stream with UDP forwarding can no longer have TLS ([changelog](../CHANGELOG.md#100---2026-11-01))
@@ -9,6 +10,33 @@ Newest first. Most upgrades need no action — the ones that do say so at the to
 - [beta.9 → beta.10](#from-v100-beta9-to-v100-beta10) — **update this tool before NPMplus**
 - [beta.4 → beta.9](#from-v100-beta4-to-v100-beta9) · [beta.3 → beta.4](#from-v100-beta3-to-v100-beta4) · [beta.2 → beta.3](#from-v100-beta2-to-v100-beta3) — `host` changed meaning
 - [From Redth/npm-docker-sync](#from-redthnpm-docker-sync)
+
+## From v1.0 to v1.1.0
+
+No label, variable or default of 1.0 changed meaning. One behaviour did, and
+only for a container with `auth_request`:
+
+A host whose forward authentication has **no upstream** in NPMplus — neither an
+`auth_request_upstream` label nor `AUTH_REQUEST_<PROVIDER>_UPSTREAM` — used to
+be written anyway, and NPMplus took it offline with a configuration nginx
+refuses. It is now **disabled** (`auth_request_fallback: closed`, the default);
+a new one is not created until the upstream exists. Such a host was not served
+before either, so nothing that worked stops working.
+
+- Want it served without the login in the meantime? Set
+  `auth_request_fallback: "open"` on that container, or
+  `NPM_PROXY_AUTH_REQUEST_FALLBACK=open` for all of them. **Never for an admin
+  interface.**
+- To know which upstreams exist, the tool reads the variable names of the
+  NPMplus container: `NPM_CONTAINER`, or the container `NPM_URL` points at.
+  Through a tecnativa socket proxy `CONTAINERS=1` is enough. Behind an
+  allowlist proxy (the *hardened* stacks), or with NPMplus on another Docker
+  host, set `NPM_AUTH_REQUEST_PROVIDERS` (e.g. `authentik` or `none`).
+- If it cannot read them, nothing changes compared to 1.0 and the log says so
+  once: `cannot tell which auth_request upstreams npmplus has`.
+
+`DRY_RUN=true` shows a host that would be disabled as `would toggle resource …
+to=disabled`.
 
 ## From v1.0.0-beta.9 to v1.0.0-beta.10
 
