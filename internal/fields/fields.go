@@ -122,6 +122,7 @@ const (
 	AccessListType      = "access_list_type"
 	AuthRequest         = "auth_request"
 	AuthRequestUpstream = "auth_request_upstream"
+	AuthRequestFallback = "auth_request_fallback"
 	LocationConfig      = "location_config"
 	Group               = "group"
 	NoIndex             = "noindex"
@@ -159,6 +160,9 @@ var (
 		"none", "anubis", "tinyauth", "oauth2proxy", "voidauth",
 		"authelia", "authentik", "authentik-send-basic-auth",
 	}
+	// AuthRequestFallbackValues decide what happens to a host whose forward
+	// authentication has no upstream in NPMplus.
+	AuthRequestFallbackValues = []string{AuthFallbackClosed, AuthFallbackOpen}
 	// XFrameOptionsValues are the accepted X-Frame-Options settings. They are
 	// matched case-insensitively and written back in NPMplus' spelling.
 	XFrameOptionsValues = []string{"deny", "sameorigin", "upstream", "none"}
@@ -172,6 +176,14 @@ var (
 	ProxyProtocolValues = []string{"off", "v1", "v2"}
 	// StreamProtocolValues are the transport shorthands of a stream.
 	StreamProtocolValues = []string{"tcp", "udp", "both"}
+)
+
+// The values of auth_request_fallback.
+const (
+	// AuthFallbackClosed disables the whole proxy host.
+	AuthFallbackClosed = "closed"
+	// AuthFallbackOpen serves it without the forward authentication.
+	AuthFallbackOpen = "open"
 )
 
 // certificateField is shared by every kind that can carry a certificate.
@@ -368,6 +380,12 @@ func proxyFields() []Field {
 			Name: AuthRequestUpstream, Aliases: []string{"auth.upstream"},
 			Type: TypeString, APIField: "npmplus_auth_request_upstream", Plus: true,
 			Doc: "address of the auth service; needs auth_request",
+		},
+		{
+			Name: AuthRequestFallback, Aliases: []string{"auth.fallback"},
+			Type: TypeEnum, Enum: AuthRequestFallbackValues, Default: AuthFallbackClosed,
+			APIField: "enabled/npmplus_auth_request", Plus: true,
+			Doc: "auth_request without an upstream in NPMplus: closed disables the host, open serves it without login (never for admin UIs)",
 		},
 		{
 			Name: LocationConfig, Type: TypeString, APIField: "npmplus_location_config", Plus: true,
@@ -576,6 +594,7 @@ var LocationFields = []Field{
 	{Name: XFrameOptions, Aliases: []string{"xframe_options"}, Type: TypeEnum, Enum: XFrameOptionsValues, APIField: "npmplus_x_frame_options", Plus: true, Doc: "X-Frame-Options header for this path; inherited from the host"},
 	{Name: AuthRequest, Aliases: []string{"auth"}, Type: TypeEnum, Enum: AuthRequestValues, APIField: "npmplus_auth_request", Plus: true, Doc: "forward authentication for this path; inherited from the host"},
 	{Name: AuthRequestUpstream, Type: TypeString, APIField: "npmplus_auth_request_upstream", Plus: true, Doc: "address of the auth service; inherited from the host"},
+	{Name: AuthRequestFallback, Aliases: []string{"auth.fallback"}, Type: TypeEnum, Enum: AuthRequestFallbackValues, APIField: "enabled/npmplus_auth_request", Plus: true, Doc: "auth_request of this path without an upstream: closed disables the whole host, open drops the login for this path; inherited from the host"},
 }
 
 // index is the lookup table built from Table: normalised spelling -> field.

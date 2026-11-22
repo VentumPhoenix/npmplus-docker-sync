@@ -148,5 +148,8 @@ immediately.
 | NPM closes a pooled connection (after each nginx reload) | updates, deletes, logins and enable/disable are replayed on a fresh connection; a create, which cannot be replayed safely, always opens a connection of its own |
 | A collection is missing (404) | warning, that kind is skipped |
 | One host fails | logged and counted; the others continue |
+| Docker or NPM unreachable during a run (NPM restarting) | the run is retried after 5 s, doubling up to 1 min |
+| NPMplus reports a host offline (nginx refused its configuration) | logged and shown in `/status`; written once more, and again only after the auth_request upstreams or the NPMplus container changed |
+| The auth_request upstreams of NPMplus cannot be read | one warning; hosts are written as labelled, no `auth_request_fallback` applies |
 
-Anything transient is retried by the next event or the periodic resync.
+Anything else transient is retried by the next event or the periodic resync.

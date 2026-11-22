@@ -17,7 +17,7 @@ services:
     restart: unless-stopped
     environment:
       # Everything not listed is denied. This is exactly what the tool needs:
-      CONTAINERS: 1 # list containers (labels, networks, state)
+      CONTAINERS: 1 # list containers (labels, networks, state); auth_request: NPMplus' AUTH_REQUEST_* names
       EVENTS: 1 # react to start/stop
       PING: 1
       VERSION: 1
@@ -47,6 +47,11 @@ services:
       NPM_IDENTITY: ${NPM_IDENTITY:?set NPM_IDENTITY in .env}
       NPM_SECRET: ${NPM_SECRET:?set NPM_SECRET in .env}
       NPM_NETWORK: ${NPM_NETWORK:-npm}
+      # auth_request labels: which AUTH_REQUEST_<PROVIDER>_UPSTREAM NPMplus has
+      # is read from its container - the one NPM_URL points at, or this one.
+      # NPMplus on another Docker host: name the providers instead.
+      # NPM_CONTAINER: npmplus
+      # NPM_AUTH_REQUEST_PROVIDERS: authentik
       # Strongly recommended for the first run against hosts that already
       # exist: the tool only logs what it would change.
       DRY_RUN: ${DRY_RUN:-true}

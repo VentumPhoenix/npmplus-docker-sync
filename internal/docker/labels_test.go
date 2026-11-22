@@ -48,11 +48,12 @@ func proxyTarget(name string, mutate func(*Target)) *Target {
 		BlockExploits: true,
 		Enabled:       true,
 
-		CrowdsecAppsec:    true,
-		RequestBuffering:  true,
-		ResponseBuffering: true,
-		AuthRequest:       "none",
-		AccessListType:    npm.AccessListPublic,
+		CrowdsecAppsec:      true,
+		RequestBuffering:    true,
+		ResponseBuffering:   true,
+		AuthRequest:         "none",
+		AuthRequestFallback: "closed",
+		AccessListType:      npm.AccessListPublic,
 	}
 	if mutate != nil {
 		mutate(t)
@@ -657,6 +658,52 @@ func TestLocations(t *testing.T) {
 	}
 	if locations[1].ForwardPort != 80 || !locations[1].FancyIndex {
 		t.Errorf("unexpected second location: %+v", locations[1])
+	}
+}
+
+func TestAuthRequestFallbackLabels(t *testing.T) {
+	t.Parallel()
+
+	res := Parse(withLabels("app", map[string]string{
+		"npm.proxy.domains":                          "app.example.com",
+		"npm.proxy.port":                             "80",
+		"npm.proxy.auth_request":                     "authentik",
+		"npm.proxy.auth.fallback":                    "OPEN",
+		"npm.proxy.location.0.path":                  "/admin",
+		"npm.proxy.location.0.auth_request_fallback": "closed",
+		"npm.proxy.location.1.path":                  "/api",
+	}), opts("npm"))
+	if len(res.Errors) > 0 {
+		t.Fatalf("unexpected errors: %v", res.Errors)
+	}
+	target := res.Targets[0]
+	if target.AuthRequestFallback != "open" {
+		t.Errorf("host fallback = %q, want open", target.AuthRequestFallback)
+	}
+	// A location keeps only its own value: empty is what says "inherit".
+	if got := target.Locations[0].AuthRequestFallback; got != "closed" {
+		t.Errorf("/admin fallback = %q, want closed", got)
+	}
+	if got := target.Locations[1].AuthRequestFallback; got != "" {
+		t.Errorf("/api fallback = %q, want it inherited (empty)", got)
+	}
+
+	res = Parse(withLabels("app", map[string]string{
+		"npm.proxy.domains":               "app.example.com",
+		"npm.proxy.port":                  "80",
+		"npm.proxy.auth_request_fallback": "maybe",
+	}), opts("npm"))
+	if len(res.Errors) != 1 || !strings.Contains(res.Errors[0].Error(), "auth_request_fallback") {
+		t.Errorf("errors = %v, want the invalid value named", res.Errors)
+	}
+	res = Parse(withLabels("app", map[string]string{
+		"npm.proxy.domains":                          "app.example.com",
+		"npm.proxy.port":                             "80",
+		"npm.proxy.location.0.path":                  "/admin",
+		"npm.proxy.location.0.auth_request_fallback": "maybe",
+	}), opts("npm"))
+	if len(res.Errors) != 1 || !strings.Contains(res.Errors[0].Error(), "location.0.auth_request_fallback") {
+		t.Errorf("errors = %v, want the invalid location value named", res.Errors)
 	}
 }
 

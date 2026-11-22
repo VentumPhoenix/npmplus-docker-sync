@@ -178,6 +178,23 @@ npm.proxy.auth_request: "authelia"
 npm.proxy.access_list: "Intern"
 ```
 
+**…and what happens when NPMplus has no upstream for that login**
+
+```yaml
+npm.proxy.domains: "wiki.example.com"
+npm.proxy.auth_request: "authentik"
+npm.proxy.auth_request_fallback: "open"   # default "closed": disable the host
+```
+
+Without `AUTH_REQUEST_AUTHENTIK_UPSTREAM` in NPMplus (or an
+`auth_request_upstream` label) the host would silently go offline. `closed`
+disables it instead, `open` serves it without the login until the upstream
+exists — **never use `open` for an admin interface.** To check, the tool reads
+the variable *names* of the NPMplus container (`NPM_CONTAINER`, or the
+container `NPM_URL` points at); a socket proxy needs `CONTAINERS=1` for that.
+NPMplus on another Docker host: set `NPM_AUTH_REQUEST_PROVIDERS=authentik`.
+[Details](docs/LABELS.md#forward-authentication-without-an-upstream)
+
 **Redirect an old domain**
 
 ```yaml
@@ -329,6 +346,7 @@ Short answer: **it is built to never destroy something you care about.**
 | A run would delete **many hosts at once** | Refused. (`DELETE_GUARD`, default: more than half) |
 | Docker reports **no containers at all** | Nothing is deleted. |
 | The domain is already used by another host | Reported as a conflict, nothing is overwritten. |
+| A login (`auth_request`) has **no upstream** in NPMplus | The host is disabled instead of going offline with a broken config (`auth_request_fallback`). |
 | Several Docker hosts share **one NPM** | Each instance only manages its own hosts. |
 | You **update NPM / NPMplus** | Your hosts stay yours — see the note below. |
 
@@ -352,7 +370,9 @@ relies on it: leave it there. A host without it counts as hand-made.
 **Docker access is read-only.** The recommended setup goes through a
 [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) that
 only allows *reading* containers and events, so even a compromised sync
-container cannot start, stop or change anything. The container runs as
+container cannot start, stop or change anything. Of the NPMplus container's
+environment only the names of the `AUTH_REQUEST_*_UPSTREAM` variables are
+looked at — no value is kept, logged or shown. The container runs as
 non-root from an empty `scratch` image with a read-only filesystem, and the NPM
 password never appears in logs.
 
@@ -421,8 +441,8 @@ With `HEALTH_ADDR=:8080`:
 |---|---|
 | `/healthz` | The process is alive |
 | `/readyz` | Docker and NPM are reachable and a sync has run |
-| `/status` | Every managed host as JSON, including errors and retries |
-| `/metrics` | Prometheus metrics (runs, errors, changes, blocked deletions, …) |
+| `/status` | Every managed host as JSON, including errors, retries, hosts NPMplus reports offline and `auth_request` fallbacks |
+| `/metrics` | Prometheus metrics (runs, errors, changes, blocked deletions, offline hosts, …) |
 
 The image has a built-in Docker `HEALTHCHECK`, so `docker ps` shows its health
 and other services can use `depends_on: { condition: service_healthy }`.

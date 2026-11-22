@@ -227,7 +227,7 @@ request a certificate (`new`) — create it in NPM and reference it.
 **NPMplus only:** `group`, `ssl.http3`, `noindex`, `crowdsec_appsec`,
 `request_buffering`, `response_buffering`, `upstream_compression`,
 `fancyindex`, `x_frame_options`, `auth_request`, `auth_request_upstream`,
-`location_config`, `access_list_type`, and for streams `proxy_protocol`,
+`auth_request_fallback`, `location_config`, `access_list_type`, and for streams `proxy_protocol`,
 `proxy_tls`, `advanced_config`, `description`. Against upstream NPM they are
 left out and reported once — nothing fails.
 
@@ -237,9 +237,55 @@ The labels are positive even where the API is inverted:
 Some only work in combination, for the host and each location alike:
 `request_buffering: "false"` needs `crowdsec_appsec: "false"`, buffering applies
 to `http`/`https` upstreams only, `fancyindex` to scheme `path` only,
-`upstream_compression` not to `path`, and `auth_request_upstream` needs an
-`auth_request`. Anything else is left out of the request (newer NPMplus
+`upstream_compression` not to `path`, and `auth_request_upstream` and
+`auth_request_fallback` need an `auth_request`. Anything else is left out of the request (newer NPMplus
 releases refuse it) and an explicit label is named in a warning.
+
+### Forward authentication without an upstream
+
+`auth_request: "authentik"` (or any other provider) only works when NPMplus has
+an upstream for that provider: `auth_request_upstream` on the host or a
+location, or `AUTH_REQUEST_<PROVIDER>_UPSTREAM` in the NPMplus environment.
+Without one NPMplus writes a configuration nginx refuses, and the host silently
+goes offline. The tool checks first and `auth_request_fallback` decides:
+
+```yaml
+labels:
+  npm.proxy.domains: "wiki.example.com"
+  npm.proxy.auth_request: "authentik"
+  npm.proxy.auth_request_fallback: "open"       # default: closed
+  npm.proxy.location.0.path: "/admin"
+  npm.proxy.location.0.auth_request_fallback: "closed"
+```
+
+- **`closed`** (default) disables the whole host and logs an error. The
+  forward authentication stays in the stored configuration. A host that does
+  not exist yet is not created: neither API can create a host disabled.
+- **`open`** writes the host without the forward authentication that has no
+  upstream and logs a warning. When only a location misses its provider, only
+  that location loses it.
+
+A location inherits the host's value, and `open` applies only where it is set:
+in the example above a missing upstream disables the whole host, because
+`/admin` asks for `closed`. Disabling just that location is not an option —
+nginx would then answer `/admin` from the location above it, possibly without
+any login. As soon as NPMplus has the upstream (set the variable, restart
+NPMplus), the next run writes the labels as they are again.
+
+> **Security:** `open` means the service is reachable **without any login**
+> while the upstream is missing. Use it only for services that are harmless to
+> expose, never for admin interfaces.
+
+To know which upstreams exist, the tool reads the **names** of the
+`AUTH_REQUEST_*_UPSTREAM` variables of the NPMplus container — never their
+values, which share the environment with the admin password and OIDC secrets.
+The container is `NPM_CONTAINER`, or the one whose address, name or compose
+service matches the host of `NPM_URL`. This needs `GET /containers/{id}/json`
+on the Docker API (`CONTAINERS=1` on a tecnativa socket proxy), and only when a
+container uses `auth_request` at all. For an NPMplus on another Docker host, set
+`NPM_AUTH_REQUEST_PROVIDERS` (e.g. `authentik,authelia` or `none`) instead.
+When the upstreams cannot be read, nothing falls back: the host is written as
+labelled, one warning says why, and `/status` shows it.
 
 **Retired by newer NPMplus releases:** `websockets` and `ssl.http2` are always
 on, `caching` and `block_exploits` no longer exist, `trust_forwarded_proto` is

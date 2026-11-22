@@ -29,6 +29,10 @@ services:
       ACME_SERVER: https://acme-staging-v02.api.letsencrypt.org/directory
       DISABLE_IPV6: "true"
       TZ: UTC
+      # Empty by default, which NPMplus treats as unset: the auth_request
+      # test sets it and recreates this container to prove that a fallback
+      # recovers on its own. jc21 ignores it.
+      AUTH_REQUEST_AUTHENTIK_UPSTREAM: ${AUTH_REQUEST_AUTHENTIK_UPSTREAM:-}
     # Named volumes keep each run clean - `compose down -v` throws them away.
     volumes:
       - npm-data:/data

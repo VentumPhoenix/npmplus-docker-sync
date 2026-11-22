@@ -3,6 +3,7 @@ module github.com/VentumPhoenix/npmplus-docker-sync
 go 1.26.0
 
 require (
+	github.com/containerd/errdefs v1.0.0
 	github.com/dlclark/regexp2 v1.12.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
@@ -12,7 +13,6 @@ require (
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/log v0.2.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect

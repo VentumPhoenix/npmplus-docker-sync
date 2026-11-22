@@ -265,6 +265,11 @@ type Location struct {
 	XFrameOptions            string       `json:"npmplus_x_frame_options,omitempty"`
 	AuthRequest              string       `json:"npmplus_auth_request,omitempty"`
 	AuthRequestUpstream      string       `json:"npmplus_auth_request_upstream,omitempty"`
+	// AuthRequestFallback is the location's own auth_request_fallback label,
+	// empty when it inherits the host's. It decides what the sync does when
+	// NPMplus has no upstream for the forward authentication and never
+	// reaches the API.
+	AuthRequestFallback string `json:"-"`
 
 	renamedSwitches
 }

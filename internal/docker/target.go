@@ -142,6 +142,10 @@ type Snapshot struct {
 	// suspicious - a filtered socket proxy answering with an empty list looks
 	// exactly like "every container is gone".
 	Containers int
+	// Auth is which auth_request providers NPMplus has an upstream for. It
+	// is read on every snapshot - a restart of NPMplus is a container event
+	// like any other - but only when a target uses forward authentication.
+	Auth AuthStatus
 }
 
 // IsProtected reports whether a container is shielded from orphan deletion.
@@ -223,6 +227,9 @@ type Target struct {
 	XFrameOptions       string
 	AuthRequest         string
 	AuthRequestUpstream string
+	// AuthRequestFallback is what happens when NPMplus has no upstream for
+	// AuthRequest: fields.AuthFallbackClosed or fields.AuthFallbackOpen.
+	AuthRequestFallback string
 	LocationConfig      string
 
 	// Redirection hosts.

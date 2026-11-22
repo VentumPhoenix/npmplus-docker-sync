@@ -507,3 +507,71 @@ func TestInvalidBeta3Settings(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadAuthRequestProviders(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(env(minimalEnv(nil)), nil)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AuthProvidersSet {
+		t.Error("NPM_AUTH_REQUEST_PROVIDERS must be unset by default: the providers are read from the npmplus container")
+	}
+
+	cfg, err = Load(env(minimalEnv(map[string]string{"NPM_AUTH_REQUEST_PROVIDERS": "authentik, authelia"})), nil)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.AuthProvidersSet || !reflect.DeepEqual(cfg.AuthProviders, []string{"authelia", "authentik"}) {
+		t.Errorf("providers = %v (set %t), want authelia,authentik", cfg.AuthProviders, cfg.AuthProvidersSet)
+	}
+
+	cfg, err = Load(env(minimalEnv(map[string]string{"NPM_AUTH_REQUEST_PROVIDERS": "none"})), nil)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.AuthProvidersSet || len(cfg.AuthProviders) != 0 {
+		t.Errorf("none = %v (set %t), want an empty list that is set", cfg.AuthProviders, cfg.AuthProvidersSet)
+	}
+
+	if _, err := Load(env(minimalEnv(map[string]string{"NPM_AUTH_REQUEST_PROVIDERS": "keycloak"})), nil); err == nil ||
+		!strings.Contains(err.Error(), "NPM_AUTH_REQUEST_PROVIDERS") {
+		t.Errorf("Load() error = %v, want an unknown provider rejected", err)
+	}
+	// It is not a field default and must not be reported as a misspelt one.
+	cfg, err = Load(env(minimalEnv(map[string]string{"NPM_AUTH_REQUEST_PROVIDERS": "authentik"})),
+		[]string{"NPM_AUTH_REQUEST_PROVIDERS=authentik"})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.Warnings) != 0 {
+		t.Errorf("warnings = %v, want none", cfg.Warnings)
+	}
+}
+
+func TestLoadAuthRequestFallbackDefault(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(env(minimalEnv(map[string]string{"NPM_PROXY_AUTH_REQUEST_FALLBACK": "open"})),
+		[]string{"NPM_PROXY_AUTH_REQUEST_FALLBACK=open"})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.Warnings) != 0 {
+		t.Errorf("warnings = %v, want none", cfg.Warnings)
+	}
+	found := false
+	for _, entry := range cfg.Defaults.FromEnv() {
+		if entry.Field == fields.AuthRequestFallback && entry.Value == "open" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("NPM_PROXY_AUTH_REQUEST_FALLBACK=open is not a default: %+v", cfg.Defaults.FromEnv())
+	}
+	if _, err := Load(env(minimalEnv(map[string]string{"NPM_PROXY_AUTH_REQUEST_FALLBACK": "maybe"})),
+		[]string{"NPM_PROXY_AUTH_REQUEST_FALLBACK=maybe"}); err == nil {
+		t.Error("an invalid NPM_PROXY_AUTH_REQUEST_FALLBACK was accepted")
+	}
+}

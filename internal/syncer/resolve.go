@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/certs"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/docker"
+	"github.com/VentumPhoenix/npmplus-docker-sync/internal/fields"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/npm"
 )
 
@@ -270,12 +272,15 @@ func (w *Worker) warnUnsupported(log *slog.Logger, key string, t *docker.Target,
 	var plusOnly []string
 	if dialect.Flavour == npm.FlavourNPM {
 		plusOnly = intersect(npm.UnsupportedByNPM(resource), t.ExplicitPlus)
+		// The fallback is never stored, so the resource cannot name it.
+		plusOnly = append(plusOnly, intersect([]string{fields.AuthRequestFallback}, t.ExplicitPlus)...)
 	}
 	unavailable := intersect(npm.Unavailable(resource.Kind(), dialect), t.Explicit)
 	downgraded := intersect(npm.Downgraded(resource, dialect), t.Explicit)
 	var inert []string
 	if dialect.Flavour != npm.FlavourNPM {
 		inert = intersect(npm.Inert(resource), t.Explicit)
+		inert = append(inert, inertFallback(t)...)
 	}
 	if len(plusOnly) == 0 && len(unavailable) == 0 && len(downgraded) == 0 && len(inert) == 0 {
 		return
@@ -309,8 +314,27 @@ func (w *Worker) warnUnsupported(log *slog.Logger, key string, t *docker.Target,
 			slog.String("key", key), slog.String("fields", strings.Join(inert, ",")),
 			slog.String("rules", "request_buffering=false needs crowdsec_appsec=false; "+
 				"buffering applies to http and https only; fancyindex to scheme path only; "+
-				"upstream_compression not to path; auth_request_upstream needs auth_request"))
+				"upstream_compression not to path; auth_request_upstream and auth_request_fallback need auth_request"))
 	}
+}
+
+// inertFallback names an auth_request_fallback that nothing can fall back from:
+// the host's, when neither the host nor one of its locations uses forward
+// authentication, and a location's, when that location does not.
+func inertFallback(t *docker.Target) []string {
+	if t.Kind != npm.KindProxy {
+		return nil
+	}
+	var out []string
+	if slices.Contains(t.Explicit, fields.AuthRequestFallback) && !usesAuthRequest(t) {
+		out = append(out, fields.AuthRequestFallback)
+	}
+	for _, l := range t.Locations {
+		if l.AuthRequestFallback != "" && authProvider(l.AuthRequest, t.AuthRequest) == "" {
+			out = append(out, fields.Location+"."+l.Path+"."+fields.AuthRequestFallback)
+		}
+	}
+	return out
 }
 
 // intersect returns the elements of a that also appear in b, order preserved.

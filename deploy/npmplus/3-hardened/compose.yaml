@@ -220,6 +220,11 @@ services:
       # See docs/FIELDS.md for all of them.
       # NPM_DEFAULT_GROUP: Docker          # sort managed hosts into one UI group
       # NPM_CERTIFICATE_AUTO_CREATE: "true" # request Let's Encrypt when none matches
+      # auth_request labels: the allowlist proxy does not show the NPMplus
+      # environment, so name the providers NPMplus has an
+      # AUTH_REQUEST_<PROVIDER>_UPSTREAM for (or none). Unset, a host whose
+      # login has no upstream is written as labelled - and goes offline.
+      # NPM_AUTH_REQUEST_PROVIDERS: authentik
     secrets:
       - npm_password
     networks:

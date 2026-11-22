@@ -32,6 +32,7 @@ The proxy allows exactly what the tool needs:
 | Proxy flag | Endpoint | Why |
 |---|---|---|
 | `CONTAINERS=1` | `GET /containers/json` | labels, networks, ports, state |
+| `CONTAINERS=1` | `GET /containers/{id}/json` | only the NPMplus container, only when a label uses `auth_request`: which `AUTH_REQUEST_<PROVIDER>_UPSTREAM` it has |
 | `EVENTS=1` | `GET /events` | react to start/stop |
 | `PING=1`, `VERSION=1` | `GET /_ping`, `GET /version` | connection check, API version |
 | `INFO=1` *(recommended)* | `GET /info` | daemon id = default `SYNC_INSTANCE_ID` |
@@ -42,7 +43,10 @@ or change anything. Events are filtered on the server (`type=container`).
 
 Note: `CONTAINERS=1` can read the labels **and environment** of every container
 on the host — true for any such tool, worth knowing if containers keep secrets
-in `environment:`.
+in `environment:`. The tool itself inspects one container, NPMplus, and only
+looks at the names of its `AUTH_REQUEST_*_UPSTREAM` variables: no value — not
+the admin password, not an OIDC secret, not the upstream address — is kept,
+logged or served by `/status`.
 
 Mounting the socket directly (the *simple* stacks) works, but keep it `:ro`,
 drop all capabilities and treat it as root access.
@@ -50,7 +54,9 @@ drop all capabilities and treat it as root access.
 The hardened stacks go further: an allowlist proxy
 ([wollomatic/socket-proxy](https://github.com/wollomatic/socket-proxy)) that
 answers nothing but `_ping`, `version`, `info`, `events` and `containers/json`
-— the container list carries labels, but no environment variables.
+— the container list carries labels, but no environment variables. There the
+NPMplus environment cannot be read; `NPM_AUTH_REQUEST_PROVIDERS` names the
+providers instead.
 
 ### NPM credentials
 

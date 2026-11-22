@@ -153,6 +153,12 @@ func TestHealthEndpoints(t *testing.T) {
 		if !report.Resources[0].Running {
 			t.Error("the resource should be reported as backed by a running container")
 		}
+		if report.Auth.State != "unchecked" || report.Auth.Providers == nil || report.Auth.Fallbacks == nil {
+			t.Errorf("status auth_request = %+v, want unchecked with empty lists", report.Auth)
+		}
+		if report.Offline != 0 {
+			t.Errorf("status offline = %d, want 0", report.Offline)
+		}
 	})
 
 	t.Run("metrics", func(t *testing.T) {
@@ -168,6 +174,9 @@ func TestHealthEndpoints(t *testing.T) {
 			"npmsync_managed_resources 1",
 			`npmsync_managed_resources_by_kind{kind="proxy"} 1`,
 			"# TYPE npmsync_event_stream_connected gauge",
+			"npmsync_hosts_offline 0",
+			`npmsync_auth_fallbacks{mode="closed"} 0`,
+			`npmsync_auth_fallbacks{mode="open"} 0`,
 		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("/metrics is missing %q:\n%s", want, body)

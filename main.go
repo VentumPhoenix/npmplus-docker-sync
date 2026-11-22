@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"sort"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/config"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/docker"
+	"github.com/VentumPhoenix/npmplus-docker-sync/internal/fields"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/npm"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/syncer"
 )
@@ -180,6 +182,7 @@ func run(mode runMode) error {
 	selfID := listener.SelfID()
 	listener = docker.NewListener(dockerClient, parseOpts, log.With(slog.String("component", "docker")))
 	listener.SetSelfID(selfID)
+	listener.SetAuthDetection(authDetection(cfg))
 	if summary, err := listener.Summarize(ctx); err == nil {
 		log.Info("container overview",
 			slog.Int("managed", summary.Managed),
@@ -439,6 +442,21 @@ func healthMux(cfg *config.Config, worker *syncer.Worker, instance string, log *
 	return mux
 }
 
+// authDetection tells the listener where the auth_request upstreams of NPMplus
+// are read from.
+func authDetection(cfg *config.Config) docker.AuthDetection {
+	d := docker.AuthDetection{
+		Container: cfg.NPMContainer,
+		Network:   cfg.NPMNetwork,
+		Providers: cfg.AuthProviders,
+		Fixed:     cfg.AuthProvidersSet,
+	}
+	if u, err := url.Parse(cfg.NPMURL); err == nil {
+		d.URLHost = u.Hostname()
+	}
+	return d
+}
+
 // statusReport is the JSON document served by /status.
 type statusReport struct {
 	Version   string                  `json:"version"`
@@ -447,10 +465,23 @@ type statusReport struct {
 	LastRun   *time.Time              `json:"last_run,omitempty"`
 	Managed   int                     `json:"managed"`
 	Failed    int                     `json:"failed"`
+	Offline   int                     `json:"offline"`
 	Error     string                  `json:"error,omitempty"`
 	Blocked   string                  `json:"deletions_blocked,omitempty"`
 	Stream    streamReport            `json:"event_stream"`
+	Auth      authReport              `json:"auth_request"`
 	Resources []syncer.ResourceStatus `json:"resources"`
+}
+
+// authReport is what is known about the auth_request upstreams of NPMplus and
+// the hosts auth_request_fallback applies to. It names providers only: the
+// upstream addresses come from an environment that also holds secrets.
+type authReport struct {
+	State     string                  `json:"state"`
+	Source    string                  `json:"source,omitempty"`
+	Reason    string                  `json:"reason,omitempty"`
+	Providers []string                `json:"providers"`
+	Fallbacks []syncer.FallbackStatus `json:"fallbacks"`
 }
 
 // streamReport describes the Docker event subscription.
@@ -469,8 +500,16 @@ func statusDocument(worker *syncer.Worker, cfg *config.Config, instance string) 
 		DryRun:    cfg.DryRun,
 		Managed:   status.Managed,
 		Failed:    status.Failed,
+		Offline:   status.Offline,
 		Blocked:   status.Blocked,
 		Resources: worker.Resources(),
+		Auth: authReport{
+			State:     status.Auth.State.String(),
+			Source:    status.Auth.Source,
+			Reason:    status.Auth.Reason,
+			Providers: status.Auth.Providers,
+			Fallbacks: worker.Fallbacks(),
+		},
 		Stream: streamReport{
 			Connected: status.Stream.Connected,
 			LastError: status.Stream.LastError,
@@ -488,6 +527,9 @@ func statusDocument(worker *syncer.Worker, cfg *config.Config, instance string) 
 	}
 	if report.Resources == nil {
 		report.Resources = []syncer.ResourceStatus{}
+	}
+	if report.Auth.Providers == nil {
+		report.Auth.Providers = []string{}
 	}
 	return report
 }
@@ -512,6 +554,8 @@ func renderMetrics(m syncer.Metrics, status syncer.Status) string {
 	counter("npmsync_deletions_blocked_total", "Deletions the safety guard refused.", m.DeletionsBlocked)
 
 	gauge("npmsync_managed_resources", "Resources currently under management.", float64(m.Managed))
+	gauge("npmsync_hosts_offline", "Managed hosts NPMplus reports offline (nginx refused their configuration).",
+		float64(m.Offline))
 	gauge("npmsync_event_stream_connected", "1 when the Docker event stream is subscribed.",
 		boolGauge(status.Stream.Connected))
 	gauge("npmsync_last_run_duration_seconds", "Duration of the most recent reconcile run.",
@@ -525,6 +569,12 @@ func renderMetrics(m syncer.Metrics, status syncer.Status) string {
 	sb.WriteString("# TYPE npmsync_managed_resources_by_kind gauge\n")
 	for _, kind := range npm.Kinds {
 		fmt.Fprintf(&sb, "npmsync_managed_resources_by_kind{kind=%q} %d\n", kind, m.ManagedByKind[kind])
+	}
+
+	sb.WriteString("# HELP npmsync_auth_fallbacks Hosts auth_request_fallback applies to, by mode.\n")
+	sb.WriteString("# TYPE npmsync_auth_fallbacks gauge\n")
+	for _, mode := range fields.AuthRequestFallbackValues {
+		fmt.Fprintf(&sb, "npmsync_auth_fallbacks{mode=%q} %d\n", mode, m.Fallbacks[mode])
 	}
 
 	sb.WriteString("# HELP npmsync_certificate_selections_total Certificates chosen, by match class.\n")
@@ -647,7 +697,11 @@ Required environment:
 Optional environment:
   NPM_FLAVOUR            api dialect: auto (default), npmplus or npm
   NPM_EXPOSED_BY_DEFAULT manage every labelled container (default true)
-  NPM_CONTAINER_NAME     name of the npm container, for network discovery
+  NPM_CONTAINER_NAME     name of the npm container, for network discovery and
+                         its auth_request upstreams (found from NPM_URL when unset)
+  NPM_AUTH_REQUEST_PROVIDERS  providers npmplus has an upstream for, e.g.
+                         authentik,authelia or none; replaces reading them
+                         from the npmplus container
   NPM_PORT_PREFERENCE    order of exposed ports to pick from (default 80,8080,3000,8000,443)
   NPM_DEFAULT_CERTIFICATE / NPM_<KIND>_<FIELD>
                          global defaults for any label field, e.g.

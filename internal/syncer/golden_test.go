@@ -284,3 +284,62 @@ func TestGoldenNPMplusWithoutMeta(t *testing.T) {
 		t.Errorf("payload mismatch\n got:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// TestGoldenAuthFallback pins what auth_request_fallback sends: with the
+// upstream in place the label changes nothing, and `open` without it sends
+// byte for byte the body of a host that never asked for forward
+// authentication.
+func TestGoldenAuthFallback(t *testing.T) {
+	t.Parallel()
+
+	host := func(labels map[string]string) docker.Container {
+		all := map[string]string{
+			"npm.proxy.domains":                 "app.example.com",
+			"npm.proxy.port":                    "80",
+			"npm.proxy.location.0.path":         "/api",
+			"npm.proxy.location.0.forward_port": "9000",
+		}
+		for k, v := range labels {
+			all[k] = v
+		}
+		return docker.Container{ID: "app-id", Name: "app", Labels: all}
+	}
+	body := func(c docker.Container, status docker.AuthStatus) string {
+		res := docker.Parse(c, docker.ParseOptions{Prefix: "npm", ExposedByDefault: true})
+		if len(res.Errors) > 0 || len(res.Targets) != 1 {
+			t.Fatalf("parse: %v", res.Errors)
+		}
+		target := res.Targets[0]
+		target = applyAuthFallback(target, decideAuthFallback(target, status))
+		resource := BuildResource(target, npm.CertificateID{}, "", "npm")
+		dialect := npm.Dialect{Flavour: npm.FlavourNPMplus}
+		npm.Conform(resource, dialect)
+		payload, err := resource.Payload(dialect)
+		if err != nil {
+			t.Fatalf("payload: %v", err)
+		}
+		raw, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return string(raw)
+	}
+
+	protected := host(map[string]string{"npm.proxy.auth_request": "authentik"})
+	withFallback := host(map[string]string{
+		"npm.proxy.auth_request": "authentik", "npm.proxy.auth_request_fallback": "open",
+	})
+	unprotected := host(nil)
+	available := docker.AuthStatus{State: docker.AuthKnown, Providers: []string{"authentik"}}
+	missing := docker.AuthStatus{State: docker.AuthKnown}
+
+	if got, want := body(withFallback, available), body(protected, available); got != want {
+		t.Errorf("the fallback label changes the body although the upstream exists\n got:\n%s\nwant:\n%s", got, want)
+	}
+	if !bytes.Contains([]byte(body(withFallback, available)), []byte(`"npmplus_auth_request": "authentik"`)) {
+		t.Errorf("forward authentication missing from the protected body:\n%s", body(withFallback, available))
+	}
+	if got, want := body(withFallback, missing), body(unprotected, missing); got != want {
+		t.Errorf("open without an upstream is not the unprotected body\n got:\n%s\nwant:\n%s", got, want)
+	}
+}

@@ -275,6 +275,7 @@ type fakeSource struct {
 	err        error
 	protected  map[string]struct{}
 	containers int
+	auth       docker.AuthStatus
 }
 
 func (s *fakeSource) Snapshot(context.Context) (docker.Snapshot, error) {
@@ -297,6 +298,7 @@ func (s *fakeSource) Snapshot(context.Context) (docker.Snapshot, error) {
 		Targets:    s.targets,
 		Protected:  s.protected,
 		Containers: containers,
+		Auth:       s.auth,
 	}, nil
 }
 
@@ -1360,5 +1362,51 @@ func TestReconcileConvergesAgainstANormalisingServer(t *testing.T) {
 	}
 	if got := fake.callCount("update proxy"); got != 0 {
 		t.Errorf("update calls = %d, want 0 after convergence", got)
+	}
+}
+
+// TestWorkerRunRetriesAFailedRun: a run that cannot reach the API - NPM is
+// restarting, and its start event came first - is retried soon instead of at
+// the next resync, and the retries stop once a run succeeds.
+func TestWorkerRunRetriesAFailedRun(t *testing.T) {
+	t.Parallel()
+
+	api := newFakeAPI()
+	api.listErr[npm.KindProxy] = errors.New("connection refused")
+	src := newFakeSource(proxyTarget("web", "web.example.com", 80))
+	opts := defaultOptions()
+	opts.RetryMin, opts.RetryMax = 10*time.Millisecond, 20*time.Millisecond
+	w := NewWorker(api, src, opts, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = w.Run(ctx, make(chan []docker.Event)) }()
+
+	deadline := time.After(5 * time.Second)
+	for api.callCount("list proxy") < 3 {
+		select {
+		case <-deadline:
+			t.Fatalf("the failed run was not retried: %v", api.callList())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	api.mu.Lock()
+	delete(api.listErr, npm.KindProxy)
+	api.mu.Unlock()
+	for api.callCount("create proxy web.example.com") == 0 {
+		select {
+		case <-deadline:
+			t.Fatalf("the retry never succeeded: %v", api.callList())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	// Converged: no further runs without a trigger.
+	time.Sleep(100 * time.Millisecond)
+	settled := api.callCount("list proxy")
+	time.Sleep(100 * time.Millisecond)
+	if got := api.callCount("list proxy"); got != settled {
+		t.Errorf("the worker keeps retrying after a successful run (%d → %d lists)", settled, got)
 	}
 }

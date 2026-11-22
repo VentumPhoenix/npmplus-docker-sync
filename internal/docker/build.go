@@ -173,6 +173,9 @@ func buildProxy(t *Target, c Container, opts ParseOptions, f fieldSet) error {
 		return err
 	}
 	t.AuthRequestUpstream = f.string(fields.AuthRequestUpstream)
+	if t.AuthRequestFallback, err = f.enum(fields.AuthRequestFallback); err != nil {
+		return err
+	}
 	t.LocationConfig = f.string(fields.LocationConfig)
 
 	if t.AccessListIDs, t.AccessListNames, t.AccessListType, err = parseAccessList(f, npm.AccessListPublic); err != nil {
@@ -455,6 +458,17 @@ func buildLocation(t *Target, f fieldSet, n int, values map[string]string) (npm.
 	if raw := strings.TrimSpace(values[fields.Normalize(fields.AuthRequestUpstream)]); raw != "" {
 		authUpstream = raw
 	}
+	// Unlike the switches above, the fallback is not copied from the host:
+	// an empty value is what says "inherit", so a location that sets it can
+	// be told apart from one that does not.
+	authFallback := ""
+	if raw := strings.TrimSpace(values[fields.Normalize(fields.AuthRequestFallback)]); raw != "" {
+		value, enumErr := (fields.Field{Enum: fields.AuthRequestFallbackValues}).ValidateEnum(raw)
+		if enumErr != nil {
+			return npm.Location{}, fmt.Errorf("%s: %w", label(fields.AuthRequestFallback), enumErr)
+		}
+		authFallback = value
+	}
 
 	return npm.Location{
 		Path:                     path,
@@ -477,6 +491,7 @@ func buildLocation(t *Target, f fieldSet, n int, values map[string]string) (npm.
 		XFrameOptions:            xFrame,
 		AuthRequest:              authRequest,
 		AuthRequestUpstream:      authUpstream,
+		AuthRequestFallback:      authFallback,
 	}, nil
 }
 

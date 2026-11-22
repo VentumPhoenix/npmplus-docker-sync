@@ -16,6 +16,9 @@ var serverOwned = map[string]struct{}{
 	"modified_on":   {},
 	"owner_user_id": {},
 	"enabled":       {},
+	// NPMplus' verdict on the configuration it generated, see nginxState.
+	fieldNginxOnline: {},
+	fieldNginxError:  {},
 }
 
 // Diff renders the configuration fields in which two resources differ, as

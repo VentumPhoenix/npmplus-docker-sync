@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`auth_request_fallback`** (`closed`, `open`; `NPM_PROXY_AUTH_REQUEST_FALLBACK`)
+  for proxy hosts and their locations. It decides what is written when
+  `auth_request` names a provider NPMplus has no upstream for - neither an
+  `auth_request_upstream` nor `AUTH_REQUEST_<PROVIDER>_UPSTREAM`: `closed`
+  disables the whole host (an error in the log), `open` writes it without that
+  forward authentication (a warning). A location inherits the host's value; one
+  location with `closed` disables the whole host. Once the upstream exists, the
+  next run writes the labels as they are again. **`open` serves the host
+  without any login - never use it for an admin interface.**
+- **The auth_request upstreams of NPMplus are read from its container**: the
+  one named by `NPM_CONTAINER`, otherwise the one whose address, name, alias or
+  compose service is the host of `NPM_URL`. Only the names of its
+  `AUTH_REQUEST_*_UPSTREAM` variables are looked at - no value is kept, logged
+  or shown. This needs `GET /containers/{id}/json` (`CONTAINERS=1` on a
+  tecnativa socket proxy) and happens only when a label uses `auth_request`.
+  `NPM_AUTH_REQUEST_PROVIDERS` names the providers instead, for NPMplus on
+  another Docker host or an allowlist socket proxy. When they cannot be read,
+  hosts are written as labelled, as before, and one warning says why.
+- **Offline hosts.** A host NPMplus stored but nginx refused (`npmplus_nginx_online:
+  false`, kept as `<id>.conf.err`) is logged with the nginx error after the write,
+  listed in `/status` (`offline`, per resource `offline` and `nginx_error`) and
+  counted in the new `npmsync_hosts_offline` metric. It is written once more -
+  and again only after the auth_request upstreams or the NPMplus container
+  changed, never in a loop. `/readyz` is not affected.
+- `/status` reports the auth_request upstreams (`auth_request.state`, `source`,
+  `reason`, `providers`) and the hosts a fallback applies to; `/metrics` counts
+  them in `npmsync_auth_fallbacks{mode}`.
+
+### Changed
+
+- **A host whose forward authentication has no upstream is now disabled**
+  (`auth_request_fallback: closed`, the default) instead of being written with
+  a configuration nginx refuses and going offline silently. A host that does
+  not exist yet is not created until the upstream exists: neither API can
+  create a host disabled. Set `auth_request_fallback: open` - or
+  `NPM_PROXY_AUTH_REQUEST_FALLBACK=open` - for hosts that may be served without
+  the login in the meantime.
+- A host that is about to be disabled is disabled before it is updated, so
+  NPMplus never renders the configuration of a host that is going away.
+- A run that cannot reach Docker or the NPM API is retried after 5 seconds,
+  doubling up to a minute, instead of only at the next `RESYNC_INTERVAL`.
+  Above all, this applies what an NPM restart changed as soon as its API
+  answers again.
+
 ## [1.0.2] - 2026-11-19
 
 ### Fixed

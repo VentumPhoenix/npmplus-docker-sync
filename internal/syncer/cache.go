@@ -25,6 +25,11 @@ type Entry struct {
 	Certificate int
 	// Running mirrors the container state at the time of the last run.
 	Running bool
+	// Offline records that NPMplus reported the resource enabled but
+	// offline: nginx refused the configuration generated for it, which
+	// NPMplus keeps as <id>.conf.err. NginxError is the first line of why.
+	Offline    bool
+	NginxError string
 }
 
 // Cache is the in-memory state cache guarding the API against redundant
@@ -136,4 +141,19 @@ func (c *Cache) bucket(kind npm.Kind) map[string]Entry {
 		c.entries[kind] = make(map[string]Entry)
 	}
 	return c.entries[kind]
+}
+
+// Offline counts the entries NPMplus reported offline.
+func (c *Cache) Offline() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	n := 0
+	for _, bucket := range c.entries {
+		for _, entry := range bucket {
+			if entry.Offline {
+				n++
+			}
+		}
+	}
+	return n
 }

@@ -64,7 +64,14 @@ type Config struct {
 	StrictNetwork bool
 	// NPMContainer is the name of the NPM/NPMplus container. When set, its
 	// networks are used for upstream resolution (Redth: NPM_CONTAINER_NAME).
+	// It is also where the auth_request upstreams of NPMplus are read.
 	NPMContainer string
+	// AuthProviders is NPM_AUTH_REQUEST_PROVIDERS: the auth_request providers
+	// NPMplus has a global upstream for, when it cannot be read from its
+	// container (NPMplus on another Docker host). AuthProvidersSet records
+	// that the variable is set at all, which is what replaces the detection.
+	AuthProviders    []string
+	AuthProvidersSet bool
 	// ExposedByDefault manages every container carrying labels of the
 	// namespace, without requiring npm.enable=true.
 	ExposedByDefault bool
@@ -253,6 +260,13 @@ func load(getenv Getenv, environ []string, requireAPI bool) (*Config, error) {
 	collect(err)
 	cfg.DeleteGuardMin, err = integer(getenv, DefaultDeleteGuardMin, "DELETE_GUARD_MIN")
 	collect(err)
+	if raw := str(getenv, "", "NPM_AUTH_REQUEST_PROVIDERS"); raw != "" {
+		cfg.AuthProvidersSet = true
+		cfg.AuthProviders, err = docker.ParseAuthProviders(raw)
+		if err != nil {
+			collect(fmt.Errorf("NPM_AUTH_REQUEST_PROVIDERS: %w", err))
+		}
+	}
 
 	// The per-field defaults (NPM_PROXY_*, NPM_DEFAULT_*) are resolved from
 	// the same table the labels are parsed with, so the two cannot drift.
@@ -349,6 +363,8 @@ func (c *Config) LogValue() slog.Value {
 		slog.Bool("resolve_container_ip", c.ResolveIP),
 		slog.String("npm_network", c.NPMNetwork),
 		slog.Bool("npm_network_strict", c.NPMNetwork != "" && c.StrictNetwork),
+		slog.String("npm_container", c.NPMContainer),
+		slog.String("npm_auth_request_providers", authProviders(c)),
 		slog.Duration("debounce_interval", c.DebounceInterval),
 		slog.Duration("resync_interval", c.ResyncInterval),
 		slog.Bool("exposed_by_default", c.ExposedByDefault),
@@ -399,6 +415,19 @@ func kinds(raw string) ([]npm.Kind, error) {
 		out = append(out, kind)
 	}
 	return out, nil
+}
+
+// authProviders renders NPM_AUTH_REQUEST_PROVIDERS for logging: "" while the
+// providers are read from the NPMplus container.
+func authProviders(c *Config) string {
+	switch {
+	case !c.AuthProvidersSet:
+		return ""
+	case len(c.AuthProviders) == 0:
+		return "none"
+	default:
+		return strings.Join(c.AuthProviders, ",")
+	}
 }
 
 // kindList renders the kinds for logging.

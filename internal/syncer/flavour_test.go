@@ -46,6 +46,11 @@ var plusLabels = map[npm.Kind]map[string]string{
 	},
 }
 
+// notStored are NPMplus-only fields that decide what this tool writes rather
+// than being written themselves, so no resource can carry them.
+// warnUnsupported names them by hand.
+var notStored = map[string]bool{fields.AuthRequestFallback: true}
+
 // baseLabels is the minimum a resource of each kind needs.
 var baseLabels = map[npm.Kind]map[string]string{
 	npm.KindProxy:    {"npm.proxy.domains": "app.example.com", "npm.proxy.port": "80"},
@@ -63,7 +68,7 @@ func TestEveryPlusFieldIsCovered(t *testing.T) {
 
 	for _, kind := range npm.Kinds {
 		for _, f := range fields.List(kind) {
-			if !f.Plus {
+			if !f.Plus || notStored[f.Name] {
 				continue
 			}
 			value, ok := plusLabels[kind][f.Name]

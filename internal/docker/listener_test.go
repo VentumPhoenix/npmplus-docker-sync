@@ -22,6 +22,11 @@ type mockAPI struct {
 	listErr    error
 	pingErr    error
 
+	// inspect answers ContainerInspect by container id.
+	inspect    map[string]container.InspectResponse
+	inspectErr error
+	inspected  []string
+
 	// streams is consumed one subscription at a time so reconnect behaviour
 	// can be exercised deterministically.
 	streams    []stream
@@ -40,6 +45,20 @@ func (m *mockAPI) ContainerList(_ context.Context, _ container.ListOptions) ([]c
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.containers, m.listErr
+}
+
+func (m *mockAPI) ContainerInspect(_ context.Context, id string) (container.InspectResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.inspected = append(m.inspected, id)
+	if m.inspectErr != nil {
+		return container.InspectResponse{}, m.inspectErr
+	}
+	inspect, ok := m.inspect[id]
+	if !ok {
+		return container.InspectResponse{}, errors.New("no such container: " + id)
+	}
+	return inspect, nil
 }
 
 func (m *mockAPI) Ping(_ context.Context) (types.Ping, error) {

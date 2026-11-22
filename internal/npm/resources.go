@@ -111,6 +111,8 @@ type Resource interface {
 // ProxyHost mirrors `/api/nginx/proxy-hosts` as the API *returns* it. Request
 // bodies are built by Payload; see payloads.go.
 type ProxyHost struct {
+	nginxState
+
 	ID          int    `json:"id,omitempty"`
 	CreatedOn   string `json:"created_on,omitempty"`
 	ModifiedOn  string `json:"modified_on,omitempty"`
@@ -401,6 +403,8 @@ func (h *ProxyHost) Fingerprint() string {
 
 // RedirectionHost mirrors `/api/nginx/redirection-hosts`.
 type RedirectionHost struct {
+	nginxState
+
 	ID          int    `json:"id,omitempty"`
 	CreatedOn   string `json:"created_on,omitempty"`
 	ModifiedOn  string `json:"modified_on,omitempty"`
@@ -549,6 +553,8 @@ func (h *RedirectionHost) Fingerprint() string {
 // Stream mirrors `/api/nginx/streams`. Streams have no domain names: their
 // identity is the incoming port.
 type Stream struct {
+	nginxState
+
 	ID          int    `json:"id,omitempty"`
 	CreatedOn   string `json:"created_on,omitempty"`
 	ModifiedOn  string `json:"modified_on,omitempty"`
@@ -693,6 +699,8 @@ func (s *Stream) Fingerprint() string {
 
 // DeadHost mirrors `/api/nginx/dead-hosts`, the "404 host" in the NPM UI.
 type DeadHost struct {
+	nginxState
+
 	ID          int    `json:"id,omitempty"`
 	CreatedOn   string `json:"created_on,omitempty"`
 	ModifiedOn  string `json:"modified_on,omitempty"`

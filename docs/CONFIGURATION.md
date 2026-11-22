@@ -34,7 +34,8 @@ update of this tool. Pinning `NPM_FLAVOUR` does not stop that.
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Recommended: `tcp://docker-socket-proxy:2375`, see [SECURITY.md](../SECURITY.md). |
 | `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY` | — | The standard Docker variables for a remote daemon. |
 | `NPM_NETWORK` | — | The network NPM and your apps share; upstream IPs are taken from it. Alias `NPM_DOCKER_NETWORK`. |
-| `NPM_CONTAINER_NAME` | — | Name of the NPM container; its networks are used when `NPM_NETWORK` is unset. Alias `NPM_CONTAINER`. |
+| `NPM_CONTAINER_NAME` | — | Name (or id prefix) of the NPM container; its networks are used when `NPM_NETWORK` is unset, and it is where the `AUTH_REQUEST_<PROVIDER>_UPSTREAM` names of NPMplus are read. Unset, that container is the one whose address, name, alias or compose service matches the host of `NPM_URL`. Alias `NPM_CONTAINER`. |
+| `NPM_AUTH_REQUEST_PROVIDERS` | — | The `auth_request` providers NPMplus has a global upstream for, e.g. `authentik,authelia`, or `none`. Replaces reading them from the container: for NPMplus on another Docker host, or a socket proxy that does not allow `GET /containers/{id}/json`. See [auth_request_fallback](LABELS.md#forward-authentication-without-an-upstream). |
 | `NPM_NETWORK_STRICT` | `true` | With `NPM_NETWORK` set, skip a container that is not on it instead of trying another network. |
 | `RESOLVE_CONTAINER_IP` | `true` | `false` uses container names instead of IPs. |
 
@@ -108,8 +109,8 @@ list is in [FIELDS.md](FIELDS.md).
 |---|---|
 | `/healthz` | the process is alive |
 | `/readyz` | `200` once a sync ran and Docker, NPM and the event stream are fine; `503` otherwise |
-| `/status` | JSON: every managed host with container, id, certificate, state, last error |
-| `/metrics` | Prometheus: runs, errors, changes, blocked deletions, hosts per kind, certificate matches |
+| `/status` | JSON: every managed host with container, id, certificate, state, last error and whether NPMplus reports it offline; `offline`, the number of those; `auth_request`: whether the upstreams of NPMplus are known (`state`, `source`, `reason`, `providers`) and the hosts `auth_request_fallback` applies to, with the reason |
+| `/metrics` | Prometheus: runs, errors, changes, blocked deletions, hosts per kind, certificate matches, `npmsync_hosts_offline`, `npmsync_auth_fallbacks{mode}` |
 
 A host the API rejects does **not** make `/readyz` fail — the other hosts are
 fine and a restart would not help. It is counted in the body instead:

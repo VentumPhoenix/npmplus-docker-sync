@@ -57,7 +57,7 @@ services:
     container_name: socket-proxy
     environment:
       # Everything not listed is denied. This is exactly what the tool needs:
-      CONTAINERS: 1 # list containers (labels, networks, state)
+      CONTAINERS: 1 # list containers (labels, networks, state); auth_request: NPMplus' AUTH_REQUEST_* names
       EVENTS: 1 # react to start/stop
       PING: 1
       VERSION: 1

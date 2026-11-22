@@ -32,6 +32,10 @@ type Metrics struct {
 	LastRun time.Time
 	// LastDuration is how long it took.
 	LastDuration time.Duration
+	// Offline is the number of managed hosts NPMplus reports offline.
+	Offline int
+	// Fallbacks counts the hosts auth_request_fallback applies to, by mode.
+	Fallbacks map[string]int
 }
 
 // metrics is the mutable counter set owned by the worker.
@@ -104,6 +108,11 @@ func (w *Worker) Metrics() Metrics {
 
 	out.Managed = w.cache.Len()
 	out.ManagedByKind = w.cache.Counts()
+	out.Offline = w.cache.Offline()
+	out.Fallbacks = map[string]int{}
+	for _, f := range w.Fallbacks() {
+		out.Fallbacks[f.Mode]++
+	}
 	out.LastRun = w.Status().LastRun
 	return out
 }
@@ -118,6 +127,10 @@ type ResourceStatus struct {
 	Enabled     bool     `json:"enabled"`
 	Running     bool     `json:"container_running"`
 	Certificate int      `json:"certificate_id"`
+	// Offline is set when NPMplus reports the host offline: nginx refused
+	// the configuration it generated, NginxError says why.
+	Offline    bool   `json:"offline,omitempty"`
+	NginxError string `json:"nginx_error,omitempty"`
 	// LastError is why the resource was last rejected, if it was.
 	LastError string `json:"last_error,omitempty"`
 	// RetryAfter is when the backoff of a failed resource expires.
@@ -144,6 +157,7 @@ func (w *Worker) Resources() []ResourceStatus {
 				Container: entry.Container, Index: entry.Index,
 				Enabled: entry.Enabled, Running: entry.Running,
 				Certificate: entry.Certificate,
+				Offline:     entry.Offline, NginxError: entry.NginxError,
 			}
 			if f, ok := failures[backoffKey(kind, key)]; ok {
 				retry := f.until

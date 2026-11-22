@@ -24,6 +24,9 @@ import (
 // narrow makes the listener trivially mockable in tests.
 type APIClient interface {
 	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
+	// ContainerInspect reads the environment of the NPMplus container, of
+	// which only the AUTH_REQUEST_<PROVIDER>_UPSTREAM names are looked at.
+	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
 	Events(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error)
 	Ping(ctx context.Context) (types.Ping, error)
 	Close() error
@@ -60,6 +63,12 @@ type Listener struct {
 	streamUp    bool
 	streamSince time.Time
 	streamErr   string
+
+	// authMu guards how the auth_request upstreams of NPMplus are found and
+	// what was last said about them, so the log says it once.
+	authMu       sync.Mutex
+	auth         AuthDetection
+	authReported string
 }
 
 // StreamStatus describes the health of the Docker event subscription.
@@ -192,6 +201,9 @@ func (l *Listener) Snapshot(ctx context.Context) (Snapshot, error) {
 	opts.SelfID = l.selfID
 
 	snapshot, res := Scan(containers, opts)
+	if usesAuthRequest(snapshot.Targets) {
+		snapshot.Auth = l.authStatus(ctx, containers)
+	}
 	for _, parseErr := range res.Errors {
 		l.log.Warn("ignoring invalid label definition (its hosts are protected from deletion)",
 			slog.String("error", parseErr.Error()))

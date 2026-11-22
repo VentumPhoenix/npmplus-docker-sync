@@ -130,6 +130,29 @@ NPMplus releases from 2026-11 on call the first two ` + "`npmplus_disable_crowds
 ` + "`npmplus_disable_proxy_request_buffering`" + `, and store the response buffering as a mode:
 ` + "`response_buffering: true`" + ` writes ` + "`on_auto`" + `, ` + "`false`" + ` writes ` + "`off_auto`" + `. The labels are
 the same for every release; the tool writes what the server it talks to expects.
+
+## Forward authentication without an upstream
+
+` + "`auth_request`" + ` needs an upstream for its provider: an ` + "`auth_request_upstream`" + ` on the
+host or a location, or ` + "`AUTH_REQUEST_<PROVIDER>_UPSTREAM`" + ` in the environment of
+NPMplus. Without one, NPMplus writes a configuration nginx refuses and the host is
+not served at all. The tool reads which of these variables NPMplus has (names only,
+never their values) and ` + "`auth_request_fallback`" + ` decides what it writes instead:
+
+| Value | Host | Log |
+|---|---|---|
+| ` + "`closed`" + ` (default) | disabled, with its forward authentication kept; a host that does not exist yet is not created | error |
+| ` + "`open`" + ` | written without the forward authentication that has no upstream | warning |
+
+A location inherits the host's value. ` + "`open`" + ` applies only where it is set: one
+location with ` + "`closed`" + ` disables the whole host, because a disabled location would
+hand its path to the location above it. Once the upstream exists the next run
+writes the labels as they are, and when the upstreams cannot be read at all the
+host is written as labelled, exactly as before this setting existed.
+
+> **Security:** ` + "`open`" + ` means the service is reachable **without any login** for as
+> long as the upstream is missing. Use it only for services that are harmless to
+> expose, never for admin interfaces.
 `)
 	return sb.String()
 }

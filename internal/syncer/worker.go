@@ -14,6 +14,7 @@ import (
 
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/certs"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/docker"
+	"github.com/VentumPhoenix/npmplus-docker-sync/internal/fields"
 	"github.com/VentumPhoenix/npmplus-docker-sync/internal/npm"
 )
 
@@ -100,7 +101,22 @@ type Options struct {
 	// DeleteGuardMin is how many deletions a run must reach before the guard
 	// looks at the share at all, so small setups stay usable.
 	DeleteGuardMin int
+	// RetryMin is the first delay before a run that could not reach Docker
+	// or the NPM API is tried again; it doubles up to RetryMax. 0 means
+	// DefaultRetryMin and DefaultRetryMax.
+	RetryMin time.Duration
+	RetryMax time.Duration
 }
+
+// Retry bounds for a run that failed for want of Docker or the NPM API. The
+// typical case is NPM restarting: its start event arrives well before its API
+// answers, and waiting for the periodic resync would leave whatever the
+// restart changed - an auth_request upstream that appeared - unapplied for
+// minutes.
+const (
+	DefaultRetryMin = 5 * time.Second
+	DefaultRetryMax = time.Minute
+)
 
 // Worker owns every write to the NPM API. Exactly one goroutine runs the
 // reconcile loop, which keeps API calls sequential and avoids the SQLite
@@ -130,6 +146,16 @@ type Worker struct {
 	// stoppedSince remembers when a container was first seen stopped, which
 	// is what the grace period is measured against.
 	stoppedSince map[string]time.Time
+	// auth is what the last snapshot said about the auth_request upstreams
+	// of NPMplus; fallbacks are the hosts auth_request_fallback applied to
+	// in the last run, fallbackSigs what was last logged about each.
+	auth         docker.AuthStatus
+	fallbacks    map[string]FallbackStatus
+	fallbackSigs map[string]string
+	// offlineTried remembers, per resource NPMplus reports offline, the
+	// auth status it was last rewritten under, so it is rewritten once per
+	// change and never in a loop.
+	offlineTried map[string]string
 	// metrics are the counters published by /metrics.
 	metrics metrics
 }
@@ -151,12 +177,21 @@ func NewWorker(api API, src TargetSource, opts Options, log *slog.Logger) *Worke
 	if opts.OnStop == "" {
 		opts.OnStop = docker.OnStopDisable
 	}
+	if opts.RetryMin <= 0 {
+		opts.RetryMin = DefaultRetryMin
+	}
+	if opts.RetryMax < opts.RetryMin {
+		opts.RetryMax = max(DefaultRetryMax, opts.RetryMin)
+	}
 	return &Worker{
 		api: api, src: src, cache: NewCache(), opts: opts, log: log,
 		accessLists:  map[string]int{},
 		failures:     map[string]failure{},
 		warned:       map[string]struct{}{},
 		stoppedSince: map[string]time.Time{},
+		fallbacks:    map[string]FallbackStatus{},
+		fallbackSigs: map[string]string{},
+		offlineTried: map[string]string{},
 	}
 }
 
@@ -180,6 +215,13 @@ type Status struct {
 	// Blocked names the safety rule that stopped this run from deleting, if
 	// one did.
 	Blocked string
+	// Offline counts the managed hosts NPMplus reports offline: nginx
+	// refused the configuration it generated for them. It does not affect
+	// readiness - the other hosts are served, and restarting this tool
+	// would not change it.
+	Offline int
+	// Auth is what is known about the auth_request upstreams of NPMplus.
+	Auth docker.AuthStatus
 }
 
 // StreamDownGrace is how long the Docker event stream may be disconnected
@@ -210,8 +252,13 @@ func (w *Worker) Status() Status {
 		Failed:  w.lastFailed,
 		Err:     w.lastErr,
 		Blocked: w.blocked,
+		Offline: w.cache.Offline(),
 	}
 	w.statusMu.RUnlock()
+
+	w.refMu.RLock()
+	status.Auth = w.auth
+	w.refMu.RUnlock()
 
 	if source, ok := w.src.(StreamSource); ok {
 		status.Stream = source.StreamStatus()
@@ -238,6 +285,21 @@ func (w *Worker) Run(ctx context.Context, triggers <-chan []docker.Event) error 
 	} else {
 		w.log.Info("initial reconciliation complete", slog.Any("result", res))
 	}
+
+	// A run that could not reach Docker or the API is tried again soon,
+	// with a growing delay, instead of only at the next resync.
+	var retry <-chan time.Time
+	delay := w.opts.RetryMin
+	scheduleRetry := func() {
+		if w.Status().Err == nil {
+			retry, delay = nil, w.opts.RetryMin
+			return
+		}
+		w.log.Debug("retrying the failed run", slog.Duration("retry_in", delay))
+		retry = time.After(delay)
+		delay = min(2*delay, w.opts.RetryMax)
+	}
+	scheduleRetry()
 
 	var resync <-chan time.Time
 	if w.opts.ResyncInterval > 0 {
@@ -269,6 +331,12 @@ func (w *Worker) Run(ctx context.Context, triggers <-chan []docker.Event) error 
 				slog.String("containers", describe(batch)))
 			res, err := w.Reconcile(ctx)
 			w.report("reconciliation", res, err)
+			scheduleRetry()
+
+		case <-retry:
+			res, err := w.Reconcile(ctx)
+			w.report("retry", res, err)
+			scheduleRetry()
 
 		case <-resync:
 			// An NPM or NPMplus upgrade while this process runs changes which
@@ -279,6 +347,7 @@ func (w *Worker) Run(ctx context.Context, triggers <-chan []docker.Event) error 
 			}
 			res, err := w.Reconcile(ctx)
 			w.report("periodic resync", res, err)
+			scheduleRetry()
 
 		case <-certPoll:
 			if !w.PollCertificates(ctx) {
@@ -287,6 +356,7 @@ func (w *Worker) Run(ctx context.Context, triggers <-chan []docker.Event) error 
 			w.log.Info("certificate list changed, reconciling")
 			res, err := w.Reconcile(ctx)
 			w.report("certificate resync", res, err)
+			scheduleRetry()
 		}
 	}
 }
@@ -379,6 +449,9 @@ func (w *Worker) reconcile(ctx context.Context, deleteOrphans bool) (Result, err
 		return res, err
 	}
 	w.trackStopped(snapshot.Targets)
+	w.refMu.Lock()
+	w.auth = snapshot.Auth
+	w.refMu.Unlock()
 
 	// The certificate list is fetched once per run: the automatic selection
 	// of every host reads from the same snapshot, so one run cannot hand two
@@ -561,6 +634,8 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 	var errs []error
 	next := make(map[string]Entry, len(desired))
 	now := time.Now()
+	fallbacks := map[string]FallbackStatus{}
+	fallbackSigs := map[string]string{}
 
 	for _, key := range sortedKeys(desired) {
 		target := desired[key]
@@ -597,6 +672,7 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 					Certificate: current.ResourceCertificate().ID,
 					Running:     target.Running,
 				}
+				next[key] = withNginx(next[key], current)
 			}
 			log.Debug("container recently stopped, waiting out the grace period",
 				slog.String("key", key), slog.String("container", target.ContainerName))
@@ -621,6 +697,36 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 			log.Error("cannot resolve access lists, skipping",
 				slog.String("key", key), slog.String("error", err.Error()))
 			continue
+		}
+
+		// A forward authentication without an upstream cannot be served as
+		// labelled; auth_request_fallback decides what is written instead.
+		// Only a running container is decided for: a stopped one is left as
+		// it is stored anyway.
+		if kind == npm.KindProxy && target.Running {
+			decision := decideAuthFallback(target, snapshot.Auth)
+			target = applyAuthFallback(target, decision)
+			if decision.Applies() {
+				fallbacks[key] = FallbackStatus{
+					Key: key, Container: target.ContainerName, Mode: decision.Mode,
+					Providers: decision.Missing, Parts: decision.Parts,
+					Reason: decision.Reason(), Created: found,
+				}
+				// Whether a closed host exists changes what closed means for it
+				// (disabled or not created); an open one is written either way.
+				fallbackSigs[key] = decision.signature()
+				if decision.Mode == fields.AuthFallbackClosed {
+					fallbackSigs[key] += fmt.Sprintf("|%t", found)
+				}
+				if decision.Mode == fields.AuthFallbackClosed && !found {
+					// Neither API creates a host disabled, and a host created
+					// enabled is rendered with the configuration nginx refuses
+					// (NPMplus releases that render inside the write even
+					// reject it). Not creating it is the closed state.
+					out.result.Skipped++
+					continue
+				}
+			}
 		}
 
 		var liveResource npm.Resource
@@ -707,44 +813,6 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 		enabled := current.IsEnabled()
 		changed := false
 
-		if frozen && needsMarker(current, dialect) {
-			stamped, err := w.stampMarker(ctx, log, key, id, current)
-			if err != nil {
-				out.result.Failed++
-				errs = append(errs, err)
-				continue
-			}
-			changed = true
-			if stamped != nil {
-				hash = stamped.Fingerprint()
-			}
-		}
-
-		if !inSync {
-			w.reportDrift(log, kind, key, id, current, resource)
-			if w.opts.DryRun {
-				log.Info("[dry-run] would update resource",
-					slog.String("key", key), slog.Int("id", id),
-					slog.String("config", resource.Describe()),
-					slog.String("diff", npm.Diff(current, resource)))
-				out.result.Updated++
-				continue
-			}
-			if _, err := w.api.Update(ctx, id, resource); err != nil {
-				out.result.Failed++
-				errs = append(errs, fmt.Errorf("update %s %s: %w", kind.Label(), key, err))
-				log.Error("failed to update resource", slog.String("key", key), slog.String("error", err.Error()))
-				w.backOff(log, kind, key, hash, err, now)
-				continue
-			}
-			changed = true
-			log.Info("updated resource",
-				slog.String("key", key), slog.Int("id", id),
-				slog.String("container", target.ContainerName),
-				slog.Int("index", target.Index),
-				slog.String("config", resource.Describe()))
-		}
-
 		// The enabled flag lives outside the write payload, so it is
 		// reconciled on its own. Without this step `enabled: false` would be
 		// silently ignored forever.
@@ -759,6 +827,82 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 				desiredEnabled = enabled // handled by applyStopPolicy
 			}
 		}
+
+		// A host NPMplus reports offline is written once more, even without a
+		// difference - but only once per auth status, which is what changes
+		// when an upstream appears or NPMplus is restarted.
+		online, nginxError, _ := npm.NginxStatus(current)
+		switch {
+		case online:
+			w.clearOffline(kind, key)
+		case enabled && desiredEnabled && !frozen:
+			if w.offlineAttempt(kind, key, snapshot.Auth.Fingerprint()) && inSync {
+				log.Warn("npm reports the host offline (nginx refused its configuration), writing it once more",
+					slog.String("key", key), slog.Int("id", id), slog.String("nginx_error", nginxError))
+				inSync = false
+			}
+		}
+
+		if frozen && needsMarker(current, dialect) {
+			stamped, err := w.stampMarker(ctx, log, key, id, current)
+			if err != nil {
+				out.result.Failed++
+				errs = append(errs, err)
+				continue
+			}
+			changed = true
+			if stamped != nil {
+				hash = stamped.Fingerprint()
+			}
+		}
+
+		// A host that is going to be disabled is disabled first: NPMplus does
+		// not render a disabled host, so the update cannot leave a broken
+		// configuration behind (auth_request_fallback=closed).
+		if !inSync && !desiredEnabled && enabled && !frozen {
+			toggled, err := w.applyEnabled(ctx, log, kind, key, id, false, true)
+			if err != nil {
+				out.result.Failed++
+				errs = append(errs, err)
+				continue
+			}
+			if toggled {
+				enabled = false
+				changed = true
+			}
+		}
+
+		written := current
+		if !inSync {
+			w.reportDrift(log, kind, key, id, current, resource)
+			if w.opts.DryRun {
+				log.Info("[dry-run] would update resource",
+					slog.String("key", key), slog.Int("id", id),
+					slog.String("config", resource.Describe()),
+					slog.String("diff", npm.Diff(current, resource)))
+				out.result.Updated++
+				continue
+			}
+			updated, err := w.api.Update(ctx, id, resource)
+			if err != nil {
+				out.result.Failed++
+				errs = append(errs, fmt.Errorf("update %s %s: %w", kind.Label(), key, err))
+				log.Error("failed to update resource", slog.String("key", key), slog.String("error", err.Error()))
+				w.backOff(log, kind, key, hash, err, now)
+				continue
+			}
+			if updated != nil {
+				written = updated
+				w.reportOffline(log, target, key, updated, enabled)
+			}
+			changed = true
+			log.Info("updated resource",
+				slog.String("key", key), slog.Int("id", id),
+				slog.String("container", target.ContainerName),
+				slog.Int("index", target.Index),
+				slog.String("config", resource.Describe()))
+		}
+
 		toggled, err := w.applyEnabled(ctx, log, kind, key, id, desiredEnabled, enabled)
 		if err != nil {
 			out.result.Failed++
@@ -768,6 +912,11 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 		if toggled {
 			enabled = desiredEnabled
 			changed = true
+			if enabled {
+				// Enabling renders the host anew; what the server said
+				// about it while it was disabled no longer holds.
+				written = nil
+			}
 		}
 
 		w.noteSuccess(kind, key)
@@ -777,10 +926,13 @@ func (w *Worker) reconcileKind(ctx context.Context, kind npm.Kind, targets []*do
 		default:
 			out.result.Unchanged++
 		}
-		next[key] = Entry{
+		next[key] = withNginx(Entry{
 			ID: id, Hash: hash, Container: target.ContainerName, Index: target.Index,
 			Enabled: enabled, Certificate: resource.ResourceCertificate().ID, Running: target.Running,
-		}
+		}, written)
+	}
+	if kind == npm.KindProxy {
+		w.noteFallbacks(log, fallbacks, fallbackSigs)
 	}
 
 	// Orphans: resources we created whose definition is gone. Resources
@@ -1098,6 +1250,7 @@ func (w *Worker) create(ctx context.Context, log *slog.Logger, target *docker.Ta
 	// `enabled: false` needs a follow-up call.
 	id := created.ResourceID()
 	enabled := created.IsEnabled()
+	w.reportOffline(log, target, target.Key(), created, enabled)
 	toggled, err := w.applyEnabled(ctx, log, target.Kind, target.Key(), id, resource.IsEnabled(), enabled)
 	if err != nil {
 		return nil, false, err
@@ -1106,7 +1259,7 @@ func (w *Worker) create(ctx context.Context, log *slog.Logger, target *docker.Ta
 		enabled = resource.IsEnabled()
 	}
 
-	entry := Entry{
+	entry := withNginx(Entry{
 		ID:          id,
 		Hash:        resource.Fingerprint(),
 		Container:   target.ContainerName,
@@ -1114,7 +1267,7 @@ func (w *Worker) create(ctx context.Context, log *slog.Logger, target *docker.Ta
 		Enabled:     enabled,
 		Certificate: resource.ResourceCertificate().ID,
 		Running:     target.Running,
-	}
+	}, created)
 	log.Info("created resource",
 		slog.String("key", target.Key()), slog.Int("id", id),
 		slog.String("container", target.ContainerName),

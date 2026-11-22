@@ -60,6 +60,7 @@ and do not end up in any API field.
 | `access_list_type` **+** | `public`, `custom` | — | public or custom; derived from access_list when unset | `accesslist.type` | `NPM_PROXY_ACCESS_LIST_TYPE` | `npmplus_access_list_type` |
 | `advanced_config` | string | — | nginx snippet inserted into the server block, below the ownership marker line | `advanced`, `custom_config`, `advanced.config` | `NPM_PROXY_ADVANCED_CONFIG` | `advanced_config` |
 | `auth_request` **+** | `none`, `anubis`, `tinyauth`, `oauth2proxy`, `voidauth`, `authelia`, `authentik`, `authentik-send-basic-auth` | `none` | forward authentication integration | `auth`, `forward_auth` | `NPM_PROXY_AUTH_REQUEST` | `npmplus_auth_request` |
+| `auth_request_fallback` **+** | `closed`, `open` | `closed` | auth_request without an upstream in NPMplus: closed disables the host, open serves it without login (never for admin UIs) | `auth.fallback` | `NPM_PROXY_AUTH_REQUEST_FALLBACK` | `enabled/npmplus_auth_request` |
 | `auth_request_upstream` **+** | string | — | address of the auth service; needs auth_request | `auth.upstream` | `NPM_PROXY_AUTH_REQUEST_UPSTREAM` | `npmplus_auth_request_upstream` |
 | `block_exploits` | bool | `true` | block common exploit patterns (not offered in NPMplus releases without the meta object) | `block_common_exploits`, `exploits` | `NPM_PROXY_BLOCK_EXPLOITS` | `block_exploits` |
 | `caching` | bool | `false` | cache static assets (can break dynamic content; not offered in NPMplus releases without the meta object) | `cache`, `caching_enabled` | `NPM_PROXY_CACHING` | `caching_enabled` |
@@ -184,6 +185,7 @@ Location blocks belong to a proxy host and inherit every switch from it.
 | `x_frame_options` **+** | `deny`, `sameorigin`, `upstream`, `none` | — | X-Frame-Options header for this path; inherited from the host | `xframe_options` | `npmplus_x_frame_options` |
 | `auth_request` **+** | `none`, `anubis`, `tinyauth`, `oauth2proxy`, `voidauth`, `authelia`, `authentik`, `authentik-send-basic-auth` | — | forward authentication for this path; inherited from the host | `auth` | `npmplus_auth_request` |
 | `auth_request_upstream` **+** | string | — | address of the auth service; inherited from the host | — | `npmplus_auth_request_upstream` |
+| `auth_request_fallback` **+** | `closed`, `open` | — | auth_request of this path without an upstream: closed disables the whole host, open drops the login for this path; inherited from the host | `auth.fallback` | `enabled/npmplus_auth_request` |
 
 ## NPMplus-only fields
 
@@ -195,6 +197,7 @@ them, never because of a default.
 |---|---|---|---|
 | `proxy` | `access_list_type` | `npmplus_access_list_type` | public or custom; derived from access_list when unset |
 | `proxy` | `auth_request` | `npmplus_auth_request` | forward authentication integration |
+| `proxy` | `auth_request_fallback` | `enabled/npmplus_auth_request` | auth_request without an upstream in NPMplus: closed disables the host, open serves it without login (never for admin UIs) |
 | `proxy` | `auth_request_upstream` | `npmplus_auth_request_upstream` | address of the auth service; needs auth_request |
 | `proxy` | `crowdsec_appsec` | `npmplus_crowdsec_appsec` | run requests through the CrowdSec AppSec component |
 | `proxy` | `fancyindex` | `npmplus_fancyindex` | pretty directory listings; scheme path only |
@@ -234,3 +237,26 @@ NPMplus releases from 2026-11 on call the first two `npmplus_disable_crowdsec_ap
 `npmplus_disable_proxy_request_buffering`, and store the response buffering as a mode:
 `response_buffering: true` writes `on_auto`, `false` writes `off_auto`. The labels are
 the same for every release; the tool writes what the server it talks to expects.
+
+## Forward authentication without an upstream
+
+`auth_request` needs an upstream for its provider: an `auth_request_upstream` on the
+host or a location, or `AUTH_REQUEST_<PROVIDER>_UPSTREAM` in the environment of
+NPMplus. Without one, NPMplus writes a configuration nginx refuses and the host is
+not served at all. The tool reads which of these variables NPMplus has (names only,
+never their values) and `auth_request_fallback` decides what it writes instead:
+
+| Value | Host | Log |
+|---|---|---|
+| `closed` (default) | disabled, with its forward authentication kept; a host that does not exist yet is not created | error |
+| `open` | written without the forward authentication that has no upstream | warning |
+
+A location inherits the host's value. `open` applies only where it is set: one
+location with `closed` disables the whole host, because a disabled location would
+hand its path to the location above it. Once the upstream exists the next run
+writes the labels as they are, and when the upstreams cannot be read at all the
+host is written as labelled, exactly as before this setting existed.
+
+> **Security:** `open` means the service is reachable **without any login** for as
+> long as the upstream is missing. Use it only for services that are harmless to
+> expose, never for admin interfaces.
