@@ -2,6 +2,7 @@
 
 Newest first. Most upgrades need no action — the ones that do say so at the top.
 
+- 1.1.0 → 1.1.1 — no action, only fixes ([changelog](../CHANGELOG.md#111---2026-11-24))
 - [1.0.x → 1.1.0](#from-v10-to-v110) — no action unless a container uses `auth_request`
 - 1.0.1 → 1.0.2 — no action, only a fix ([changelog](../CHANGELOG.md#102---2026-11-19))
 - 1.0.0 → 1.0.1 — no action; update before the NPMplus release that follows `2026-10-22-r1` ([changelog](../CHANGELOG.md#101---2026-11-16))
