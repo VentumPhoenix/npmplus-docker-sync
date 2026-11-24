@@ -215,22 +215,44 @@ func TestReadyzFollowsTheEventStream(t *testing.T) {
 	}
 }
 
-// The login loop must survive an NPM that is still starting up.
-func TestLoginWithRetry(t *testing.T) {
+// The start-up loop must survive an NPM that is still starting up.
+func TestConnectWithRetry(t *testing.T) {
 	t.Parallel()
+	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	var attempts int
 	client := &stubLogin{fail: 2, attempts: &attempts}
-	if err := loginWithRetry(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond); err != nil {
-		t.Fatalf("loginWithRetry() error = %v", err)
+	if err := connectWithRetry(context.Background(), client, discard, time.Millisecond); err != nil {
+		t.Fatalf("connectWithRetry() error = %v", err)
 	}
 	if attempts != 3 {
 		t.Errorf("attempts = %d, want 3", attempts)
 	}
 
 	failing := &stubLogin{fail: 99, attempts: new(int)}
-	if err := loginWithRetry(context.Background(), failing, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond); err == nil {
-		t.Error("loginWithRetry() error = nil, want it to give up eventually")
+	if err := connectWithRetry(context.Background(), failing, discard, time.Millisecond); err == nil {
+		t.Error("connectWithRetry() error = nil, want it to give up eventually")
+	}
+}
+
+// NPM restarting between the login and the flavour probe is retried as a
+// whole, with a fresh login: the old session went away with the old process.
+func TestConnectWithRetrySurvivesARestartAfterTheLogin(t *testing.T) {
+	t.Parallel()
+
+	var attempts int
+	client := &stubLogin{probeFail: 2, attempts: &attempts}
+	if err := connectWithRetry(context.Background(), client, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond); err != nil {
+		t.Fatalf("connectWithRetry() error = %v", err)
+	}
+	if attempts != 3 || client.probes != 3 {
+		t.Errorf("logins = %d, probes = %d; want 3 of each", attempts, client.probes)
+	}
+
+	failing := &stubLogin{probeFail: 99, attempts: new(int)}
+	err := connectWithRetry(context.Background(), failing, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "NPM_FLAVOUR") {
+		t.Errorf("connectWithRetry() error = %v, want the flavour hint", err)
 	}
 }
 
@@ -296,10 +318,21 @@ func (s *stubSource) Snapshot(context.Context) (docker.Snapshot, error) {
 
 func (s *stubSource) StreamStatus() docker.StreamStatus { return s.stream }
 
-// stubLogin fails the first `fail` attempts.
+// stubLogin fails the first `fail` logins and the first `probeFail` flavour
+// probes.
 type stubLogin struct {
-	fail     int
-	attempts *int
+	fail      int
+	probeFail int
+	probes    int
+	attempts  *int
+}
+
+func (s *stubLogin) DetectFlavour(context.Context) (npm.Flavour, error) {
+	s.probes++
+	if s.probes <= s.probeFail {
+		return "", errors.New("EOF")
+	}
+	return npm.FlavourNPMplus, nil
 }
 
 func (s *stubLogin) Login(context.Context) error {

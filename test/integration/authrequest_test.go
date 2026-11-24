@@ -106,8 +106,12 @@ func TestAuthRequestFallback(t *testing.T) {
 	})
 
 	t.Run("the upstream brings the forward authentication back", func(t *testing.T) {
-		stop := startDaemon(t, detect)
+		log, stop := startDaemonLogged(t, detect)
 		defer stop()
+		// The restart has to hit a running daemon, not one still starting.
+		waitFor(t, "the daemon's first reconciliation", 2*time.Minute, func() bool {
+			return strings.Contains(log.String(), "initial reconciliation")
+		})
 
 		recreateNPM(t, "AUTH_REQUEST_AUTHENTIK_UPSTREAM="+authUpstream)
 		t.Cleanup(func() { recreateNPM(t) })

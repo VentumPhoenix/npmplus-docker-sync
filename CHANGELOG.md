@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A certificate with a DNS challenge is requested again on the NPMplus
+  development branch.** It dropped `npmplus_dns_challenge`: a non-empty
+  `npmplus_dns_provider` is the DNS challenge now, and a request that still
+  carried the switch was rejected. The switch is only sent to a server whose
+  schema lists it.
+- **Starting while NPM restarts no longer exits.** The login was retried, the
+  flavour probe right after it was not - an NPM that went away in between ended
+  the process. Both are now retried together, with a fresh login.
+
+### Security
+
+- OpenTelemetry 1.47.0, which the Docker client pulls in (GO-2026-6974), and
+  `golang.org/x/net` 0.63.0.
+
 ## [1.1.0] - 2026-11-22
 
 Forward authentication that cannot work no longer takes a host offline

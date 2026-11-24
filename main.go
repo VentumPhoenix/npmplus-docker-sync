@@ -229,14 +229,8 @@ func run(mode runMode) error {
 	if err != nil {
 		return err
 	}
-	if err := loginWithRetry(ctx, npmClient, log, time.Second); err != nil {
+	if err := connectWithRetry(ctx, npmClient, log, time.Second); err != nil {
 		return err
-	}
-	// NPM and NPMplus disagree about which properties a write payload may
-	// carry, and both reject the other dialect outright, so settle this before
-	// the first reconcile rather than on every failing request.
-	if _, err := npmClient.DetectFlavour(ctx); err != nil {
-		return fmt.Errorf("cannot determine the npm api flavour (pin it with NPM_FLAVOUR): %w", err)
 	}
 
 	worker := syncer.NewWorker(npmClient, listener, syncer.Options{
@@ -323,13 +317,20 @@ func validate(ctx context.Context, listener *docker.Listener) error {
 // wait loop can be tested without a server that sleeps.
 type loginClient interface {
 	Login(ctx context.Context) error
+	DetectFlavour(ctx context.Context) (npm.Flavour, error)
 	BaseURL() string
 	AuthMode() npm.AuthMode
 }
 
-// loginWithRetry waits for NPM to become available; the container is often
-// started in parallel with NPM itself.
-func loginWithRetry(ctx context.Context, client loginClient, log *slog.Logger, backoff time.Duration) error {
+// connectWithRetry waits for NPM to become available: it logs in and settles
+// the API flavour, retrying both together. The container is often started in
+// parallel with NPM itself, and NPM may restart between the login and the
+// probe - a session from the instance that just went away is worth nothing.
+//
+// NPM and NPMplus disagree about which properties a write payload may carry,
+// and both reject the other dialect outright, so the flavour is settled before
+// the first reconcile rather than on every failing request.
+func connectWithRetry(ctx context.Context, client loginClient, log *slog.Logger, backoff time.Duration) error {
 	const maxAttempts = 10
 	if backoff <= 0 {
 		backoff = time.Second
@@ -337,6 +338,11 @@ func loginWithRetry(ctx context.Context, client loginClient, log *slog.Logger, b
 
 	for attempt := 1; ; attempt++ {
 		err := client.Login(ctx)
+		if err == nil {
+			if _, err = client.DetectFlavour(ctx); err != nil {
+				err = fmt.Errorf("cannot determine the npm api flavour (pin it with NPM_FLAVOUR): %w", err)
+			}
+		}
 		if err == nil {
 			log.Info("npm api ready",
 				slog.String("url", client.BaseURL()),
@@ -347,9 +353,9 @@ func loginWithRetry(ctx context.Context, client loginClient, log *slog.Logger, b
 			return ctx.Err()
 		}
 		if attempt >= maxAttempts {
-			return fmt.Errorf("login to %s failed after %d attempts: %w", client.BaseURL(), attempt, err)
+			return fmt.Errorf("connecting to %s failed after %d attempts: %w", client.BaseURL(), attempt, err)
 		}
-		log.Warn("npm login failed, retrying",
+		log.Warn("npm api not ready, retrying",
 			slog.String("error", err.Error()),
 			slog.Int("attempt", attempt),
 			slog.Duration("retry_in", backoff))

@@ -339,6 +339,14 @@ func mustSync(t *testing.T, extra ...string) syncRun {
 // stream - and returns a function that stops it again.
 func startDaemon(t *testing.T, extra ...string) func() {
 	t.Helper()
+	_, stop := startDaemonLogged(t, extra...)
+	return stop
+}
+
+// startDaemonLogged is startDaemon that also hands out the daemon's log, for a
+// test that has to wait for it to reach a certain point.
+func startDaemonLogged(t *testing.T, extra ...string) (*syncBuffer, func()) {
+	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, binary) //nolint:gosec // the binary this repo builds
@@ -346,9 +354,9 @@ func startDaemon(t *testing.T, extra ...string) func() {
 	cmd.Env = append(cmd.Env, "RESYNC_INTERVAL=30s")
 	cmd.Env = append(cmd.Env, extra...)
 
-	var buf syncBuffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	buf := &syncBuffer{}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
 	if err := cmd.Start(); err != nil {
 		cancel()
 		t.Fatalf("start the daemon: %v", err)
@@ -375,7 +383,7 @@ func startDaemon(t *testing.T, extra ...string) func() {
 		}
 	}
 	t.Cleanup(stop)
-	return stop
+	return buf, stop
 }
 
 // syncBuffer is a mutex-guarded buffer: the daemon writes from its own
