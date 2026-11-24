@@ -7,24 +7,6 @@
 				{
 					"if": {
 						"properties": {
-							"npmplus_dns_challenge": {
-								"const": true,
-								"type": "boolean"
-							}
-						},
-						"required": [
-							"npmplus_dns_challenge"
-						]
-					},
-					"then": {
-						"required": [
-							"npmplus_dns_provider"
-						]
-					}
-				},
-				{
-					"if": {
-						"properties": {
 							"certificate_id": {
 								"const": "new"
 							}
@@ -57,13 +39,13 @@
 						},
 						"if": {
 							"properties": {
-								"npmplus_dns_challenge": {
-									"const": true,
-									"type": "boolean"
+								"npmplus_dns_provider": {
+									"minLength": 1,
+									"type": "string"
 								}
 							},
 							"required": [
-								"npmplus_dns_challenge"
+								"npmplus_dns_provider"
 							]
 						},
 						"then": {
@@ -839,7 +821,7 @@
 					},
 					"npmplus_disable_crowdsec_appsec": {
 						"default": false,
-						"description": "Disable Crowdsec Appsec",
+						"description": "Disable CrowdSec AppSec",
 						"example": false,
 						"type": "boolean"
 					},
@@ -961,19 +943,13 @@
 		},
 		"npmplus_disable_crowdsec_appsec": {
 			"default": false,
-			"description": "Disable Crowdsec Appsec",
+			"description": "Disable CrowdSec AppSec",
 			"example": false,
 			"type": "boolean"
 		},
 		"npmplus_disable_proxy_request_buffering": {
 			"default": false,
 			"description": "Disable Request Buffering",
-			"example": false,
-			"type": "boolean"
-		},
-		"npmplus_dns_challenge": {
-			"default": false,
-			"description": "Use the DNS challenge",
 			"example": false,
 			"type": "boolean"
 		},

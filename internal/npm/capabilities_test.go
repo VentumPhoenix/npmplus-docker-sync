@@ -162,3 +162,42 @@ func TestARejectionRereadsTheCapabilities(t *testing.T) {
 		t.Errorf("Flavour() = %s, want the pinned flavour kept", client.Flavour())
 	}
 }
+
+// TestDNSChallengeColumns: NPMplus asks for a DNS challenge with a provider.
+// The switch next to it exists only in the development builds that had one,
+// and a server whose schema does not list it rejects the whole request.
+func TestDNSChallengeColumns(t *testing.T) {
+	t.Parallel()
+
+	meta := Meta{"dns_challenge": true, "dns_provider": "cloudflare", "dns_provider_credentials": "token", "propagation_seconds": 30}
+	columns := WriteSchema{KindProxy: {
+		"npmplus_dns_provider": {Type: "string"}, "npmplus_dns_provider_credentials": {Type: "string"},
+		"npmplus_propagation_seconds": {Type: "integer"},
+	}}
+	withSwitch := WriteSchema{KindProxy: {"npmplus_dns_provider": {Type: "string"}, fieldDNSChallenge: {Type: "boolean"}}}
+
+	tests := []struct {
+		name       string
+		dialect    Dialect
+		wantSwitch bool
+	}{
+		{"schema without the switch", Dialect{Flavour: FlavourNPMplus, Schema: columns}, false},
+		{"schema with the switch", Dialect{Flavour: FlavourNPMplus, Schema: withSwitch}, true},
+		{"built-in knowledge", Dialect{Flavour: FlavourNPMplus, MetaRetired: true}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := columnsFor(tt.dialect, KindProxy, meta, NewCertificate())
+			if got == nil || got.DNSProvider != "cloudflare" {
+				t.Fatalf("columnsFor() = %+v, want the provider", got)
+			}
+			if (got.DNSChallenge != nil) != tt.wantSwitch {
+				t.Errorf("npmplus_dns_challenge sent = %t, want %t", got.DNSChallenge != nil, tt.wantSwitch)
+			}
+		})
+	}
+	if got := columnsFor(Dialect{Flavour: FlavourNPMplus}, KindProxy, meta, NewCertificate()); got != nil {
+		t.Errorf("columnsFor() = %+v for a release with the meta object, want nothing", got)
+	}
+}

@@ -36,9 +36,15 @@ var legacyProxySwitches = []string{
 // columnFields are the properties NPMplus introduced when it moved the meta
 // object into columns.
 var columnFields = []string{
-	"npmplus_directory", "npmplus_dns_challenge", "npmplus_dns_provider",
+	"npmplus_directory", "npmplus_dns_provider",
 	"npmplus_dns_provider_credentials", "npmplus_propagation_seconds",
 }
+
+// fieldDNSChallenge is the switch the first builds with columns had for the
+// DNS challenge. NPMplus dropped it again before any release in 2026-11: a
+// non-empty npmplus_dns_provider is the DNS challenge now. Only a server whose
+// schema lists it gets it.
+const fieldDNSChallenge = "npmplus_dns_challenge"
 
 // renamedFields are the names NPMplus gave two inverted switches of a proxy
 // host and of its locations in 2026-11, legacySwitchFields the ones before.
@@ -142,6 +148,8 @@ func (d Dialect) assumes(kind Kind, field string) bool {
 		return d.SwitchesRenamed
 	case slices.Contains(legacySwitchFields, strings.TrimPrefix(field, "locations/")):
 		return !d.SwitchesRenamed
+	case field == fieldDNSChallenge:
+		return false
 	case slices.Contains(columnFields, field):
 		return retired
 	case kind == KindProxy && slices.Contains(legacyProxySwitches, field):

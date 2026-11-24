@@ -907,9 +907,13 @@ func columnsFor(d Dialect, kind Kind, meta Meta, certificate CertificateID) *npm
 			used = true
 		}
 	}
-	if certificate.New && d.Accepts(kind, "npmplus_dns_challenge") {
+	// The provider is what asks for a DNS challenge; the switch next to it
+	// exists only in the builds that had one, see fieldDNSChallenge.
+	if certificate.New && d.Accepts(kind, "npmplus_dns_provider") {
 		if challenge, _ := meta["dns_challenge"].(bool); challenge {
-			columns.DNSChallenge = &challenge
+			if d.Accepts(kind, fieldDNSChallenge) {
+				columns.DNSChallenge = &challenge
+			}
 			columns.DNSProvider, _ = meta["dns_provider"].(string)
 			columns.DNSCredentials, _ = meta["dns_provider_credentials"].(string)
 			if seconds := metaInt(meta["propagation_seconds"]); seconds > 0 {

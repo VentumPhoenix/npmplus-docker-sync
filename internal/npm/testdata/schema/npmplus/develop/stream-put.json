@@ -17,14 +17,13 @@
 					},
 					"then": {
 						"properties": {
-							"npmplus_dns_challenge": {
-								"const": true,
-								"type": "boolean"
+							"npmplus_dns_provider": {
+								"minLength": 1,
+								"type": "string"
 							}
 						},
 						"required": [
 							"domain_names",
-							"npmplus_dns_challenge",
 							"npmplus_dns_provider"
 						]
 					}
@@ -206,12 +205,6 @@
 			"example": "Production",
 			"maxLength": 255,
 			"type": "string"
-		},
-		"npmplus_dns_challenge": {
-			"default": false,
-			"description": "Use the DNS challenge",
-			"example": false,
-			"type": "boolean"
 		},
 		"npmplus_dns_provider": {
 			"default": "",
